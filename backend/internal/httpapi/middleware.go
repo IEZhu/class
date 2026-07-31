@@ -30,6 +30,8 @@ func (a *API) requireUser(next http.Handler) http.Handler {
 		}
 		u, err := a.store.UserBySessionTokenHash(r.Context(), hashToken(c.Value))
 		if errors.Is(err, store.ErrNotFound) {
+			// сбросить битый cookie, чтобы клиент не долбился с ним до logout
+			http.SetCookie(w, sessionCookieFor("", -1))
 			writeError(w, http.StatusUnauthorized, "unauthorized", "сессия недействительна")
 			return
 		}

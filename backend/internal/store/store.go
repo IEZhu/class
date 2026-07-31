@@ -17,7 +17,14 @@ type Store struct {
 }
 
 func New(ctx context.Context, databaseURL string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	// Потолок на любой запрос: зависший Postgres не должен держать
+	// хендлер и соединение пула бесконечно.
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "5000"
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -134,8 +134,10 @@ compose up на VPS, домен, том PG, ротация docker-логов.
   а не `http` из README backend — чтобы не коллизировать с `net/http`.
 - Зависимости: `jackc/pgx/v5 v5.10.0`, `golang.org/x/crypto v0.54.0`;
   go 1.25 (требование x/crypto), образ сборки `golang:1.25-alpine`.
-- Seed задаёт bcrypt-пароль всем `*@lingua.local` из ключа `.env`
-  `SEED_PASSWORD` (новый, опциональный; прокинут в контейнер postgres).
+- Seed задаёт bcrypt-пароль четырём фикстурным аккаунтам (явный allowlist)
+  из ключа `.env` `SEED_PASSWORD` (новый, опциональный; прокинут в контейнер
+  postgres). Ключ `SESSION_SECRET` удалён — при cookie-сессиях не нужен
+  (ADR-006); `make seed` теперь зависит от `migrate`.
 - Проверено на стенде (10 сценариев curl): login teacher/student 200,
   `me` 200, teacher `POST /lessons` 501, **студент 403 (DoD)**, неверный
   пароль 401, гость 401, logout 204 → `me` 401; внешний контур через

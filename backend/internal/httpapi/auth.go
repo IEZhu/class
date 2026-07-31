@@ -14,7 +14,23 @@ import (
 const (
 	sessionCookie = "sid"
 	sessionTTL    = 30 * 24 * time.Hour // ADR-006
+	// bcryptCost совпадает с gen_salt('bf', 12) в seed.sql — одинаковая
+	// стоимость сравнения для реальных и dummy-хэшей.
+	bcryptCost = 12
+
+	maxLoginBodyBytes = 1 << 16 // 64 KiB — с запасом для login-пейлоада
 )
+
+// dummyPasswordHash выравнивает время ответа логина: bcrypt-сравнение
+// выполняется и когда пользователь не найден, иначе тайминг раскрывает
+// существование аккаунта.
+var dummyPasswordHash = func() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-equalizer"), bcryptCost)
+	if err != nil {
+		panic(err) // невозможно при валидном cost
+	}
+	return h
+}()
 
 type loginRequest struct {
 	Email    string `json:"email"`
@@ -30,6 +46,7 @@ type userResponse struct {
 
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "email и password обязательны")
 		return
@@ -39,10 +56,15 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка")
 		return
 	}
-	// Единый ответ для «нет пользователя», «пароль не задан» и «пароль не
-	// подошёл» — не раскрывать существование аккаунта.
-	if err != nil || u.PasswordHash == "" ||
-		bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
+	// Единый ответ и сопоставимое время отклика для «нет пользователя»,
+	// «пароль не задан» и «пароль не подошёл» — не раскрывать существование
+	// аккаунта ни телом, ни таймингом (dummy-сравнение той же стоимости).
+	hash := dummyPasswordHash
+	found := err == nil && u.PasswordHash != ""
+	if found {
+		hash = []byte(u.PasswordHash)
+	}
+	if bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) != nil || !found {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль")
 		return
 	}

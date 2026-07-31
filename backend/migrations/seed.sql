@@ -49,7 +49,12 @@ ON CONFLICT DO NOTHING;
 -- окружения (deploy/.env, не в git); пустое значение — пароли не трогаем.
 UPDATE users
 SET password_hash = crypt(:'seed_password', gen_salt('bf', 12))
-WHERE email LIKE '%@lingua.local'
+WHERE email IN (
+      'teacher@lingua.local',
+      'student1@lingua.local',
+      'student2@lingua.local',
+      'student3@lingua.local'
+  )
   AND password_hash IS NULL
   AND length(:'seed_password') > 0;
 

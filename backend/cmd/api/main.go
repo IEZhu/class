@@ -33,6 +33,9 @@ func main() {
 		Addr:              addr,
 		Handler:           httpapi.New(st).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      20 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	log.Printf("api: listening on %s", addr)
 	if err := srv.ListenAndServe(); err != nil {
