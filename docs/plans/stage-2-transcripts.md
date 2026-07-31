@@ -57,7 +57,7 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
 
 ## Definition of Done этапа
 
-- [ ] S2-1…S2-5 закрыты в [INDEX](../tasks/INDEX.md)
+- [ ] S2-1…S2-5 закрыты в [INDEX](../tasks/README.md)
 - [ ] Сквозной сценарий: провести урок → дождаться транскрипта → кликнуть реплику → плеер прыгнул
 - [ ] «Факт» заполнен
 

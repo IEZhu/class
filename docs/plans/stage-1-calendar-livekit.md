@@ -77,7 +77,7 @@ Nightly `pg_dump | zstd` → `s3://…/backups/pg/`, retention 7/30;
 
 ## Definition of Done этапа
 
-- [ ] S1-1…S1-7 закрыты в [INDEX](../tasks/INDEX.md)
+- [ ] S1-1…S1-7 закрыты в [INDEX](../tasks/README.md)
 - [ ] Сквозной сценарий: урок в календаре → комната → запись в S3 → плеер
 - [ ] «Факт» заполнен (ключи `.env`, имена джоб, пути S3)
 

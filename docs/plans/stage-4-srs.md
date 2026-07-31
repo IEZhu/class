@@ -56,7 +56,7 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
 
 ## Definition of Done этапа
 
-- [ ] S4-1…S4-5 закрыты в [INDEX](../tasks/INDEX.md)
+- [ ] S4-1…S4-5 закрыты в [INDEX](../tasks/README.md)
 - [ ] Сквозной сценарий: назначение слов → карточки due → прохождение → cloze → интервалы сдвинулись
 - [ ] Долг D-3 закрыт и отмечен в INDEX; «Факт» заполнен
 

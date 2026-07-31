@@ -11,12 +11,12 @@ hobby-MVP): календарь → видеоуроки (LiveKit) → запис
 
 ## Навигация
 
-- **Обзор**: [docs/00-overview.md](docs/00-overview.md)
+- **Обзор**: [docs/README.md](docs/README.md)
 - **Архитектура**: [docs/architecture/](docs/architecture/) — топология,
   сервисы, модель данных, API, S3, интеграции, потоки
 - **Планы этапов 0–5**: [docs/plans/](docs/plans/) — каждый план со входными
   и выходными артефактами
-- **Индекс задач и статусы**: [docs/tasks/INDEX.md](docs/tasks/INDEX.md)
+- **Индекс задач и статусы**: [docs/tasks/README.md](docs/tasks/README.md)
 - **Роль и протокол работы**: [CLAUDE.md](CLAUDE.md)
 
 ## Структура
@@ -31,4 +31,4 @@ docs/      архитектура, планы, индекс задач
 ## Статус
 
 Подготовка: документация нарезана, код не начат.
-Текущий этап и задача — в [docs/tasks/INDEX.md](docs/tasks/INDEX.md).
+Текущий этап и задача — в [docs/tasks/README.md](docs/tasks/README.md).
