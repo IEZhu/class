@@ -1,0 +1,23 @@
+# секреты и окружение
+.env
+.env.*
+!.env.example
+
+# web
+node_modules/
+.next/
+out/
+
+# backend
+bin/
+dist/
+*.test
+
+# данные и логи
+data/
+logs/
+*.log
+
+# системное
+.DS_Store
+__pycache__/
