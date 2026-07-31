@@ -72,7 +72,44 @@ compose up на VPS, домен, том PG, ротация docker-логов.
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S0-1 Compose-скелет (2026-07-31)
+
+- `deploy/docker-compose.yml` — проект `lingua`: caddy (`caddy:2.10`),
+  web (Next.js standalone), api (Go), postgres (`postgres:16-alpine`);
+  healthcheck'и на всех, ротация json-логов (10m×3, anchor `x-logging`),
+  тома `pg_data`, `caddy_data`, `caddy_config`; профиль `tools`: сервис
+  `migrate` (`migrate/migrate:v4.17.1`) — заработает с файлами S0-2.
+- `deploy/Caddyfile` — HTTP-only `:80` (ADR-004): `handle_path /api/*` →
+  `api:8080` (префикс стрипается — пути внутри api без `/api`, как в
+  [04-api.md](../architecture/04-api.md)), остальное → `web:3000`.
+- `deploy/.env.example` — ключи этапа: `DOMAIN`, `HTTP_PORT`, `POSTGRES_DB`,
+  `POSTGRES_USER`, `POSTGRES_PASSWORD`, `SESSION_SECRET`. Реальный
+  `deploy/.env` создан на VPS (chmod 600, вне git).
+- Корневой `Makefile`: `up / down / build / logs / ps / migrate / psql /
+  seed` (`migrate` и `seed` — честные заглушки до S0-2).
+- `backend/`: `go.mod` (`github.com/IEZhu/class/backend`, go 1.24),
+  `cmd/api/main.go` (stdlib, `GET /healthz`), `Dockerfile` (multi-stage,
+  target `api`; target `worker` появится в S1-2), `migrations/.gitkeep`.
+- `web/`: Next.js 15.5.22 / React 19.2.8 / TypeScript 5 (`package-lock.json`
+  закоммичен), `output: "standalone"`, заглушки `app/layout.tsx` +
+  `app/page.tsx`, `Dockerfile` (node:22-alpine, non-root).
+- Проверено: `https://lang.wondermr.com/` → 200 (web через caddy);
+  `https://lang.wondermr.com/api/healthz` → `{"status":"ok"}`.
+- Известное: `npm audit` — postcss ≤8.5.17 (high, build-time) как
+  транзитивная зависимость всех актуальных next; фикса апстрим пока нет.
+
+### S0-6 Деплой на VPS (2026-07-31)
+
+- VPS: реквизиты хоста — в операционном контуре вне git (репозиторий
+  публичный); стек из `/opt/Class` (`make up`). Домен `lang.wondermr.com` —
+  за Cloudflare-прокси (SSL Full).
+- TLS-край — host-nginx (ADR-004): vhost
+  `/etc/nginx/sites-available/lang.wondermr.com` (enabled) → проксирует на
+  `127.0.0.1:8090` (caddy стека, `HTTP_PORT`); сертификат Let's Encrypt
+  (certbot, webroot `/var/www/html`), авто-renewal настроен; HSTS на nginx.
+- Ротация docker-логов — в compose (`x-logging`); том PG — `pg_data`.
+- Проверено: `docker compose down && up` сохраняет данные Postgres;
+  внешний HTTPS после перезапуска — 200.
 
 ## Риски этапа
 

@@ -33,4 +33,23 @@ Redis добавляем только если появится реальная
 **Последствия.** Минус один stateful-сервис; транзакционность джоб вместе
 с данными.
 
+## ADR-004 · 2026-07-31 · accepted — TLS-край: host-nginx; caddy стека — HTTP-only на loopback
+
+**Контекст.** Доки закладывали caddy единой точкой входа с TLS Let's Encrypt
+([02-services.md](02-services.md), S0-1). Фактический VPS уже обслуживает
+соседние проекты: 80/443 заняты системным nginx, который терминирует TLS
+(certbot) и проксирует каждый стек на его loopback-порт (образец —
+`barenta.wondermr.com` → caddy стека на `127.0.0.1:8080`). Домен
+`lang.wondermr.com` — за Cloudflare-прокси.
+**Решение.** Вписаться в паттерн хоста: caddy стека — HTTP-only (`:80`,
+`auto_https off`), опубликован только на `127.0.0.1:${HTTP_PORT}` (8090);
+TLS и HSTS для `lang.wondermr.com` — на host-nginx (certbot, webroot
+`/var/www/html`); vhost — `/etc/nginx/sites-available/lang.wondermr.com`.
+Внутренняя маршрутизация без изменений: `/api/*` → api (префикс стрипается,
+пути внутри api — как в [04-api.md](04-api.md)), остальное → web.
+**Последствия.** Реальный IP клиента — в `X-Real-IP` от nginx (за Cloudflare —
+адрес CF, см. комментарий в vhost barenta). Новый ключ `.env`: `HTTP_PORT`.
+При переезде на чистый VPS достаточно опубликовать 80/443 и вернуть
+`{$DOMAIN}` в Caddyfile.
+
 <!-- Следующие ADR добавлять ниже по мере реализации. -->
