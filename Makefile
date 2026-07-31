@@ -7,11 +7,16 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 .PHONY: up down build logs ps migrate psql seed check-env
 
 # Стартовые цели требуют заполненного deploy/.env: compose подхватывает его
-# автоматически (project directory = deploy/), но пустой или шаблонный файл
-# должен останавливать запуск, а не давать стенд с change-me-секретами.
+# автоматически (project directory = deploy/), но шаблонный файл или пустые
+# секреты должны останавливать запуск, а не давать стенд с ними.
+REQUIRED_ENV := POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD SESSION_SECRET
+
 check-env:
 	@test -f deploy/.env || { echo "deploy/.env отсутствует — скопируй deploy/.env.example и заполни"; exit 1; }
 	@! grep -q "change-me" deploy/.env || { echo "deploy/.env содержит значения change-me — заполни реальными"; exit 1; }
+	@for v in $(REQUIRED_ENV); do \
+		grep -Eq "^$$v=.+" deploy/.env || { echo "deploy/.env: ключ $$v отсутствует или пуст"; exit 1; }; \
+	done
 
 up: check-env
 	$(COMPOSE) up -d --build
