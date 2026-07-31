@@ -43,7 +43,11 @@ type userResponse struct {
 
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := decodeBody(w, r, &req); err != nil || req.Email == "" || req.Password == "" {
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if req.Email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "email и password обязательны")
 		return
 	}

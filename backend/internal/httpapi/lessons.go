@@ -38,7 +38,11 @@ func (req *lessonTimesRequest) validTimes() bool {
 
 func (a *API) handleCreateLesson(w http.ResponseWriter, r *http.Request) {
 	var req lessonTimesRequest
-	if err := decodeBody(w, r, &req); err != nil || req.GroupID <= 0 || !req.validTimes() {
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if req.GroupID <= 0 || !req.validTimes() {
 		writeError(w, http.StatusBadRequest, "bad_request", "нужны group_id и starts_at < ends_at (RFC3339)")
 		return
 	}
@@ -102,7 +106,11 @@ func (a *API) handleRescheduleLesson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req lessonTimesRequest
-	if err := decodeBody(w, r, &req); err != nil || !req.validTimes() {
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if !req.validTimes() {
 		writeError(w, http.StatusBadRequest, "bad_request", "нужны starts_at < ends_at (RFC3339)")
 		return
 	}
@@ -142,6 +150,7 @@ func writeLessonUpdateError(w http.ResponseWriter, op string, err error) {
 	}
 }
 
+// canSeeLesson — доступ по 04-api.md: teacher урока или участник снапшота.
 func canSeeLesson(u *store.User, d *store.LessonDetail) bool {
 	if u.ID == d.TeacherID {
 		return true
@@ -151,8 +160,7 @@ func canSeeLesson(u *store.User, d *store.LessonDetail) bool {
 			return true
 		}
 	}
-	// любой teacher видит уроки платформы (5 преподавателей, доверенная среда)
-	return u.Role == "teacher"
+	return false
 }
 
 func lessonToResponse(l *store.Lesson, groupName string) lessonResponse {

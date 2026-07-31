@@ -127,6 +127,18 @@ func (s *Store) GetLessonDetail(ctx context.Context, lessonID int64) (*LessonDet
 	return d, rows.Err()
 }
 
+// LessonTeacherID — лёгкая выборка владельца урока (для проверок прав
+// без загрузки полной детали).
+func (s *Store) LessonTeacherID(ctx context.Context, lessonID int64) (int64, error) {
+	var teacherID int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT teacher_id FROM lessons WHERE id = $1`, lessonID).Scan(&teacherID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return teacherID, err
+}
+
 // IsLessonParticipant — есть ли пользователь в снапшоте участников урока.
 func (s *Store) IsLessonParticipant(ctx context.Context, lessonID, userID int64) (bool, error) {
 	var ok bool

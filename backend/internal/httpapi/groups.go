@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/IEZhu/class/backend/internal/store"
@@ -35,7 +36,11 @@ func (a *API) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		Name  string `json:"name"`
 		Level string `json:"level"`
 	}
-	if err := decodeBody(w, r, &req); err != nil || req.Name == "" || req.Level == "" {
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if req.Name == "" || req.Level == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "name и level обязательны")
 		return
 	}
@@ -72,7 +77,11 @@ func (a *API) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
 	}
-	if err := decodeBody(w, r, &req); err != nil || req.Email == "" {
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if req.Email == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "email обязателен")
 		return
 	}
@@ -89,8 +98,31 @@ func (a *API) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// decodeBody — общий декодер JSON-тел с лимитом размера.
+// decodeBody — общий декодер JSON-тел: лимит размера и ровно одно
+// JSON-значение (хвост после первого значения — ошибка, иначе он
+// обходил бы лимит MaxBytesReader).
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	return json.NewDecoder(r.Body).Decode(v)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain exactly one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+// badBody — ответ на невалидное тело: 413 при превышении лимита, иначе 400.
+func badBody(w http.ResponseWriter, err error, msg string) {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		writeError(w, http.StatusRequestEntityTooLarge, "too_large", "тело запроса больше 64 KiB")
+		return
+	}
+	writeError(w, http.StatusBadRequest, "bad_request", msg)
 }

@@ -18,13 +18,17 @@ type materialResponse struct {
 	// s3_key появится с файлами в S3 (этап 1, долг D-4)
 }
 
+func toMaterialResponse(m store.Material) materialResponse {
+	return materialResponse{
+		ID: m.ID, LessonID: m.LessonID, Kind: m.Kind,
+		Title: m.Title, BodyMD: m.BodyMD, CreatedAt: m.CreatedAt,
+	}
+}
+
 func toMaterialResponses(ms []store.Material) []materialResponse {
 	out := make([]materialResponse, 0, len(ms))
 	for _, m := range ms {
-		out = append(out, materialResponse{
-			ID: m.ID, LessonID: m.LessonID, Kind: m.Kind,
-			Title: m.Title, BodyMD: m.BodyMD, CreatedAt: m.CreatedAt,
-		})
+		out = append(out, toMaterialResponse(m))
 	}
 	return out
 }
@@ -41,12 +45,16 @@ func (a *API) handleCreateMaterial(kind string) http.HandlerFunc {
 			Title  string `json:"title"`
 			BodyMD string `json:"body_md"`
 		}
-		if err := decodeBody(w, r, &req); err != nil || req.Title == "" {
+		if err := decodeBody(w, r, &req); err != nil {
+			badBody(w, err, "невалидный JSON")
+			return
+		}
+		if req.Title == "" {
 			writeError(w, http.StatusBadRequest, "bad_request", "title обязателен (body_md — markdown, опционален)")
 			return
 		}
 		// материал вправе добавлять только teacher этого урока
-		d, err := a.store.GetLessonDetail(r.Context(), lessonID)
+		teacherID, err := a.store.LessonTeacherID(r.Context(), lessonID)
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "урок не найден")
 			return
@@ -55,7 +63,7 @@ func (a *API) handleCreateMaterial(kind string) http.HandlerFunc {
 			internalError(w, "load lesson for material", err)
 			return
 		}
-		if userFrom(r.Context()).ID != d.TeacherID {
+		if userFrom(r.Context()).ID != teacherID {
 			writeError(w, http.StatusForbidden, "forbidden", "материалы добавляет teacher этого урока")
 			return
 		}
@@ -64,9 +72,6 @@ func (a *API) handleCreateMaterial(kind string) http.HandlerFunc {
 			internalError(w, "create material", err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, materialResponse{
-			ID: m.ID, LessonID: m.LessonID, Kind: m.Kind,
-			Title: m.Title, BodyMD: m.BodyMD, CreatedAt: m.CreatedAt,
-		})
+		writeJSON(w, http.StatusCreated, toMaterialResponse(*m))
 	}
 }
