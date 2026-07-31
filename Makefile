@@ -9,13 +9,14 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 # Стартовые цели требуют заполненного deploy/.env: compose подхватывает его
 # автоматически (project directory = deploy/), но шаблонный файл или пустые
 # секреты должны останавливать запуск, а не давать стенд с ними.
-REQUIRED_ENV := POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD SESSION_SECRET
+# HTTP_PORT не в списке: у compose есть default (8090)
+REQUIRED_ENV := DOMAIN POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD SESSION_SECRET
 
 check-env:
 	@test -f deploy/.env || { echo "deploy/.env отсутствует — скопируй deploy/.env.example и заполни"; exit 1; }
 	@! grep -q "change-me" deploy/.env || { echo "deploy/.env содержит значения change-me — заполни реальными"; exit 1; }
 	@for v in $(REQUIRED_ENV); do \
-		grep -Eq "^$$v=.+" deploy/.env || { echo "deploy/.env: ключ $$v отсутствует или пуст"; exit 1; }; \
+		grep -Eq "^$$v=[^\"'[:space:]]" deploy/.env || { echo "deploy/.env: ключ $$v отсутствует, пуст или начинается с пробела/кавычки"; exit 1; }; \
 	done
 
 up: check-env
@@ -35,8 +36,9 @@ ps:
 
 # Миграции golang-migrate из backend/migrations (файлы появятся в S0-2).
 # if/else, а не `&& … || echo`: ошибка самого migrate должна ронять цель.
-migrate:
-	@if ls backend/migrations/*.sql >/dev/null 2>&1; then \
+# Проба по *.up.sql (формат golang-migrate) — seed.sql миграцией не считается.
+migrate: check-env
+	@if ls backend/migrations/*.up.sql >/dev/null 2>&1; then \
 		$(COMPOSE) run --rm migrate up; \
 	else \
 		echo "migrate: миграций пока нет (появятся в S0-2)"; \
