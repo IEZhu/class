@@ -52,4 +52,22 @@ TLS и HSTS для `lang.wondermr.com` — на host-nginx (certbot, webroot
 При переезде на чистый VPS достаточно опубликовать 80/443 и вернуть
 `{$DOMAIN}` в Caddyfile.
 
+## ADR-005 · 2026-07-31 · accepted — DDL-конвенции схемы Postgres
+
+**Контекст.** Скетч в [03-data-model.md](03-data-model.md) задаёт таблицы и
+колонки, но не фиксирует тип PK, тип времени и способ ограничения
+перечислений. Масштаб — hobby (≈50 пользователей), Postgres 16.
+**Решение.** Для всех таблиц: PK — `bigint GENERATED ALWAYS AS IDENTITY`
+(кроме чистых связок с составным PK); время — `timestamptz`; перечисления
+(`users.role`, `lessons.status`, `materials.kind`, `groups.level` —
+CEFR `A1, A2, B1, B2, C1, C2`) — `text` + `CHECK`
+(дешевле эволюция, чем `ENUM`); служебный `created_at timestamptz NOT NULL
+DEFAULT now()` у сущностей. Колонки будущих этапов из скетча
+(`lessons.transcript_id`, `recording_s3_key`, `materials.s3_key`) создаются
+сразу nullable, но FK на ещё не существующие таблицы не ставится —
+его добавит миграция соответствующего этапа.
+**Последствия.** Единообразный DDL без сюрпризов при `ALTER`; identity
+не переживёт merge двух баз (не наш случай); `CHECK`-перечисления меняются
+одной миграцией без пересоздания типа.
+
 <!-- Следующие ADR добавлять ниже по мере реализации. -->

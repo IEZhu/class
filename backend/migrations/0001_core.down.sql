@@ -1,0 +1,10 @@
+BEGIN;
+
+DROP TABLE IF EXISTS materials;
+DROP TABLE IF EXISTS lesson_participants;
+DROP TABLE IF EXISTS lessons;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;
+
+COMMIT;
