@@ -100,8 +100,9 @@ compose up на VPS, домен, том PG, ротация docker-логов.
 
 ### S0-6 Деплой на VPS (2026-07-31)
 
-- VPS `back3.avistocks.ge` (84.201.5.63), стек из `/opt/Class` (`make up`).
-  Домен `lang.wondermr.com` — за Cloudflare-прокси (SSL Full).
+- VPS: реквизиты хоста — в операционном контуре вне git (репозиторий
+  публичный); стек из `/opt/Class` (`make up`). Домен `lang.wondermr.com` —
+  за Cloudflare-прокси (SSL Full).
 - TLS-край — host-nginx (ADR-004): vhost
   `/etc/nginx/sites-available/lang.wondermr.com` (enabled) → проксирует на
   `127.0.0.1:8090` (caddy стека, `HTTP_PORT`); сертификат Let's Encrypt
