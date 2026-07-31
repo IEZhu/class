@@ -7,13 +7,13 @@
 
 ## Текущий фокус
 
-**Этап 0, задача S0-2** (БД v1 + миграции).
+**Этап 0, задача S0-3** (auth и роли).
 
 ## Сводка по этапам
 
 | Этап | Название | Оценка | Готово |
 |---|---|---|---|
-| 0 | Скелет | 1–2 нед | 2/6 |
+| 0 | Скелет | 1–2 нед | 3/6 |
 | 1 | Календарь, LiveKit, записи | 1–2 нед | 0/7 |
 | 2 | Транскрипты | 1 нед | 0/5 |
 | 3 | Словарь, ClickableText, доска | 2 нед | 0/8 |
@@ -25,7 +25,7 @@
 | ID | Задача | Зависит от | Ключевой выход | Статус |
 |---|---|---|---|---|
 | S0-1 | Compose-скелет (caddy, web, api, postgres) + Caddyfile + .env.example + Makefile | — | стенд с TLS | ☑ |
-| S0-2 | БД v1: users, groups, group_members, lessons, lesson_participants, materials + seed | S0-1 | ядро схемы, миграции | ☐ |
+| S0-2 | БД v1: users, groups, group_members, lessons, lesson_participants, materials + seed | S0-1 | ядро схемы, миграции | ☑ |
 | S0-3 | Auth: сессии/JWT (ADR), роли teacher/student | S0-2 | auth-middleware | ☐ |
 | S0-4 | CRUD: группы, уроки, материалы/домашка (body_md) | S0-3 | API ядра | ☐ |
 | S0-5 | Web-каркас + `/lesson/{id}` state machine с заглушками | S0-4 | страница урока | ☐ |

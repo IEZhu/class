@@ -3,6 +3,8 @@
 > Единственный источник правды по схеме. Миграции — golang-migrate в
 > `backend/migrations/`, нумерация по этапам. Изменения схемы — только вместе
 > с обновлением этого файла.
+> DDL-конвенции (identity PK, timestamptz, text+CHECK, created_at) —
+> [ADR-005](decisions.md).
 
 ## Скетч ключевых таблиц
 

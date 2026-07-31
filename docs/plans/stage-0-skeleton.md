@@ -98,6 +98,25 @@ compose up на VPS, домен, том PG, ротация docker-логов.
 - Известное: `npm audit` — postcss ≤8.5.17 (high, build-time) как
   транзитивная зависимость всех актуальных next; фикса апстрим пока нет.
 
+### S0-2 БД v1 + миграции (2026-07-31)
+
+- `backend/migrations/0001_core.up.sql` / `.down.sql` — таблицы `users`,
+  `groups`, `group_members`, `lessons`, `lesson_participants`, `materials`
+  по скетчу [03-data-model.md](../architecture/03-data-model.md);
+  DDL-конвенции — ADR-005 (identity PK, timestamptz, text+CHECK, created_at).
+  Поля будущих этапов в `lessons` (`gcal_event_id`, `livekit_room`,
+  `recording_s3_key`, `transcript_id`) и `materials.s3_key` — nullable,
+  FK транскрипта добавит S2-2.
+- Индексы: `lessons(group_id, starts_at)`, `lessons(teacher_id, starts_at)`,
+  `group_members(user_id)`, `lesson_participants(user_id)`,
+  `materials(lesson_id)`; `users.email` — UNIQUE.
+- `backend/migrations/seed.sql` — идемпотентный: Test Teacher + Test Group
+  (A2) + 3 студента + урок через 2 дня (`scheduled`) + домашка (body_md).
+- Проверено на стенде: `make migrate` ×2 (второй — `no change`),
+  `make seed` ×2 (нулевые вставки), цикл `migrate down 1` → `up` → `seed`
+  восстанавливает стенд. Механизм — сервис `migrate`
+  (`migrate/migrate:v4.17.1`) из compose (S0-1).
+
 ### S0-6 Деплой на VPS (2026-07-31)
 
 - VPS: реквизиты хоста — в операционном контуре вне git (репозиторий
