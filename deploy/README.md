@@ -13,7 +13,8 @@ docker-compose.yml   сервисы по этапам:
                        опция:  redis (только при реальной нужде — ADR-003)
 Caddyfile            TLS (Let's Encrypt), '/' → web, '/api' → api, доска
 .env.example         шаблон секретов; растёт по этапам:
-                       0: POSTGRES_*, SESSION_SECRET, DOMAIN
+                       0: POSTGRES_*, DOMAIN, HTTP_PORT (ADR-004),
+                          SEED_PASSWORD (ADR-006; SESSION_SECRET удалён)
                        1: GOOGLE_OAUTH_*, TOKEN_ENC_KEY, LIVEKIT_*, S3_*
                        2: ASSEMBLYAI_*
                        5: LLM_PROVIDER, LLM_API_KEY

@@ -9,7 +9,9 @@
 ## Скетч ключевых таблиц
 
 ```sql
-users(id, email, role /*teacher|student*/, name, google_refresh_token /*только у teachers, шифруется*/)
+users(id, email, role /*teacher|student*/, name, password_hash /*bcrypt*/,
+      google_refresh_token /*только у teachers, шифруется*/)
+sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
 groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)
 
 lessons(id, group_id, teacher_id, starts_at, ends_at, status
@@ -62,6 +64,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | Таблицы | Этап | Задача |
 |---|---|---|
 | users, groups, group_members, lessons, lesson_participants, materials | 0 | S0-2 |
+| sessions; колонка users.password_hash | 0 | S0-3 |
 | jobs; колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
 | transcripts, utterances | 2 | S2-2 |
 | terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |

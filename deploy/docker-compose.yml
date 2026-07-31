@@ -48,7 +48,6 @@ services:
     <<: *logging
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
-      SESSION_SECRET: ${SESSION_SECRET}
       DOMAIN: ${DOMAIN}
     depends_on:
       postgres:
@@ -68,6 +67,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Для make seed (S0-3): пароль seed-пользователей, опционален
+      SEED_PASSWORD: ${SEED_PASSWORD:-}
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:

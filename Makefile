@@ -9,8 +9,9 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 # Стартовые цели требуют заполненного deploy/.env: compose подхватывает его
 # автоматически (project directory = deploy/), но шаблонный файл или пустые
 # секреты должны останавливать запуск, а не давать стенд с ними.
-# HTTP_PORT не в списке: у compose есть default (8090)
-REQUIRED_ENV := DOMAIN POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD SESSION_SECRET
+# HTTP_PORT и SEED_PASSWORD не в списке: у HTTP_PORT есть default (8090),
+# SEED_PASSWORD опционален (без него seed не задаёт пароли)
+REQUIRED_ENV := DOMAIN POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
 
 check-env:
 	@test -f deploy/.env || { echo "deploy/.env отсутствует — скопируй deploy/.env.example и заполни"; exit 1; }
@@ -41,16 +42,18 @@ migrate: check-env
 	@if ls backend/migrations/*.up.sql >/dev/null 2>&1; then \
 		$(COMPOSE) run --rm migrate up; \
 	else \
-		echo "migrate: миграций пока нет (появятся в S0-2)"; \
+		echo "migrate: файлов *.up.sql в backend/migrations нет"; \
 	fi
 
 psql:
 	$(COMPOSE) exec postgres sh -c 'psql -U $$POSTGRES_USER -d $$POSTGRES_DB'
 
-# Наполнение стенда тестовыми данными (seed.sql появится в S0-2)
-seed:
+# Наполнение стенда тестовыми данными. seed_password — из SEED_PASSWORD
+# окружения контейнера postgres (deploy/.env); пусто — пароли не задаются.
+# Зависимость от migrate: seed на несмигрированной базе бессмыслен.
+seed: migrate
 	@if test -f backend/migrations/seed.sql; then \
-		$(COMPOSE) exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U $$POSTGRES_USER -d $$POSTGRES_DB' < backend/migrations/seed.sql; \
+		$(COMPOSE) exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -v seed_password="$$SEED_PASSWORD" -U $$POSTGRES_USER -d $$POSTGRES_DB' < backend/migrations/seed.sql; \
 	else \
-		echo "seed: backend/migrations/seed.sql пока нет (появится в S0-2)"; \
+		echo "seed: файла backend/migrations/seed.sql нет"; \
 	fi
