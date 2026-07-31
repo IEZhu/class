@@ -1,0 +1,21 @@
+# ADR-004: TLS терминирует host-nginx (certbot), caddy — внутренний
+# reverse-proxy стека, HTTP-only, опубликован на 127.0.0.1:${HTTP_PORT}.
+# При переезде на чистый VPS: вернуть {$DOMAIN} вместо :80 — caddy сам
+# поднимет Let's Encrypt.
+
+{
+	auto_https off
+}
+
+:80 {
+	# /api/* → api; префикс стрипается, внутри api пути без /api
+	# (контракт — docs/architecture/04-api.md)
+	handle_path /api/* {
+		reverse_proxy api:8080
+	}
+
+	# всё остальное → web (Next.js)
+	handle {
+		reverse_proxy web:3000
+	}
+}
