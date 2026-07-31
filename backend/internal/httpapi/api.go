@@ -25,10 +25,37 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST /auth/login", a.handleLogin)
 	mux.HandleFunc("POST /auth/logout", a.handleLogout)
 	mux.Handle("GET /auth/me", a.requireUser(http.HandlerFunc(a.handleMe)))
-	// Создание урока реализует S0-4; маршрут уже под requireRole —
-	// DoD S0-3: студент получает 403.
-	mux.Handle("POST /lessons", a.requireRole("teacher", http.HandlerFunc(a.handleCreateLessonStub)))
+
+	teacher := func(h http.HandlerFunc) http.Handler { return a.requireRole("teacher", h) }
+	user := func(h http.HandlerFunc) http.Handler { return a.requireUser(h) }
+
+	mux.Handle("POST /groups", teacher(a.handleCreateGroup))
+	mux.Handle("GET /groups", teacher(a.handleListGroups))
+	mux.Handle("POST /groups/{id}/members", teacher(a.handleAddGroupMember))
+
+	mux.Handle("POST /lessons", teacher(a.handleCreateLesson))
+	mux.Handle("GET /lessons", user(a.handleListLessons))
+	mux.Handle("GET /lessons/{id}", user(a.handleGetLesson))
+	mux.Handle("PATCH /lessons/{id}", teacher(a.handleRescheduleLesson))
+	mux.Handle("DELETE /lessons/{id}", teacher(a.handleCancelLesson))
+
+	mux.Handle("POST /lessons/{id}/materials", teacher(a.handleCreateMaterial("material")))
+	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
 	return mux
+}
+
+const (
+	maxBodyBytes = 1 << 16 // 64 KiB — с запасом для любого JSON-пейлоада этапа 0
+
+	// SQLSTATE-коды Postgres для маппинга в HTTP (store.PgErrorCode)
+	pgForeignKeyViolation = "23503"
+	pgCheckViolation      = "23514"
+)
+
+// internalError — единый ответ 500 + лог реальной причины.
+func internalError(w http.ResponseWriter, op string, err error) {
+	logf("%s: %v", op, err)
+	writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка")
 }
 
 func (a *API) handleHealthz(w http.ResponseWriter, _ *http.Request) {
