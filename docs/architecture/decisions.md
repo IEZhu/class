@@ -60,7 +60,7 @@ TLS и HSTS для `lang.wondermr.com` — на host-nginx (certbot, webroot
 **Решение.** Для всех таблиц: PK — `bigint GENERATED ALWAYS AS IDENTITY`
 (кроме чистых связок с составным PK); время — `timestamptz`; перечисления
 (`users.role`, `lessons.status`, `materials.kind`, `groups.level` —
-CEFR `A1..C2`) — `text` + `CHECK`
+CEFR `A1, A2, B1, B2, C1, C2`) — `text` + `CHECK`
 (дешевле эволюция, чем `ENUM`); служебный `created_at timestamptz NOT NULL
 DEFAULT now()` у сущностей. Колонки будущих этапов из скетча
 (`lessons.transcript_id`, `recording_s3_key`, `materials.s3_key`) создаются
