@@ -15,7 +15,8 @@ CREATE TABLE users (
 CREATE TABLE groups (
     id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name       text        NOT NULL,
-    level      text        NOT NULL, -- CEFR: A1..C2
+    level      text        NOT NULL -- CEFR
+               CHECK (level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 

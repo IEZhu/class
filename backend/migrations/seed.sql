@@ -19,7 +19,8 @@ WHERE NOT EXISTS (SELECT 1 FROM groups WHERE name = 'Test Group');
 INSERT INTO group_members (group_id, user_id)
 SELECT g.id, u.id
 FROM groups g
-JOIN users u ON u.email LIKE 'student%@lingua.local'
+JOIN users u ON u.email IN
+    ('student1@lingua.local', 'student2@lingua.local', 'student3@lingua.local')
 WHERE g.name = 'Test Group'
 ON CONFLICT DO NOTHING;
 
@@ -33,21 +34,26 @@ JOIN users t ON t.email = 'teacher@lingua.local'
 WHERE g.name = 'Test Group'
   AND NOT EXISTS (SELECT 1 FROM lessons l WHERE l.group_id = g.id);
 
--- Участники урока — все члены его группы
+-- Участники — только уроки фикстурной группы (не трогаем чужие уроки
+-- при запуске на непустой базе)
 INSERT INTO lesson_participants (lesson_id, user_id)
 SELECT l.id, gm.user_id
-FROM lessons l
-JOIN group_members gm ON gm.group_id = l.group_id
+FROM groups g
+JOIN lessons l ON l.group_id = g.id
+JOIN group_members gm ON gm.group_id = g.id
+WHERE g.name = 'Test Group'
 ON CONFLICT DO NOTHING;
 
--- Домашка к самому раннему уроку без домашки
+-- Домашка — к самому раннему уроку фикстурной группы без домашки
 INSERT INTO materials (lesson_id, kind, title, body_md)
 SELECT l.id, 'homework', 'First homework',
        E'# Homework\n\nRead the text and mark unknown words.'
-FROM lessons l
-WHERE NOT EXISTS (
-    SELECT 1 FROM materials m WHERE m.lesson_id = l.id AND m.kind = 'homework'
-)
+FROM groups g
+JOIN lessons l ON l.group_id = g.id
+WHERE g.name = 'Test Group'
+  AND NOT EXISTS (
+      SELECT 1 FROM materials m WHERE m.lesson_id = l.id AND m.kind = 'homework'
+  )
 ORDER BY l.starts_at
 LIMIT 1;
 
