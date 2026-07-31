@@ -117,6 +117,30 @@ compose up на VPS, домен, том PG, ротация docker-логов.
   восстанавливает стенд. Механизм — сервис `migrate`
   (`migrate/migrate:v4.17.1`) из compose (S0-1).
 
+### S0-3 Auth и роли (2026-07-31)
+
+- Механизм — серверные cookie-сессии в Postgres, ADR-006 (JWT отклонён):
+  cookie `sid` HttpOnly/Secure/Lax, TTL 30 дней; в БД — sha256-дайджест
+  токена. Пароли — bcrypt (`golang.org/x/crypto/bcrypt` ↔ `pgcrypto`).
+- `backend/migrations/0002_auth.up.sql`/`.down.sql`: `users.password_hash`,
+  таблица `sessions(user_id, token_hash UNIQUE, expires_at)` + pgcrypto.
+- Эндпоинты (пути внутри api, снаружи с префиксом `/api`):
+  `POST /auth/login` (200 + Set-Cookie / 401), `POST /auth/logout` (204),
+  `GET /auth/me` (200/401); stub `POST /lessons` под `requireRole("teacher")`
+  — студент 403, teacher 501 до S0-4.
+- Go-код: `internal/store` (pgx: UserByEmail, сессии CRUD, ленивая уборка
+  протухших) и `internal/httpapi` (роуты Go 1.22+, middleware `requireUser`/
+  `requireRole`, ошибки JSON `{error, code}`). Каталог назван `httpapi`,
+  а не `http` из README backend — чтобы не коллизировать с `net/http`.
+- Зависимости: `jackc/pgx/v5 v5.10.0`, `golang.org/x/crypto v0.54.0`;
+  go 1.25 (требование x/crypto), образ сборки `golang:1.25-alpine`.
+- Seed задаёт bcrypt-пароль всем `*@lingua.local` из ключа `.env`
+  `SEED_PASSWORD` (новый, опциональный; прокинут в контейнер postgres).
+- Проверено на стенде (10 сценариев curl): login teacher/student 200,
+  `me` 200, teacher `POST /lessons` 501, **студент 403 (DoD)**, неверный
+  пароль 401, гость 401, logout 204 → `me` 401; внешний контур через
+  Cloudflare — login 200.
+
 ### S0-6 Деплой на VPS (2026-07-31)
 
 - VPS: реквизиты хоста — в операционном контуре вне git (репозиторий

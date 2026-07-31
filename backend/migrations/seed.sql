@@ -44,6 +44,15 @@ JOIN group_members gm ON gm.group_id = g.id
 WHERE g.name = 'Test Group'
 ON CONFLICT DO NOTHING;
 
+-- Пароль seed-пользователей (S0-3, ADR-006): bcrypt через pgcrypto.
+-- make seed передаёт psql-переменную seed_password из SEED_PASSWORD
+-- окружения (deploy/.env, не в git); пустое значение — пароли не трогаем.
+UPDATE users
+SET password_hash = crypt(:'seed_password', gen_salt('bf', 12))
+WHERE email LIKE '%@lingua.local'
+  AND password_hash IS NULL
+  AND length(:'seed_password') > 0;
+
 -- Домашка — к самому раннему уроку фикстурной группы без домашки
 INSERT INTO materials (lesson_id, kind, title, body_md)
 SELECT l.id, 'homework', 'First homework',

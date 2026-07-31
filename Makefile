@@ -47,10 +47,11 @@ migrate: check-env
 psql:
 	$(COMPOSE) exec postgres sh -c 'psql -U $$POSTGRES_USER -d $$POSTGRES_DB'
 
-# Наполнение стенда тестовыми данными (seed.sql появится в S0-2)
+# Наполнение стенда тестовыми данными. seed_password — из SEED_PASSWORD
+# окружения контейнера postgres (deploy/.env); пусто — пароли не задаются.
 seed:
 	@if test -f backend/migrations/seed.sql; then \
-		$(COMPOSE) exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U $$POSTGRES_USER -d $$POSTGRES_DB' < backend/migrations/seed.sql; \
+		$(COMPOSE) exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -v seed_password="$$SEED_PASSWORD" -U $$POSTGRES_USER -d $$POSTGRES_DB' < backend/migrations/seed.sql; \
 	else \
 		echo "seed: backend/migrations/seed.sql пока нет (появится в S0-2)"; \
 	fi
