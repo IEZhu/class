@@ -3,6 +3,8 @@
 > REST/JSON, отдаёт api (Go). Auth: cookie-сессии/JWT (решение — S0-3,
 > фиксируется в [decisions.md](decisions.md)). Роли: teacher | student.
 > Колонка «Этап» — когда эндпоинт появляется.
+> Пути в таблице — внутренние (как их видит api): снаружи все они с
+> префиксом `/api`, который стрипает caddy (`https://<домен>/api/...`).
 
 ## Эндпоинты
 
@@ -11,8 +13,14 @@
 | `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006) | все | 0 |
 | `POST /auth/logout` | выход (удаление сессии) | все | 0 |
 | `GET /auth/me` | текущий пользователь (для web-каркаса S0-5) | все | 0 |
-| `POST /lessons` | создать урок (группа, дата, время) | teacher | 0 |
+| `POST /groups` | создать группу (name, level) | teacher | 0 |
+| `GET /groups` | список групп с участниками | teacher | 0 |
+| `POST /groups/{id}/members` | добавить участника по email | teacher | 0 |
+| `POST /lessons` | создать урок (группа, дата, время); участники — снапшот группы | teacher | 0 |
+| `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
+| `PATCH /lessons/{id}` | перенос (starts_at/ends_at), только `scheduled` | teacher урока | 0 |
+| `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
 | `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |

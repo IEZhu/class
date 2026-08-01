@@ -143,6 +143,27 @@ compose up на VPS, домен, том PG, ротация docker-логов.
   пароль 401, гость 401, logout 204 → `me` 401; внешний контур через
   Cloudflare — login 200.
 
+### S0-4 CRUD ядра (2026-07-31)
+
+- Эндпоинты (все с ролями; пути внутри api, снаружи `/api/...`):
+  `POST /groups`, `GET /groups` (с участниками), `POST /groups/{id}/members`
+  (по email; идемпотентно) — teacher; `POST /lessons` (снапшот участников
+  группы в `lesson_participants`, транзакция), `GET /lessons` (по роли:
+  teacher — свои, student — где участник), `GET /lessons/{id}` (урок +
+  материалы + участники + статус), `PATCH /lessons/{id}` (перенос, только
+  `scheduled`, 409 иначе), `DELETE /lessons/{id}` (отмена = удаление,
+  cancelled-статуса в статус-машине нет), `POST /lessons/{id}/materials`
+  и `/homework` (title, body_md; файлы — D-4/S1-3). 04-api.md дополнен
+  строками groups/GET lessons/PATCH/DELETE.
+- Код: `internal/store/{groups,lessons,materials}.go` (pgx, транзакции,
+  типизированные ошибки ErrNotOwner/ErrLessonNotEditable, `PgErrorCode`
+  для маппинга 23503→404, 23514→400), хендлеры в `internal/httpapi`,
+  общий `decodeBody` с лимитом 64 KiB.
+- Проверено на стенде (сквозной DoD): группа → участник → урок → домашка
+  → студент видит урок и список; студенту 403 на create/PATCH/групп;
+  кривой CEFR → 400, чужой email → 404, отмена → 204 и 404 после;
+  перенос меняет времена; `go vet` чистый.
+
 ### S0-6 Деплой на VPS (2026-07-31)
 
 - VPS: реквизиты хоста — в операционном контуре вне git (репозиторий

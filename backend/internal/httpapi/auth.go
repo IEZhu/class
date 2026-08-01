@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -17,8 +16,6 @@ const (
 	// bcryptCost совпадает с gen_salt('bf', 12) в seed.sql — одинаковая
 	// стоимость сравнения для реальных и dummy-хэшей.
 	bcryptCost = 12
-
-	maxLoginBodyBytes = 1 << 16 // 64 KiB — с запасом для login-пейлоада
 )
 
 // dummyPasswordHash выравнивает время ответа логина: bcrypt-сравнение
@@ -46,8 +43,11 @@ type userResponse struct {
 
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Password == "" {
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if req.Email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "email и password обязательны")
 		return
 	}
