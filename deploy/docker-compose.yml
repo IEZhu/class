@@ -56,6 +56,10 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       DOMAIN: ${DOMAIN}
+      # S1-4: без ключей комната урока отдаёт 503, остальное работает
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

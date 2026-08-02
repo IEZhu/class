@@ -18,6 +18,11 @@ type Config struct {
 	// PublicBaseURL — внешний адрес стенда (https://<DOMAIN>), из которого
 	// собираются ссылки-приглашения (ADR-008).
 	PublicBaseURL string
+	// LiveKit (S1-4): пустые значения не роняют api — комната отдаёт 503,
+	// остальной стенд работает.
+	LiveKitURL       string
+	LiveKitAPIKey    string
+	LiveKitAPISecret string
 }
 
 type API struct {
@@ -71,6 +76,7 @@ func (a *API) Router() http.Handler {
 	mux.Handle("POST /lessons", teacher(a.handleCreateLesson))
 	mux.Handle("GET /lessons", user(a.handleListLessons))
 	mux.Handle("GET /lessons/{id}", user(a.handleGetLesson))
+	mux.Handle("GET /lessons/{id}/room-token", user(a.handleRoomToken))
 	mux.Handle("PATCH /lessons/{id}", teacher(a.handleRescheduleLesson))
 	mux.Handle("DELETE /lessons/{id}", teacher(a.handleCancelLesson))
 

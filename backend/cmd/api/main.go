@@ -36,7 +36,13 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(st, httpapi.Config{PublicBaseURL: "https://" + domain}).Router(),
+		Handler: httpapi.New(st, httpapi.Config{
+			PublicBaseURL: "https://" + domain,
+			// Ключи LiveKit опциональны: без них работает всё, кроме комнаты
+			LiveKitURL:       os.Getenv("LIVEKIT_URL"),
+			LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
+			LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
+		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      20 * time.Second,
