@@ -10,10 +10,12 @@ import (
 )
 
 type groupResponse struct {
-	ID      int64            `json:"id"`
-	Name    string           `json:"name"`
-	Level   string           `json:"level"`
-	Members []memberResponse `json:"members,omitempty"`
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Level string `json:"level"`
+	// Без omitempty: у пустой группы поле должно приезжать как [], иначе
+	// клиент получает undefined там, где по контракту массив.
+	Members []memberResponse `json:"members"`
 }
 
 type memberResponse struct {
@@ -53,7 +55,9 @@ func (a *API) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "create group", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, groupResponse{ID: g.ID, Name: g.Name, Level: g.Level})
+	writeJSON(w, http.StatusCreated, groupResponse{
+		ID: g.ID, Name: g.Name, Level: g.Level, Members: []memberResponse{},
+	})
 }
 
 func (a *API) handleListGroups(w http.ResponseWriter, r *http.Request) {
