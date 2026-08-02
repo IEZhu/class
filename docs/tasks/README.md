@@ -7,13 +7,13 @@
 
 ## Текущий фокус
 
-**Этап 0, задача S0-5** (web-каркас и state machine `/lesson/{id}`).
+**Этап 1, задача S1-1** (Google OAuth2) — этап 0 завершён.
 
 ## Сводка по этапам
 
 | Этап | Название | Оценка | Готово |
 |---|---|---|---|
-| 0 | Скелет | 1–2 нед | 5/6 |
+| 0 | Скелет | 1–2 нед | 6/6 ✓ |
 | 1 | Календарь, LiveKit, записи | 1–2 нед | 0/7 |
 | 2 | Транскрипты | 1 нед | 0/5 |
 | 3 | Словарь, ClickableText, доска | 2 нед | 0/8 |
@@ -28,7 +28,7 @@
 | S0-2 | БД v1: users, groups, group_members, lessons, lesson_participants, materials + seed | S0-1 | ядро схемы, миграции | ☑ |
 | S0-3 | Auth: cookie-сессии в Postgres (ADR-006), роли teacher/student | S0-2 | auth-middleware | ☑ |
 | S0-4 | CRUD: группы, уроки, материалы/домашка (body_md) | S0-3 | API ядра | ☑ |
-| S0-5 | Web-каркас + `/lesson/{id}` state machine с заглушками | S0-4 | страница урока | ☐ |
+| S0-5 | Web-каркас + `/lesson/{id}` state machine с заглушками | S0-4 | страница урока | ☑ |
 | S0-6 | Деплой на VPS (домен, тома, ротация логов) | S0-1 | живой стенд | ☑ |
 
 ## Этап 1 — Календарь, LiveKit, записи ([план](../plans/stage-1-calendar-livekit.md))

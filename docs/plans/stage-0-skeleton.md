@@ -66,9 +66,9 @@ compose up на VPS, домен, том PG, ротация docker-логов.
 
 ## Definition of Done этапа
 
-- [ ] S0-1…S0-6 закрыты в [INDEX](../tasks/README.md)
-- [ ] Сквозной сценарий: логин преподавателя → урок → домашка → студент видит страницу
-- [ ] Раздел «Факт» заполнен
+- [x] S0-1…S0-6 закрыты в [INDEX](../tasks/README.md)
+- [x] Сквозной сценарий: логин преподавателя → урок → домашка → студент видит страницу (прогнан на стенде 2026-08-02)
+- [x] Раздел «Факт» заполнен
 
 ## Факт (заполняется по ходу реализации)
 
@@ -163,6 +163,28 @@ compose up на VPS, домен, том PG, ротация docker-логов.
   → студент видит урок и список; студенту 403 на create/PATCH/групп;
   кривой CEFR → 400, чужой email → 404, отмена → 204 и 404 после;
   перенос меняет времена; `go vet` чистый.
+
+### S0-5 Web-каркас и state machine (2026-08-02)
+
+- Страницы (App Router, SSR): `/login` (client-форма → `/api/auth/login`),
+  `/lessons` (список по роли, 401 → redirect `/login`), `/lesson/[id]` —
+  state machine по `lesson-lifecycle.md`; корень `/` → redirect `/lessons`.
+- Фазы `/lesson/{id}` (`web/lib/lesson-phase.ts`): статус БД + время;
+  `scheduled` (материалы+домашка), `live` (кнопка «Войти в класс» —
+  заглушка до S1-4), `ended` (прошедший без записи — до Egress S1-5),
+  `processing`, `done` (заглушки плеера S1-6 и транскрипта S2-4).
+- Server Components ходят в api напрямую по compose-сети
+  (`INTERNAL_API_URL=http://api:8080`, новый env web в compose) с пробросом
+  сессионного cookie `sid` и таймаутом 5s (`web/lib/api.ts`); клиентские
+  формы — на относительный `/api`. В compose web получил
+  `depends_on: api (service_healthy)` — SSR рендерится через api.
+- `body_md` пока рендерится как текст: настоящий markdown придёт вместе
+  с `<ClickableText>` (S3-1) — единственным рендером текста.
+- Шапка `UserBar` (имя, роль, logout).
+- Проверено SSR-прогоном: гость → 307 `/login`; scheduled/live/processing/
+  done дают разный HTML одной ссылки (переключение psql'ом); студент видит
+  домашку урока; 404 на чужой id; внешний контур 200.
+- **Definition of Done этапа 0 выполнен**: сквозной сценарий прогнан.
 
 ### S0-6 Деплой на VPS (2026-07-31)
 
