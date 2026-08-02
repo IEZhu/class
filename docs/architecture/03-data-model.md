@@ -68,6 +68,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 |---|---|---|
 | users, groups, group_members, lessons, lesson_participants, materials | 0 | S0-2 |
 | sessions; колонка users.password_hash | 0 | S0-3 |
+| invites | 1 | S1-10 |
 | jobs; колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
 | transcripts, utterances | 2 | S2-2 |
 | terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |

@@ -29,11 +29,18 @@ type Invite struct {
 
 func (s *Store) CreateInvite(ctx context.Context, tokenHash, email, name, role string, groupID *int64, createdBy int64, expiresAt time.Time) (*Invite, error) {
 	inv := &Invite{Email: email, Name: name, Role: role, GroupID: groupID, CreatedBy: createdBy, ExpiresAt: expiresAt}
+	// Имя группы достаём тем же запросом: иначе ответ на создание уезжает
+	// с пустым group_name, хотя группа задана.
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO invites (token_hash, email, name, role, group_id, created_by, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 RETURNING id, created_at`,
-		tokenHash, email, name, role, groupID, createdBy, expiresAt).Scan(&inv.ID, &inv.CreatedAt)
+		`WITH new_invite AS (
+		     INSERT INTO invites (token_hash, email, name, role, group_id, created_by, expires_at)
+		     VALUES ($1, $2, $3, $4, $5, $6, $7)
+		     RETURNING id, created_at, group_id
+		 )
+		 SELECT i.id, i.created_at, COALESCE(g.name, '')
+		 FROM new_invite i LEFT JOIN groups g ON g.id = i.group_id`,
+		tokenHash, email, name, role, groupID, createdBy, expiresAt).
+		Scan(&inv.ID, &inv.CreatedAt, &inv.GroupName)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +95,9 @@ func (s *Store) InviteByTokenHash(ctx context.Context, tokenHash string) (*Invit
 	if err != nil {
 		return nil, err
 	}
-	if acceptedAt != nil || inv.ExpiresAt.Before(time.Now()) {
+	// Граница ровно как в SQL приёма (expires_at > now()): иначе
+	// предпросмотр отдал бы 200 там, где приём уже вернёт 410.
+	if acceptedAt != nil || !inv.ExpiresAt.After(time.Now()) {
 		return inv, ErrInviteUnusable
 	}
 	return inv, nil
@@ -108,10 +117,10 @@ func (s *Store) DeleteInvite(ctx context.Context, id, createdBy int64) error {
 }
 
 // AcceptInvite — одна транзакция: погасить приглашение, завести учётку,
-// зачислить в группу. Гашение первым и с условием accepted_at IS NULL —
-// это и есть одноразовость: две параллельные попытки по одной ссылке
-// не создадут двух пользователей.
-func (s *Store) AcceptInvite(ctx context.Context, tokenHash, passwordHash string) (*User, error) {
+// зачислить в группу, открыть сессию. Гашение первым и с условием
+// accepted_at IS NULL — это и есть одноразовость: две параллельные
+// попытки по одной ссылке не создадут двух пользователей.
+func (s *Store) AcceptInvite(ctx context.Context, tokenHash, passwordHash, sessionTokenHash string, sessionExpiresAt time.Time) (*User, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -131,8 +140,17 @@ func (s *Store) AcceptInvite(ctx context.Context, tokenHash, passwordHash string
 		 RETURNING id, email, name, role, group_id`, tokenHash).
 		Scan(&inviteID, &email, &name, &role, &groupID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Строка есть, но не подошла под условия — значит негодная;
-		// если строки нет вовсе, это ErrNotFound на уровне хендлера.
+		// Ноль строк — либо приглашение негодное, либо его отозвали между
+		// предпросмотром и приёмом. Разделяем: «отозвано» это ErrNotFound,
+		// иначе человек получил бы «просрочено» на несуществующую ссылку.
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM invites WHERE token_hash = $1)`, tokenHash).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrNotFound
+		}
 		return nil, ErrInviteUnusable
 	}
 	if err != nil {
@@ -156,6 +174,13 @@ func (s *Store) AcceptInvite(ctx context.Context, tokenHash, passwordHash string
 			 ON CONFLICT DO NOTHING`, *groupID, u.ID); err != nil {
 			return nil, err
 		}
+	}
+	// Сессия — в этой же транзакции: иначе сбой её создания оставил бы
+	// погашенное приглашение и учётку, в которую человек не вошёл.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		u.ID, sessionTokenHash, sessionExpiresAt); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

@@ -25,7 +25,7 @@
 | `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
 | `GET /signup/{token}` | предпросмотр приглашения (кого и куда зовут) | без входа | 1 |
-| `POST /signup/{token}` | принять приглашение: свой пароль → учётка + сессия | без входа | 1 |
+| `POST /signup/{token}` | принять приглашение: свой пароль → учётка и сессия одной транзакцией | без входа | 1 |
 | `GET /invites` | ожидающие приглашения: admin — все, teacher — свои | admin, teacher | 1 |
 | `POST /invites` | выпустить ссылку (email, name, role, group_id); URL в ответе один раз | admin, teacher | 1 |
 | `DELETE /invites/{id}` | отозвать приглашение | admin, teacher | 1 |

@@ -166,8 +166,9 @@ func (a *API) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tokenHash := hashToken(r.PathValue("token"))
-	// Предпроверка — чтобы отличить «нет такой ссылки» от «просрочена»;
-	// гонку она не решает, за одноразовость отвечает UPDATE в AcceptInvite.
+	// Ранний отсев, чтобы не считать bcrypt по заведомо мёртвой ссылке.
+	// Гонку он не решает — за одноразовость и точный код отвечает
+	// транзакция приёма.
 	if _, err := a.store.InviteByTokenHash(r.Context(), tokenHash); !a.writeInviteLookupError(w, err) {
 		return
 	}
@@ -177,8 +178,19 @@ func (a *API) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "hash password", err)
 		return
 	}
-	u, err := a.store.AcceptInvite(r.Context(), tokenHash, string(hash))
+	// Сессию заводим в той же транзакции, что и учётку: обещание
+	// «учётка + сессия» из 04-api.md должно быть неделимым.
+	sessionToken, sessionTokenHash, err := newToken()
+	if err != nil {
+		internalError(w, "new session", err)
+		return
+	}
+	u, err := a.store.AcceptInvite(r.Context(), tokenHash, string(hash),
+		sessionTokenHash, time.Now().Add(sessionTTL))
 	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "приглашение не найдено")
+		return
 	case errors.Is(err, store.ErrInviteUnusable):
 		writeError(w, http.StatusGone, "invite_used", "ссылка уже использована или просрочена")
 		return
@@ -189,17 +201,7 @@ func (a *API) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "accept invite", err)
 		return
 	}
-
-	token, tokenHash, err := newToken()
-	if err != nil {
-		internalError(w, "new session", err)
-		return
-	}
-	if err := a.store.CreateSession(r.Context(), u.ID, tokenHash, time.Now().Add(sessionTTL)); err != nil {
-		internalError(w, "create session", err)
-		return
-	}
-	http.SetCookie(w, sessionCookieFor(token, int(sessionTTL.Seconds())))
+	http.SetCookie(w, sessionCookieFor(sessionToken, int(sessionTTL.Seconds())))
 	writeJSON(w, http.StatusCreated, userResponse{ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name})
 }
 
