@@ -68,7 +68,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль")
 		return
 	}
-	token, tokenHash, err := newSessionToken()
+	token, tokenHash, err := newToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка")
 		return

@@ -11,6 +11,17 @@ import type { FormEvent, ReactNode } from "react";
 // в отличие от Server Components (web/lib/api.ts). Текст ошибки берём из
 // тела {error}, как его отдаёт api (04-api.md).
 export async function request(path: string, method: string, body?: unknown): Promise<void> {
+  await call(path, method, body);
+}
+
+// requestJson — когда ответ нужен целиком: например выпущенная ссылка
+// приглашения, которую api отдаёт один раз (ADR-008).
+export async function requestJson<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const res = await call(path, method, body);
+  return (await res.json()) as T;
+}
+
+async function call(path: string, method: string, body?: unknown): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -25,6 +36,7 @@ export async function request(path: string, method: string, body?: unknown): Pro
     const parsed = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(parsed?.error ?? `ошибка ${res.status}`);
   }
+  return res;
 }
 
 export function useSubmit(action: () => Promise<void>) {

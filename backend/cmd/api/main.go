@@ -20,6 +20,11 @@ func main() {
 	if databaseURL == "" {
 		log.Fatal("api: DATABASE_URL is required")
 	}
+	// Нужен для ссылок-приглашений (ADR-008); ключ обязателен в deploy/.env
+	domain := os.Getenv("DOMAIN")
+	if domain == "" {
+		log.Fatal("api: DOMAIN is required")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -31,7 +36,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(st).Router(),
+		Handler:           httpapi.New(st, httpapi.Config{PublicBaseURL: "https://" + domain}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      20 * time.Second,
