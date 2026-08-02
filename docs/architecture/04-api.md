@@ -1,7 +1,7 @@
 # API-эскиз
 
-> REST/JSON, отдаёт api (Go). Auth: cookie-сессии/JWT (решение — S0-3,
-> фиксируется в [decisions.md](decisions.md)).
+> REST/JSON, отдаёт api (Go). Auth: серверные cookie-сессии в Postgres,
+> cookie `sid` ([ADR-006](decisions.md)); JWT отклонён.
 > Роли: admin | teacher | student ([ADR-007](decisions.md)).
 > Колонка «Этап» — когда эндпоинт появляется.
 > Пути в таблице — внутренние (как их видит api): снаружи все они с
@@ -14,9 +14,9 @@
 | `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006) | все | 0 |
 | `POST /auth/logout` | выход (удаление сессии) | все | 0 |
 | `GET /auth/me` | текущий пользователь (для web-каркаса S0-5) | все | 0 |
-| `POST /groups` | создать группу (name, level) | admin, teacher | 0 |
+| `POST /groups` | создать группу (name, level) | admin | 0 |
 | `GET /groups` | список групп с участниками | admin, teacher | 0 |
-| `POST /groups/{id}/members` | добавить участника по email | admin, teacher | 0 |
+| `POST /groups/{id}/members` | добавить участника по email | admin | 0 |
 | `POST /lessons` | создать урок (группа, дата, время); участники — снапшот группы | teacher | 0 |
 | `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
@@ -30,7 +30,7 @@
 | `POST /users` | завести учётку со стартовым паролем; teacher — только student | admin, teacher | 1 |
 | `PATCH /users/{id}` | имя; роль — только admin | admin, teacher | 1 |
 | `POST /users/{id}/password` | сброс пароля, все сессии владельца гасятся | admin, teacher | 1 |
-| `DELETE /groups/{id}/members/{user_id}` | убрать из группы (идемпотентно) | admin, teacher | 1 |
+| `DELETE /groups/{id}/members/{user_id}` | убрать из группы (идемпотентно) | admin | 1 |
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |

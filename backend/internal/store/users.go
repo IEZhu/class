@@ -59,23 +59,27 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserWithGroups, error) {
 	return s.listUsers(ctx, `SELECT u.id, u.email, u.role, u.name FROM users u ORDER BY u.id`)
 }
 
-// ListUsersOfTeacherGroups — учётки студентов из групп преподавателя плюс
-// он сам: teacher видит и правит только своих (ADR-007).
+// ListUsersOfTeacherGroups — студенты групп преподавателя плюс он сам.
+// Фильтр по роли обязателен: попади staff-учётка в group_members — без него
+// преподаватель увидел бы её и смог править (ADR-007).
 func (s *Store) ListUsersOfTeacherGroups(ctx context.Context, teacherID int64) ([]UserWithGroups, error) {
 	return s.listUsers(ctx,
 		`SELECT u.id, u.email, u.role, u.name
 		 FROM users u
 		 WHERE u.id = $1
-		    OR u.id IN (
+		    OR (u.role = $2 AND u.id IN (
 		        SELECT gm.user_id FROM group_members gm
-		        WHERE gm.group_id IN (
-		            SELECT gm2.group_id FROM group_members gm2 WHERE gm2.user_id = $1
-		            UNION
-		            SELECT l.group_id FROM lessons l WHERE l.teacher_id = $1
-		        )
-		    )
-		 ORDER BY u.id`, teacherID)
+		        WHERE gm.group_id IN (`+teacherGroupIDs+`)
+		    ))
+		 ORDER BY u.id`, teacherID, RoleStudent)
 }
+
+// teacherGroupIDs — группы преподавателя: где он участник или ведёт урок.
+// Общий подзапрос для выборки и проверки прав, чтобы границы не разъезжались.
+const teacherGroupIDs = `
+	SELECT gm2.group_id FROM group_members gm2 WHERE gm2.user_id = $1
+	UNION
+	SELECT l.group_id FROM lessons l WHERE l.teacher_id = $1`
 
 func (s *Store) listUsers(ctx context.Context, query string, args ...any) ([]UserWithGroups, error) {
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -128,20 +132,20 @@ func (s *Store) listUsers(ctx context.Context, query string, args ...any) ([]Use
 	return out, nil
 }
 
-// TeacherManagesUser — состоит ли пользователь в группе преподавателя.
-// Граница прав teacher'а из ADR-007: свои студенты, не все подряд.
+// TeacherManagesUser — студент ли это одной из групп преподавателя.
+// Граница прав teacher'а из ADR-007: только студенты, только свои группы —
+// одной принадлежности к группе мало, иначе staff-учётка в group_members
+// открывала бы преподавателю правку чужого профиля и пароля.
 func (s *Store) TeacherManagesUser(ctx context.Context, teacherID, userID int64) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (
 		     SELECT 1 FROM group_members gm
+		     JOIN users u ON u.id = gm.user_id
 		     WHERE gm.user_id = $2
-		       AND gm.group_id IN (
-		           SELECT gm2.group_id FROM group_members gm2 WHERE gm2.user_id = $1
-		           UNION
-		           SELECT l.group_id FROM lessons l WHERE l.teacher_id = $1
-		       )
-		 )`, teacherID, userID).Scan(&exists)
+		       AND u.role = $3
+		       AND gm.group_id IN (`+teacherGroupIDs+`)
+		 )`, teacherID, userID, RoleStudent).Scan(&exists)
 	return exists, err
 }
 

@@ -70,9 +70,11 @@ Nightly `pg_dump | zstd` → `s3://…/backups/pg/`, retention 7/30;
 (список, заведение со стартовым паролем, правка имени/роли, сброс пароля),
 `PATCH /auth/me`, `POST /auth/password`, удаление участника из группы.
 Границы прав — [ADR-007](../architecture/decisions.md): admin всё,
-teacher — только студенты своих групп, любой — своё имя и пароль.
+teacher — только студенты своих групп (состав групп меняет только admin),
+любой — своё имя и пароль.
 **DoD:** админ заводит студента запросом и тот логинится; преподаватель
-получает 403 на чужого студента и на заведение не-студента.
+получает 403 на чужого студента, на заведение не-студента и на правку
+состава групп.
 
 ### S1-9 Админ-кабинет и своя учётная запись (web)
 `/admin` — люди (список с группами, заведение, сброс пароля, смена роли)
@@ -111,8 +113,8 @@ teacher — только студенты своих групп, любой — 
   `UpdateUserProfile`, `SetPassword` (в одной транзакции с удалением
   сессий владельца), `RemoveGroupMember`.
 - `backend/internal/httpapi/users.go` — хендлеры; `middleware.go` —
-  `requireAnyRole` вместо `requireRole`; в `api.go` группы переехали
-  с `teacher` на `staff` (admin + teacher).
+  `requireAnyRole` вместо `requireRole`; в `api.go` чтение групп — `staff`
+  (admin + teacher), правка состава — только `admin`.
 - Эндпоинты (в [04-api.md](../architecture/04-api.md)): `GET/POST /users`,
   `PATCH /users/{id}`, `POST /users/{id}/password`, `PATCH /auth/me`,
   `POST /auth/password`, `DELETE /groups/{id}/members/{user_id}`.

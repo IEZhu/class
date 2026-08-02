@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import type { FormEvent } from "react";
 
 import type { Group, User, UserWithGroups } from "../../lib/api";
 import { roleLabels } from "../../lib/roles";
@@ -203,7 +204,9 @@ function GroupsSection({
   return (
     <section style={sectionStyle}>
       <h2 style={{ marginTop: 0 }}>Группы ({groups.length})</h2>
-      <CreateGroupForm onDone={onDone} />
+      {/* Состав групп меняет только админ (ADR-007) — преподавателю
+          показываем список без форм, api ему всё равно ответит 403 */}
+      {isAdmin && <CreateGroupForm onDone={onDone} />}
       {groups.map((g) => (
         <div key={g.id} style={{ borderTop: "1px solid #eee", padding: "0.75rem 0" }}>
           <strong>{g.name}</strong> · {g.level}
@@ -212,16 +215,18 @@ function GroupsSection({
             {g.members.map((m) => (
               <li key={m.user_id} style={rowStyle}>
                 {m.name} · {m.email}
-                <RemoveMemberButton groupId={g.id} userId={m.user_id} onDone={onDone} />
+                {isAdmin && (
+                  <RemoveMemberButton groupId={g.id} userId={m.user_id} name={m.name} onDone={onDone} />
+                )}
               </li>
             ))}
           </ul>
-          <AddMemberForm groupId={g.id} onDone={onDone} />
+          {isAdmin && <AddMemberForm groupId={g.id} onDone={onDone} />}
         </div>
       ))}
       {!isAdmin && (
         <p style={{ color: "#666", marginBottom: 0 }}>
-          Видны все группы: состав нужен для переклички на уроке.
+          Состав групп меняет админ; вам группы видны для переклички на уроке.
         </p>
       )}
     </section>
@@ -290,10 +295,12 @@ function AddMemberForm({ groupId, onDone }: { groupId: number; onDone: () => voi
 function RemoveMemberButton({
   groupId,
   userId,
+  name,
   onDone,
 }: {
   groupId: number;
   userId: number;
+  name: string;
   onDone: () => void;
 }) {
   const { busy, error, submit } = useSubmit(async () => {
@@ -301,9 +308,16 @@ function RemoveMemberButton({
     onDone();
   });
 
+  // Подтверждение: промах по «×» иначе молча выкидывает человека из группы,
+  // отмены нет.
+  function confirmThenSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (window.confirm(`Убрать ${name} из группы?`)) void submit(e);
+  }
+
   return (
-    <form onSubmit={submit} style={{ display: "inline" }}>
-      <button type="submit" disabled={busy} title="Убрать из группы">
+    <form onSubmit={confirmThenSubmit} style={{ display: "inline" }}>
+      <button type="submit" disabled={busy} aria-label={`Убрать ${name} из группы`}>
         ×
       </button>
       {error && <span style={{ color: "crimson" }}> {error}</span>}

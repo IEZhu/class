@@ -28,8 +28,9 @@ func (a *API) Router() http.Handler {
 
 	user := func(h http.HandlerFunc) http.Handler { return a.requireUser(h) }
 	teacher := func(h http.HandlerFunc) http.Handler { return a.requireAnyRole(h, store.RoleTeacher) }
-	// staff — админ и преподаватель: люди и группы. Границу «чужой студент»
-	// внутри staff проверяет хендлер (ADR-007), одной роли для этого мало.
+	admin := func(h http.HandlerFunc) http.Handler { return a.requireAnyRole(h, store.RoleAdmin) }
+	// staff — админ и преподаватель: люди и чтение групп. Границу «чужой
+	// студент» внутри staff проверяет хендлер (ADR-007), одной роли мало.
 	staff := func(h http.HandlerFunc) http.Handler {
 		return a.requireAnyRole(h, store.RoleAdmin, store.RoleTeacher)
 	}
@@ -42,10 +43,14 @@ func (a *API) Router() http.Handler {
 	mux.Handle("PATCH /users/{id}", staff(a.handleUpdateUser))
 	mux.Handle("POST /users/{id}/password", staff(a.handleResetPassword))
 
-	mux.Handle("POST /groups", staff(a.handleCreateGroup))
+	// Состав групп — только админ. У groups нет владельца, поэтому «своя
+	// группа» для записи неопределима: преподаватель добавил бы себя в любую
+	// и получил бы её студентов. Чтение оставляем staff — нужен состав
+	// на уроке (ADR-007).
+	mux.Handle("POST /groups", admin(a.handleCreateGroup))
 	mux.Handle("GET /groups", staff(a.handleListGroups))
-	mux.Handle("POST /groups/{id}/members", staff(a.handleAddGroupMember))
-	mux.Handle("DELETE /groups/{id}/members/{user_id}", staff(a.handleRemoveGroupMember))
+	mux.Handle("POST /groups/{id}/members", admin(a.handleAddGroupMember))
+	mux.Handle("DELETE /groups/{id}/members/{user_id}", admin(a.handleRemoveGroupMember))
 
 	mux.Handle("POST /lessons", teacher(a.handleCreateLesson))
 	mux.Handle("GET /lessons", user(a.handleListLessons))

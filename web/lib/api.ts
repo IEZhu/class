@@ -33,7 +33,7 @@ export interface Group {
   id: number;
   name: string;
   level: string;
-  members: { user_id: number; email: string; name: string; role: string }[];
+  members: { user_id: number; email: string; name: string; role: Role }[];
 }
 
 export interface Lesson {
