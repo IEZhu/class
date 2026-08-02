@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import type { User } from "../lib/api";
+import { roleLabels } from "../lib/roles";
+import type { Role } from "../lib/roles";
 
-// Шапка авторизованных страниц: кто вошёл + выход.
-export default function UserBar({ name, role }: { name: string; role: User["role"] }) {
+// Шапка авторизованных страниц: кто вошёл, ссылки по роли, выход.
+export default function UserBar({ name, role }: { name: string; role: Role }) {
   const router = useRouter();
 
   async function logout() {
@@ -34,7 +35,16 @@ export default function UserBar({ name, role }: { name: string; role: User["role
         Lingua Class
       </Link>
       <span>
-        {name} · {role === "teacher" ? "преподаватель" : "студент"}{" "}
+        {/* Админка — только тем, у кого api всё равно не ответит 403 */}
+        {role !== "student" && (
+          <Link href="/admin" style={{ marginRight: "0.75rem" }}>
+            Люди и группы
+          </Link>
+        )}
+        <Link href="/account" style={{ marginRight: "0.75rem" }}>
+          {name}
+        </Link>
+        · {roleLabels[role]}{" "}
         <button onClick={logout} style={{ marginLeft: "0.75rem" }}>
           Выйти
         </button>

@@ -9,7 +9,8 @@
 ## Скетч ключевых таблиц
 
 ```sql
-users(id, email, role /*teacher|student*/, name, password_hash /*bcrypt*/,
+users(id, email, role /*admin|teacher|student, ADR-007*/, name,
+      password_hash /*bcrypt*/,
       google_refresh_token /*только у teachers, шифруется*/)
 sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
 groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)

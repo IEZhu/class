@@ -63,6 +63,24 @@ Nightly `pg_dump | zstd` → `s3://…/backups/pg/`, retention 7/30;
 скрипт в `deploy/`, расписание (cron/systemd-timer на VPS).
 **DoD:** бэкап появляется в S3; восстановление проверено на копии БД.
 
+### S1-8 Роль admin и управление учётками (api)
+Пробел проектирования: до этой задачи завести человека можно было только
+через `seed.sql` — `POST /groups/{id}/members` добавляет лишь существующего.
+Третья роль `admin` (миграция `0003_roles`), эндпоинты `/users`
+(список, заведение со стартовым паролем, правка имени/роли, сброс пароля),
+`PATCH /auth/me`, `POST /auth/password`, удаление участника из группы.
+Границы прав — [ADR-007](../architecture/decisions.md): admin всё,
+teacher — только студенты своих групп, любой — своё имя и пароль.
+**DoD:** админ заводит студента запросом и тот логинится; преподаватель
+получает 403 на чужого студента и на заведение не-студента.
+
+### S1-9 Админ-кабинет и своя учётная запись (web)
+`/admin` — люди (список с группами, заведение, сброс пароля, смена роли)
+и группы (создание, состав, добавить/убрать участника); `/account` — своё
+имя и смена пароля; ссылки в шапке `UserBar` по роли.
+**DoD:** преподаватель заводит студента из UI, тот входит и меняет пароль
+у себя в кабинете; студенту `/admin` отвечает «нет доступа».
+
 ## Выходные артефакты
 
 | Артефакт | Потребитель |
@@ -77,13 +95,42 @@ Nightly `pg_dump | zstd` → `s3://…/backups/pg/`, retention 7/30;
 
 ## Definition of Done этапа
 
-- [ ] S1-1…S1-7 закрыты в [INDEX](../tasks/README.md)
+- [ ] S1-1…S1-9 закрыты в [INDEX](../tasks/README.md)
 - [ ] Сквозной сценарий: урок в календаре → комната → запись в S3 → плеер
 - [ ] «Факт» заполнен (ключи `.env`, имена джоб, пути S3)
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S1-8 Роль admin и управление учётками (2026-08-02)
+
+- Миграция `backend/migrations/0003_roles.up.sql` — CHECK `users.role`
+  расширен до `admin | teacher | student`; откат понижает админов
+  до teacher. `seed.sql` заводит `admin@lingua.local` (роль admin).
+- `backend/internal/store/users.go` — `UserByID`, `CreateUser`,
+  `ListUsers`, `ListUsersOfTeacherGroups`, `TeacherManagesUser`,
+  `UpdateUserProfile`, `SetPassword` (в одной транзакции с удалением
+  сессий владельца), `RemoveGroupMember`.
+- `backend/internal/httpapi/users.go` — хендлеры; `middleware.go` —
+  `requireAnyRole` вместо `requireRole`; в `api.go` группы переехали
+  с `teacher` на `staff` (admin + teacher).
+- Эндпоинты (в [04-api.md](../architecture/04-api.md)): `GET/POST /users`,
+  `PATCH /users/{id}`, `POST /users/{id}/password`, `PATCH /auth/me`,
+  `POST /auth/password`, `DELETE /groups/{id}/members/{user_id}`.
+- Минимальная длина пароля — 8 символов (`minPasswordLen`); дубль email
+  → 409; смена пароля себе выдаёт свежий cookie взамен погашенных сессий.
+
+### S1-9 Админ-кабинет и своя учётная запись (2026-08-02)
+
+- `web/app/admin/page.tsx` + `admin-panel.tsx` — «Позвать человека»,
+  список людей с группами (сброс пароля, смена роли), группы
+  (создание, состав, добавить/убрать); 403 → «Нет доступа».
+- `web/app/account/page.tsx` + `account-forms.tsx` — имя и смена пароля.
+- `web/app/forms.tsx` — общий каркас форм (`request`, `useSubmit`,
+  `FormStatus`) для обоих кабинетов.
+- `web/lib/roles.ts` — тип `Role` и подписи ролей отдельно от
+  `lib/api.ts`: тот тянет `next/headers` и в клиентские компоненты
+  не импортируется.
+- `UserBar` — ссылки «Люди и группы» (не студенту) и «Моя учётная запись».
 
 ## Риски этапа
 

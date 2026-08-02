@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 
 	"github.com/IEZhu/class/backend/internal/store"
 )
@@ -43,10 +44,12 @@ func (a *API) requireUser(next http.Handler) http.Handler {
 	})
 }
 
-// requireRole — requireUser + 403 при несовпадении роли (роли: teacher|student).
-func (a *API) requireRole(role string, next http.Handler) http.Handler {
+// requireAnyRole — requireUser + 403, если роль не в списке разрешённых
+// (роли: admin|teacher|student, ADR-007).
+func (a *API) requireAnyRole(next http.Handler, roles ...string) http.Handler {
 	return a.requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u := userFrom(r.Context()); u == nil || u.Role != role {
+		u := userFrom(r.Context())
+		if u == nil || !slices.Contains(roles, u.Role) {
 			writeError(w, http.StatusForbidden, "forbidden", "недостаточно прав")
 			return
 		}
