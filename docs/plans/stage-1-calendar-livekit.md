@@ -162,6 +162,30 @@ teacher — только студенты своих групп (состав г
   заведение со стартовым паролем убрано под `<details>` как запасной путь.
 - `web/app/forms.tsx` — добавлен `requestJson` (ответ нужен целиком).
 
+### S1-4 LiveKit Cloud: комната урока (2026-08-02)
+
+- `GET /lessons/{id}/room-token` (`backend/internal/httpapi/rooms.go`):
+  комната `lesson-{id}`, identity = `user_id` (по нему S2-5 сопоставит
+  спикеров с учётками), имя участника — из профиля, TTL токена 3 часа.
+  Гранты — только `RoomJoin`/`CanPublish`/`CanSubscribe`: административные
+  не выдаются никому.
+- Доступ: участник или преподаватель урока (тот же `canSeeLesson`, что
+  у `GET /lessons/{id}`); чужой — 403, несуществующий — 404,
+  `processing`/`done` — 409 «урок уже завершён».
+- Ключи `.env`: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+  (шаблон — `deploy/.env.example`, проброс — в compose). **Опциональны**:
+  без них эндпоинт отдаёт 503, остальной стенд работает.
+- Зависимости: `github.com/livekit/protocol v1.50.4` (требует Go ≥ 1.26 —
+  билд-образ в `backend/Dockerfile` поднят до `golang:1.26.5-alpine`);
+  в web — `@livekit/components-react`, `@livekit/components-styles`,
+  `livekit-client`.
+- `web/app/lesson/[id]/lesson-room.tsx` — заглушка «Войти в класс» ожила:
+  токен запрашивается по клику, а не при загрузке страницы (открытая
+  вкладка не должна жечь участнико-минуты free tier), дальше
+  `<LiveKitRoom><VideoConference/></LiveKitRoom>`.
+- Первые Go-тесты репозитория: `rooms_test.go` проверяет гранты выпущенного
+  токена тем же SDK и отвергает чужой секрет.
+
 ## Риски этапа
 
 GCP Testing mode (лечится сразу Production); free tier LiveKit ≈ 20 уроков/мес —

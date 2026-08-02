@@ -5,6 +5,7 @@ import type { LessonDetail, Material, User } from "../../../lib/api";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
 import UserBar from "../../user-bar";
+import LessonRoom from "./lesson-room";
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "full",
@@ -68,11 +69,8 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
 
       {phase === "live" && (
         <section style={{ border: "2px solid #2a7", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
-          {/* Кнопка оживёт в S1-4 (LiveKit room-token); доска и словарь урока — этап 3 */}
-          <button disabled style={{ padding: "0.75rem 1.5rem", fontSize: "1rem" }}>
-            Войти в класс
-          </button>
-          <p style={{ color: "#666" }}>Видеокомната появится на этапе 1 (S1-4).</p>
+          {/* Доска и словарь урока приедут на этапе 3 */}
+          <LessonRoom lessonId={lesson.id} />
         </section>
       )}
 
