@@ -28,7 +28,8 @@ export interface Lesson {
   starts_at: string;
   ends_at: string;
   status: "scheduled" | "live" | "processing" | "done";
-  group_name?: string;
+  // в GET /lessons и GET /lessons/{id} заполнен всегда (NOT NULL join)
+  group_name: string;
 }
 
 export interface Material {
@@ -46,17 +47,28 @@ export interface LessonDetail extends Lesson {
   participants: { user_id: number; email: string; name: string; role: string }[];
 }
 
+const API_TIMEOUT_MS = 5000;
+
 export async function apiFetch<T>(path: string): Promise<T> {
   const cookieStore = await cookies();
-  const cookieHeader = cookieStore
-    .getAll()
-    .map((c) => `${c.name}=${c.value}`)
-    .join("; ");
+  // во внутренний api уходит только сессионный cookie (ADR-006),
+  // остальные cookie запроса ему не нужны
+  const sid = cookieStore.get("sid");
+  const cookieHeader = sid ? `sid=${sid.value}` : "";
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: cookieHeader ? { cookie: cookieHeader } : undefined,
-    cache: "no-store",
-  });
+  // таймаут: зависший api не должен держать рендер страницы бесконечно
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: cookieHeader ? { cookie: cookieHeader } : undefined,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!res.ok) {
     let message = `api: ${res.status}`;
     try {

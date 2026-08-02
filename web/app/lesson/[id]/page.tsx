@@ -20,6 +20,14 @@ const phaseTitles: Record<LessonPhase, string> = {
   done: "Прошёл",
 };
 
+// общий вид секций-заглушек будущих этапов (S1-5/S1-6/S2-4)
+const placeholderSectionStyle = {
+  border: "1px solid #ddd",
+  borderRadius: 8,
+  padding: "1rem",
+  margin: "1rem 0",
+} as const;
+
 export default async function LessonPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
@@ -69,18 +77,18 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       )}
 
       {phase === "processing" && (
-        <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
+        <section style={placeholderSectionStyle}>
           <p>Запись урока обрабатывается — плеер и транскрипт появятся здесь.</p>
         </section>
       )}
 
       {phase === "done" && (
         <>
-          <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
+          <section style={placeholderSectionStyle}>
             {/* Плеер по presigned GET оживёт в S1-6 */}
             <p>🎬 Плеер записи появится на этапе 1 (S1-6).</p>
           </section>
-          <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
+          <section style={placeholderSectionStyle}>
             {/* Транскрипт по спикерам оживёт в S2-4 */}
             <p>📝 Транскрипт по спикерам появится на этапе 2 (S2-4).</p>
           </section>
@@ -88,7 +96,7 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       )}
 
       {phase === "ended" && (
-        <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
+        <section style={placeholderSectionStyle}>
           <p>Урок завершён. Запись и транскрипт будут появляться здесь начиная с этапов 1–2.</p>
         </section>
       )}

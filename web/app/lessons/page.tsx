@@ -33,7 +33,8 @@ export default async function LessonsPage() {
         {lessons.map((l) => (
           <li key={l.id} style={{ border: "1px solid #ddd", borderRadius: 8, padding: "0.75rem 1rem" }}>
             <Link href={`/lesson/${l.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-              <strong>{l.group_name}</strong> · {dateFmt.format(new Date(l.starts_at))} (UTC) ·{" "}
+              <strong>{l.group_name || `Группа #${l.group_id}`}</strong> ·{" "}
+              {dateFmt.format(new Date(l.starts_at))} (UTC) ·{" "}
               <span>{l.status}</span>
             </Link>
           </li>
