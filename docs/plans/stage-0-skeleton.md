@@ -175,7 +175,9 @@ compose up на VPS, домен, том PG, ротация docker-логов.
   `processing`, `done` (заглушки плеера S1-6 и транскрипта S2-4).
 - Server Components ходят в api напрямую по compose-сети
   (`INTERNAL_API_URL=http://api:8080`, новый env web в compose) с пробросом
-  cookie (`web/lib/api.ts`); клиентские формы — на относительный `/api`.
+  сессионного cookie `sid` и таймаутом 5s (`web/lib/api.ts`); клиентские
+  формы — на относительный `/api`. В compose web получил
+  `depends_on: api (service_healthy)` — SSR рендерится через api.
 - `body_md` пока рендерится как текст: настоящий markdown придёт вместе
   с `<ClickableText>` (S3-1) — единственным рендером текста.
 - Шапка `UserBar` (имя, роль, logout).
