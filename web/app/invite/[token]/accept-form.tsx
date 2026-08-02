@@ -48,7 +48,7 @@ export default function AcceptForm({ token }: { token: string }) {
         />
       </label>
       <button type="submit" disabled={busy} style={{ padding: "0.6rem" }}>
-        {busy ? "Заходим…" : "Войти"}
+        {busy ? "Заходим…" : "Принять приглашение"}
       </button>
       <FormStatus error={error} done={done} doneText="Готово, открываем кабинет…" />
     </form>

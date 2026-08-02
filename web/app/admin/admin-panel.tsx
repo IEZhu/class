@@ -10,6 +10,11 @@ import { FormStatus, request, requestJson, useSubmit } from "../forms";
 
 const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 
+// Фиксированная зона: на сервере и в браузере она разная, и toLocaleDateString
+// по локальной зоне даёт разный текст — React ругается на несовпадение
+// разметки при гидрации.
+const expiryFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
+
 const fieldStyle = { padding: "0.5rem" };
 const sectionStyle = {
   border: "1px solid #ddd",
@@ -78,6 +83,9 @@ function InviteSection({
     setLink(created.url ?? null);
     setName("");
     setEmail("");
+    // Группу тоже сбрасываем: иначе следующее приглашение молча уедет
+    // в предыдущую группу
+    setGroupId("");
     onDone();
   });
 
@@ -116,7 +124,7 @@ function InviteSection({
         </button>
         <FormStatus error={error} done={done && !link} doneText="Ссылка выпущена." />
       </form>
-      {link && <IssuedLink link={link} onHide={() => setLink(null)} />}
+      {link && <IssuedLink key={link} link={link} onHide={() => setLink(null)} />}
       <p style={{ color: "#666", margin: "0.5rem 0 0" }}>
         Ссылка одноразовая и живёт неделю. Человек сам придумает пароль — вы его не увидите.
       </p>
@@ -162,7 +170,7 @@ function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => 
           <li key={inv.id} style={rowStyle}>
             {inv.name} · {inv.email} · {roleLabels[inv.role]}
             {inv.group_name && <> · {inv.group_name}</>}
-            <span style={{ color: "#666" }}>до {new Date(inv.expires_at).toLocaleDateString("ru-RU")}</span>
+            <span style={{ color: "#666" }}>до {expiryFmt.format(new Date(inv.expires_at))} (UTC)</span>
             <RevokeInviteButton invite={inv} onDone={onDone} />
           </li>
         ))}
