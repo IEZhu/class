@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../lib/api";
-import type { Group, User, UserWithGroups } from "../../lib/api";
+import type { Group, Invite, User, UserWithGroups } from "../../lib/api";
 import UserBar from "../user-bar";
 import AdminPanel from "./admin-panel";
 
@@ -9,11 +9,13 @@ export default async function AdminPage() {
   let me: User;
   let users: UserWithGroups[];
   let groups: Group[];
+  let invites: Invite[];
   try {
-    [me, users, groups] = await Promise.all([
+    [me, users, groups, invites] = await Promise.all([
       apiFetch<User>("/auth/me"),
       apiFetch<UserWithGroups[]>("/users"),
       apiFetch<Group[]>("/groups"),
+      apiFetch<Invite[]>("/invites"),
     ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) redirect("/login");
@@ -37,7 +39,7 @@ export default async function AdminPage() {
           ? "Админ: полный список людей и групп."
           : "Преподаватель: студенты ваших групп; заводить можно только студентов."}
       </p>
-      <AdminPanel me={me} users={users} groups={groups} />
+      <AdminPanel me={me} users={users} groups={groups} invites={invites} />
     </main>
   );
 }

@@ -13,11 +13,19 @@ import (
 	"github.com/IEZhu/class/backend/internal/store"
 )
 
-type API struct {
-	store *store.Store
+// Config — внешние параметры api, не выводимые из БД.
+type Config struct {
+	// PublicBaseURL — внешний адрес стенда (https://<DOMAIN>), из которого
+	// собираются ссылки-приглашения (ADR-008).
+	PublicBaseURL string
 }
 
-func New(s *store.Store) *API { return &API{store: s} }
+type API struct {
+	store *store.Store
+	cfg   Config
+}
+
+func New(s *store.Store, cfg Config) *API { return &API{store: s, cfg: cfg} }
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -37,6 +45,14 @@ func (a *API) Router() http.Handler {
 
 	mux.Handle("PATCH /auth/me", user(a.handleUpdateMe))
 	mux.Handle("POST /auth/password", user(a.handleChangeOwnPassword))
+
+	// Публичные: по ссылке-приглашению человек ещё не залогинен (ADR-008)
+	mux.HandleFunc("GET /signup/{token}", a.handleInvitePreview)
+	mux.HandleFunc("POST /signup/{token}", a.handleAcceptInvite)
+
+	mux.Handle("GET /invites", staff(a.handleListInvites))
+	mux.Handle("POST /invites", staff(a.handleCreateInvite))
+	mux.Handle("DELETE /invites/{id}", staff(a.handleRevokeInvite))
 
 	mux.Handle("GET /users", staff(a.handleListUsers))
 	mux.Handle("POST /users", staff(a.handleCreateUser))
@@ -97,7 +113,9 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
-func newSessionToken() (token, tokenHash string, err error) {
+// newToken — 256-битный случайный токен и его sha256-дайджест: в БД
+// уходит только дайджест (сессии — ADR-006, приглашения — ADR-008).
+func newToken() (token, tokenHash string, err error) {
 	b := make([]byte, 32)
 	if _, err = rand.Read(b); err != nil {
 		return "", "", err

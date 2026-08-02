@@ -13,6 +13,8 @@ users(id, email, role /*admin|teacher|student, ADR-007*/, name,
       password_hash /*bcrypt*/,
       google_refresh_token /*только у teachers, шифруется*/)
 sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
+invites(id, token_hash /*sha256*/, email, name, role, group_id, created_by,
+        created_at, expires_at, accepted_at, accepted_user_id)        -- ADR-008
 groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)
 
 lessons(id, group_id, teacher_id, starts_at, ends_at, status

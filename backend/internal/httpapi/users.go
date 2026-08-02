@@ -238,7 +238,7 @@ func (a *API) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
 	// SetPassword гасит все сессии владельца, включая текущую — выдаём
 	// свежую взамен: сменивший пароль остаётся в системе, прочие
 	// устройства разлогинены.
-	token, tokenHash, err := newSessionToken()
+	token, tokenHash, err := newToken()
 	if err != nil {
 		internalError(w, "new session", err)
 		return

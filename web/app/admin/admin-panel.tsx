@@ -4,9 +4,9 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { FormEvent } from "react";
 
-import type { Group, User, UserWithGroups } from "../../lib/api";
+import type { Group, Invite, User, UserWithGroups } from "../../lib/api";
 import { roleLabels } from "../../lib/roles";
-import { FormStatus, request, useSubmit } from "../forms";
+import { FormStatus, request, requestJson, useSubmit } from "../forms";
 
 const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 
@@ -23,26 +23,176 @@ export default function AdminPanel({
   me,
   users,
   groups,
+  invites,
 }: {
   me: User;
   users: UserWithGroups[];
   groups: Group[];
+  invites: Invite[];
 }) {
   const router = useRouter();
   const reload = () => router.refresh();
+  const isAdmin = me.role === "admin";
   // Преподаватель заводит только студентов — api вернёт 403 на остальное
-  const assignableRoles: User["role"][] = me.role === "admin" ? ["student", "teacher", "admin"] : ["student"];
+  const assignableRoles: User["role"][] = isAdmin ? ["student", "teacher", "admin"] : ["student"];
 
   return (
     <>
-      <InviteForm roles={assignableRoles} onDone={reload} />
+      <InviteSection
+        roles={assignableRoles}
+        groups={isAdmin ? groups : []}
+        invites={invites}
+        onDone={reload}
+      />
       <PeopleSection me={me} users={users} roles={assignableRoles} onDone={reload} />
-      <GroupsSection groups={groups} isAdmin={me.role === "admin"} onDone={reload} />
+      <GroupsSection groups={groups} isAdmin={isAdmin} onDone={reload} />
     </>
   );
 }
 
-function InviteForm({ roles, onDone }: { roles: User["role"][]; onDone: () => void }) {
+function InviteSection({
+  roles,
+  groups,
+  invites,
+  onDone,
+}: {
+  roles: User["role"][];
+  groups: Group[];
+  invites: Invite[];
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<User["role"]>(roles[0]);
+  const [groupId, setGroupId] = useState("");
+  // Ссылка показывается один раз: в БД лежит только хэш токена (ADR-008)
+  const [link, setLink] = useState<string | null>(null);
+
+  const { busy, error, done, submit } = useSubmit(async () => {
+    const created = await requestJson<Invite>("/api/invites", "POST", {
+      name,
+      email,
+      role,
+      group_id: groupId ? Number(groupId) : null,
+    });
+    setLink(created.url ?? null);
+    setName("");
+    setEmail("");
+    onDone();
+  });
+
+  return (
+    <section style={sectionStyle}>
+      <h2 style={{ marginTop: 0 }}>Позвать по ссылке</h2>
+      <form onSubmit={submit} style={rowStyle}>
+        <input placeholder="Имя" value={name} onChange={(e) => setName(e.target.value)} required style={fieldStyle} />
+        <input
+          type="email"
+          placeholder="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          style={fieldStyle}
+        />
+        <select value={role} onChange={(e) => setRole(e.target.value as User["role"])} style={fieldStyle}>
+          {roles.map((r) => (
+            <option key={r} value={r}>
+              {roleLabels[r]}
+            </option>
+          ))}
+        </select>
+        {groups.length > 0 && (
+          <select value={groupId} onChange={(e) => setGroupId(e.target.value)} style={fieldStyle}>
+            <option value="">без группы</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <button type="submit" disabled={busy}>
+          {busy ? "Готовим…" : "Выпустить ссылку"}
+        </button>
+        <FormStatus error={error} done={done && !link} doneText="Ссылка выпущена." />
+      </form>
+      {link && <IssuedLink link={link} onHide={() => setLink(null)} />}
+      <p style={{ color: "#666", margin: "0.5rem 0 0" }}>
+        Ссылка одноразовая и живёт неделю. Человек сам придумает пароль — вы его не увидите.
+      </p>
+      <PendingInvites invites={invites} onDone={onDone} />
+    </section>
+  );
+}
+
+function IssuedLink({ link, onHide }: { link: string; onHide: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      // Буфер недоступен (нет разрешения, http) — ссылка и так на экране
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div style={{ ...rowStyle, marginTop: "0.75rem" }}>
+      <input readOnly value={link} onFocus={(e) => e.target.select()} style={{ ...fieldStyle, minWidth: "22rem" }} />
+      <button type="button" onClick={copy}>
+        {copied ? "Скопировано" : "Скопировать"}
+      </button>
+      <button type="button" onClick={onHide}>
+        Скрыть
+      </button>
+    </div>
+  );
+}
+
+function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => void }) {
+  if (invites.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <h3 style={{ marginBottom: "0.5rem" }}>Ждут перехода ({invites.length})</h3>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.35rem" }}>
+        {invites.map((inv) => (
+          <li key={inv.id} style={rowStyle}>
+            {inv.name} · {inv.email} · {roleLabels[inv.role]}
+            {inv.group_name && <> · {inv.group_name}</>}
+            <span style={{ color: "#666" }}>до {new Date(inv.expires_at).toLocaleDateString("ru-RU")}</span>
+            <RevokeInviteButton invite={inv} onDone={onDone} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RevokeInviteButton({ invite, onDone }: { invite: Invite; onDone: () => void }) {
+  const { busy, error, submit } = useSubmit(async () => {
+    await request(`/api/invites/${invite.id}`, "DELETE");
+    onDone();
+  });
+
+  function confirmThenSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (window.confirm(`Отозвать приглашение для ${invite.name}?`)) void submit(e);
+  }
+
+  return (
+    <form onSubmit={confirmThenSubmit} style={{ display: "inline" }}>
+      <button type="submit" disabled={busy} aria-label={`Отозвать приглашение для ${invite.name}`}>
+        ×
+      </button>
+      {error && <span style={{ color: "crimson" }}> {error}</span>}
+    </form>
+  );
+}
+
+function CreateUserForm({ roles, onDone }: { roles: User["role"][]; onDone: () => void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<User["role"]>(roles[0]);
@@ -57,8 +207,7 @@ function InviteForm({ roles, onDone }: { roles: User["role"][]; onDone: () => vo
   });
 
   return (
-    <form onSubmit={submit} style={sectionStyle}>
-      <h2 style={{ marginTop: 0 }}>Позвать человека</h2>
+    <form onSubmit={submit}>
       <div style={rowStyle}>
         <input placeholder="Имя" value={name} onChange={(e) => setName(e.target.value)} required style={fieldStyle} />
         <input
@@ -89,8 +238,8 @@ function InviteForm({ roles, onDone }: { roles: User["role"][]; onDone: () => vo
           {busy ? "Заводим…" : "Завести"}
         </button>
       </div>
-      {/* Пароль виден в открытую намеренно: его тут же диктуют человеку —
-          почтового сервиса в стеке нет (ADR-007) */}
+      {/* Запасной путь: пароль знает и пригласивший. Основной — ссылка,
+          где человек задаёт пароль сам (ADR-008) */}
       <p style={{ color: "#666", margin: "0.5rem 0 0" }}>
         Пароль передайте лично — письма система не шлёт. Человек сменит его в своём кабинете.
       </p>
@@ -113,6 +262,12 @@ function PeopleSection({
   return (
     <section style={sectionStyle}>
       <h2 style={{ marginTop: 0 }}>Люди ({users.length})</h2>
+      <details style={{ marginBottom: "0.75rem" }}>
+        <summary style={{ cursor: "pointer", color: "#666" }}>Завести сразу с паролем, без ссылки</summary>
+        <div style={{ padding: "0.75rem 0 0" }}>
+          <CreateUserForm roles={roles} onDone={onDone} />
+        </div>
+      </details>
       {users.length === 0 && <p style={{ color: "#666" }}>Пока никого.</p>}
       {users.map((u) => (
         <details key={u.id} style={{ borderTop: "1px solid #eee", padding: "0.5rem 0" }}>

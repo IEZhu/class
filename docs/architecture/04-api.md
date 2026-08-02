@@ -24,6 +24,11 @@
 | `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
 | `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
+| `GET /signup/{token}` | предпросмотр приглашения (кого и куда зовут) | без входа | 1 |
+| `POST /signup/{token}` | принять приглашение: свой пароль → учётка + сессия | без входа | 1 |
+| `GET /invites` | ожидающие приглашения: admin — все, teacher — свои | admin, teacher | 1 |
+| `POST /invites` | выпустить ссылку (email, name, role, group_id); URL в ответе один раз | admin, teacher | 1 |
+| `DELETE /invites/{id}` | отозвать приглашение | admin, teacher | 1 |
 | `PATCH /auth/me` | своё имя (email и роль себе не меняют) | все | 1 |
 | `POST /auth/password` | смена своего пароля (current+new); прочие сессии гасятся | все | 1 |
 | `GET /users` | люди: admin — все, teacher — из своих групп | admin, teacher | 1 |

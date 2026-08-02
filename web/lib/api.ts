@@ -36,6 +36,19 @@ export interface Group {
   members: { user_id: number; email: string; name: string; role: Role }[];
 }
 
+// Приглашение (ADR-008). url приходит только в ответе на создание —
+// в БД лежит лишь хэш токена, показать ссылку повторно нельзя.
+export interface Invite {
+  id: number;
+  email: string;
+  name: string;
+  role: Role;
+  group_name: string;
+  inviter_name: string;
+  expires_at: string;
+  url?: string;
+}
+
 export interface Lesson {
   id: number;
   group_id: number;
