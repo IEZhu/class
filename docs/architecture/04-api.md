@@ -1,7 +1,8 @@
 # API-эскиз
 
-> REST/JSON, отдаёт api (Go). Auth: cookie-сессии/JWT (решение — S0-3,
-> фиксируется в [decisions.md](decisions.md)). Роли: teacher | student.
+> REST/JSON, отдаёт api (Go). Auth: серверные cookie-сессии в Postgres,
+> cookie `sid` ([ADR-006](decisions.md)); JWT отклонён.
+> Роли: admin | teacher | student ([ADR-007](decisions.md)).
 > Колонка «Этап» — когда эндпоинт появляется.
 > Пути в таблице — внутренние (как их видит api): снаружи все они с
 > префиксом `/api`, который стрипает caddy (`https://<домен>/api/...`).
@@ -13,9 +14,9 @@
 | `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006) | все | 0 |
 | `POST /auth/logout` | выход (удаление сессии) | все | 0 |
 | `GET /auth/me` | текущий пользователь (для web-каркаса S0-5) | все | 0 |
-| `POST /groups` | создать группу (name, level) | teacher | 0 |
-| `GET /groups` | список групп с участниками | teacher | 0 |
-| `POST /groups/{id}/members` | добавить участника по email | teacher | 0 |
+| `POST /groups` | создать группу (name, level) | admin | 0 |
+| `GET /groups` | список групп с участниками | admin, teacher | 0 |
+| `POST /groups/{id}/members` | добавить участника по email | admin | 0 |
 | `POST /lessons` | создать урок (группа, дата, время); участники — снапшот группы | teacher | 0 |
 | `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
@@ -23,6 +24,13 @@
 | `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
 | `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
+| `PATCH /auth/me` | своё имя (email и роль себе не меняют) | все | 1 |
+| `POST /auth/password` | смена своего пароля (current+new); прочие сессии гасятся | все | 1 |
+| `GET /users` | люди: admin — все, teacher — из своих групп | admin, teacher | 1 |
+| `POST /users` | завести учётку со стартовым паролем; teacher — только student | admin, teacher | 1 |
+| `PATCH /users/{id}` | имя; роль — только admin | admin, teacher | 1 |
+| `POST /users/{id}/password` | сброс пароля, все сессии владельца гасятся | admin, teacher | 1 |
+| `DELETE /groups/{id}/members/{user_id}` | убрать из группы (идемпотентно) | admin | 1 |
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |

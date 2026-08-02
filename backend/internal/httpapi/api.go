@@ -26,12 +26,31 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST /auth/logout", a.handleLogout)
 	mux.Handle("GET /auth/me", a.requireUser(http.HandlerFunc(a.handleMe)))
 
-	teacher := func(h http.HandlerFunc) http.Handler { return a.requireRole("teacher", h) }
 	user := func(h http.HandlerFunc) http.Handler { return a.requireUser(h) }
+	teacher := func(h http.HandlerFunc) http.Handler { return a.requireAnyRole(h, store.RoleTeacher) }
+	admin := func(h http.HandlerFunc) http.Handler { return a.requireAnyRole(h, store.RoleAdmin) }
+	// staff — админ и преподаватель: люди и чтение групп. Границу «чужой
+	// студент» внутри staff проверяет хендлер (ADR-007), одной роли мало.
+	staff := func(h http.HandlerFunc) http.Handler {
+		return a.requireAnyRole(h, store.RoleAdmin, store.RoleTeacher)
+	}
 
-	mux.Handle("POST /groups", teacher(a.handleCreateGroup))
-	mux.Handle("GET /groups", teacher(a.handleListGroups))
-	mux.Handle("POST /groups/{id}/members", teacher(a.handleAddGroupMember))
+	mux.Handle("PATCH /auth/me", user(a.handleUpdateMe))
+	mux.Handle("POST /auth/password", user(a.handleChangeOwnPassword))
+
+	mux.Handle("GET /users", staff(a.handleListUsers))
+	mux.Handle("POST /users", staff(a.handleCreateUser))
+	mux.Handle("PATCH /users/{id}", staff(a.handleUpdateUser))
+	mux.Handle("POST /users/{id}/password", staff(a.handleResetPassword))
+
+	// Состав групп — только админ. У groups нет владельца, поэтому «своя
+	// группа» для записи неопределима: преподаватель добавил бы себя в любую
+	// и получил бы её студентов. Чтение оставляем staff — нужен состав
+	// на уроке (ADR-007).
+	mux.Handle("POST /groups", admin(a.handleCreateGroup))
+	mux.Handle("GET /groups", staff(a.handleListGroups))
+	mux.Handle("POST /groups/{id}/members", admin(a.handleAddGroupMember))
+	mux.Handle("DELETE /groups/{id}/members/{user_id}", admin(a.handleRemoveGroupMember))
 
 	mux.Handle("POST /lessons", teacher(a.handleCreateLesson))
 	mux.Handle("GET /lessons", user(a.handleListLessons))
@@ -49,6 +68,7 @@ const (
 
 	// SQLSTATE-коды Postgres для маппинга в HTTP (store.PgErrorCode)
 	pgForeignKeyViolation = "23503"
+	pgUniqueViolation     = "23505"
 	pgCheckViolation      = "23514"
 )
 

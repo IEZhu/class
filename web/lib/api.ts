@@ -3,6 +3,8 @@
 // Клиентские компоненты используют относительный /api (через caddy).
 import { cookies } from "next/headers";
 
+import type { Role } from "./roles";
+
 const API_BASE = process.env.INTERNAL_API_URL ?? "http://api:8080";
 
 export class ApiError extends Error {
@@ -17,8 +19,21 @@ export class ApiError extends Error {
 export interface User {
   id: number;
   email: string;
-  role: "teacher" | "student";
+  // admin заводит людей и тасует группы, teacher владеет уроками (ADR-007)
+  role: Role;
   name: string;
+}
+
+// Строка списка людей в админ-кабинете: учётка + названия групп.
+export interface UserWithGroups extends User {
+  groups: string[];
+}
+
+export interface Group {
+  id: number;
+  name: string;
+  level: string;
+  members: { user_id: number; email: string; name: string; role: Role }[];
 }
 
 export interface Lesson {

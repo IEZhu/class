@@ -16,7 +16,9 @@ type lessonResponse struct {
 	StartsAt  time.Time `json:"starts_at"`
 	EndsAt    time.Time `json:"ends_at"`
 	Status    string    `json:"status"`
-	GroupName string    `json:"group_name,omitempty"`
+	// Тоже без omitempty: web типизирует group_name как обязательный, а на
+	// create/reschedule он пустой — поле должно приезжать пустой строкой.
+	GroupName string `json:"group_name"`
 }
 
 type lessonDetailResponse struct {

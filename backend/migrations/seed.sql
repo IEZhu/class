@@ -6,6 +6,7 @@
 BEGIN;
 
 INSERT INTO users (email, role, name) VALUES
+    ('admin@lingua.local',    'admin',   'Test Admin'),
     ('teacher@lingua.local',  'teacher', 'Test Teacher'),
     ('student1@lingua.local', 'student', 'Test Student One'),
     ('student2@lingua.local', 'student', 'Test Student Two'),
@@ -50,6 +51,7 @@ ON CONFLICT DO NOTHING;
 UPDATE users
 SET password_hash = crypt(:'seed_password', gen_salt('bf', 12))
 WHERE email IN (
+      'admin@lingua.local',
       'teacher@lingua.local',
       'student1@lingua.local',
       'student2@lingua.local',
