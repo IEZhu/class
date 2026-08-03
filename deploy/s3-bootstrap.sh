@@ -1,59 +1,53 @@
 #!/usr/bin/env bash
-# Заведение S3 для записей уроков (S1-3): приватный бакет, шифрование, CORS,
-# lifecycle и IAM-пользователь с доступом только к этому бакету.
+# Настройка бакета для записей уроков (S1-3): CORS и lifecycle.
+# Провайдер — Cloudflare R2 (ADR-009), API S3-совместимый, поэтому работаем
+# обычным aws cli с --endpoint-url. Раскладка и политика хранения —
+# docs/architecture/05-storage-s3.md.
 #
-# Раскладка бакета и политика хранения — docs/architecture/05-storage-s3.md.
-# Запускать один раз, с правами администратора AWS. Скрипт идемпотентен:
-# уже созданное пропускается, повторный запуск ничего не ломает.
+# Токены R2 создаются в кабинете Cloudflare, S3 API их не выдаёт. Нужны два:
+#   1) временный Admin Read & Write — под ним запускается этот скрипт
+#      (бакетная конфигурация рабочему ключу недоступна, и это правильно);
+#   2) постоянный Object Read & Write, ограниченный одним бакетом — он идёт
+#      в deploy/.env и в конфиг LiveKit Egress.
 #
-#   BUCKET=lingua-class REGION=eu-central-1 ./deploy/s3-bootstrap.sh
+#   ACCOUNT_ID=<id> BUCKET=lingua-class \
+#   AWS_ACCESS_KEY_ID=<admin-key> AWS_SECRET_ACCESS_KEY=<admin-secret> \
+#     ./deploy/s3-bootstrap.sh
 #
-# Ключ выдаётся в конце — он же уходит в LiveKit Egress, поэтому политика
-# ограничена одним бакетом: скомпрометированный ключ не даёт ничего больше.
+# Скрипт идемпотентен: повторный запуск перезаписывает конфигурацию тем же.
 
 set -euo pipefail
 
-BUCKET="${BUCKET:?нужно имя бакета: BUCKET=lingua-class ./deploy/s3-bootstrap.sh}"
-REGION="${REGION:-eu-central-1}"
-IAM_USER="${IAM_USER:-lingua-class-s3}"
-POLICY_NAME="${POLICY_NAME:-lingua-class-s3}"
-# Домен платформы: под него открывается CORS на чтение
+BUCKET="${BUCKET:?нужно имя бакета: BUCKET=lingua-class ...}"
+ACCOUNT_ID="${ACCOUNT_ID:?нужен Account ID из кабинета Cloudflare (R2 → Overview)}"
 ORIGIN="${ORIGIN:-https://lang.wondermr.com}"
+# У R2 регион всегда auto; пустое значение и us-east-1 алиасятся в него
+REGION="${REGION:-auto}"
+ENDPOINT="${ENDPOINT:-https://${ACCOUNT_ID}.r2.cloudflarestorage.com}"
+# Через сколько дней записи уходят в дешёвый класс
+IA_AFTER_DAYS="${IA_AFTER_DAYS:-30}"
 
 command -v aws >/dev/null || { echo "нет aws cli: https://aws.amazon.com/cli/"; exit 1; }
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-echo "аккаунт AWS: $ACCOUNT, регион: $REGION, бакет: $BUCKET"
+: "${AWS_ACCESS_KEY_ID:?нужен ключ токена Admin Read & Write}"
+: "${AWS_SECRET_ACCESS_KEY:?нужен секрет токена Admin Read & Write}"
 
+r2() { aws s3api --endpoint-url "$ENDPOINT" --region "$REGION" "$@"; }
 say() { printf '\n=== %s\n' "$1"; }
 
-say "1/6 бакет"
-if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+echo "endpoint: $ENDPOINT"
+echo "бакет:    $BUCKET"
+
+say "1/4 бакет"
+if r2 head-bucket --bucket "$BUCKET" 2>/dev/null; then
     echo "уже существует — пропускаю"
-elif [ "$REGION" = "us-east-1" ]; then
-    # us-east-1 — единственный регион, который не принимает LocationConstraint
-    aws s3api create-bucket --bucket "$BUCKET" --region us-east-1
 else
-    aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
-        --create-bucket-configuration "LocationConstraint=$REGION"
+    r2 create-bucket --bucket "$BUCKET"
 fi
 
-say "2/6 публичный доступ закрыт"
-aws s3api put-public-access-block --bucket "$BUCKET" \
-    --public-access-block-configuration \
-    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
-
-say "3/6 шифрование по умолчанию (SSE-S3)"
-aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration '{
-  "Rules": [{
-    "ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"},
-    "BucketKeyEnabled": true
-  }]
-}'
-
-say "4/6 CORS: только GET и только с домена платформы"
-# Нужен плееру: запись отдаётся браузеру по presigned GET напрямую из S3,
+say "2/4 CORS: только GET и HEAD, только с домена платформы"
+# Нужен плееру: запись отдаётся браузеру по presigned GET напрямую из R2,
 # минуя VPS. ExposeHeaders — чтобы работала перемотка по Range.
-aws s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
+r2 put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
   \"CORSRules\": [{
     \"AllowedOrigins\": [\"$ORIGIN\"],
     \"AllowedMethods\": [\"GET\", \"HEAD\"],
@@ -63,72 +57,45 @@ aws s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
   }]
 }"
 
-say "5/6 lifecycle: видео дешевеет со временем, аудио и VTT живут вечно"
-# По 05-storage-s3.md: recordings → Standard-IA через 30 дней → Glacier IR
-# через 90. transcripts/ и whiteboards/ не трогаем — они мелкие и ценные.
-aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration '{
-  "Rules": [
+say "3/4 lifecycle: записи дешевеют, транскрипты не трогаем"
+# У R2 только Standard и Infrequent Access, архивного класса нет (ADR-009).
+# Удаление старого видео с сохранением аудио и VTT — отдельное решение,
+# когда накопится статистика просмотров; сейчас только переход в IA.
+r2 put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration "{
+  \"Rules\": [
     {
-      "ID": "recordings-cooldown",
-      "Status": "Enabled",
-      "Filter": {"Prefix": "recordings/"},
-      "Transitions": [
-        {"Days": 30, "StorageClass": "STANDARD_IA"},
-        {"Days": 90, "StorageClass": "GLACIER_IR"}
-      ]
+      \"ID\": \"recordings-to-ia\",
+      \"Status\": \"Enabled\",
+      \"Filter\": {\"Prefix\": \"recordings/\"},
+      \"Transitions\": [{\"Days\": $IA_AFTER_DAYS, \"StorageClass\": \"STANDARD_IA\"}]
     },
     {
-      "ID": "abort-incomplete-uploads",
-      "Status": "Enabled",
-      "Filter": {"Prefix": ""},
-      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}
+      \"ID\": \"abort-incomplete-uploads\",
+      \"Status\": \"Enabled\",
+      \"Filter\": {\"Prefix\": \"\"},
+      \"AbortIncompleteMultipartUpload\": {\"DaysAfterInitiation\": 7}
     }
   ]
-}'
+}"
 
-say "6/6 IAM: пользователь и политика только на этот бакет"
-POLICY_ARN="arn:aws:iam::${ACCOUNT}:policy/${POLICY_NAME}"
-if ! aws iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1; then
-    aws iam create-policy --policy-name "$POLICY_NAME" --policy-document "{
-      \"Version\": \"2012-10-17\",
-      \"Statement\": [
-        {
-          \"Sid\": \"ObjectsInThisBucketOnly\",
-          \"Effect\": \"Allow\",
-          \"Action\": [\"s3:PutObject\", \"s3:GetObject\", \"s3:DeleteObject\"],
-          \"Resource\": \"arn:aws:s3:::${BUCKET}/*\"
-        },
-        {
-          \"Sid\": \"ListThisBucketOnly\",
-          \"Effect\": \"Allow\",
-          \"Action\": [\"s3:ListBucket\", \"s3:GetBucketLocation\"],
-          \"Resource\": \"arn:aws:s3:::${BUCKET}\"
-        }
-      ]
-    }" >/dev/null
-    echo "политика $POLICY_NAME создана"
-else
-    echo "политика $POLICY_NAME уже есть — пропускаю"
-fi
-
-aws iam get-user --user-name "$IAM_USER" >/dev/null 2>&1 || aws iam create-user --user-name "$IAM_USER" >/dev/null
-aws iam attach-user-policy --user-name "$IAM_USER" --policy-arn "$POLICY_ARN"
-
-KEY_JSON=$(aws iam create-access-key --user-name "$IAM_USER")
-ACCESS_KEY=$(echo "$KEY_JSON" | grep -o '"AccessKeyId": *"[^"]*"' | cut -d'"' -f4)
-SECRET_KEY=$(echo "$KEY_JSON" | grep -o '"SecretAccessKey": *"[^"]*"' | cut -d'"' -f4)
+say "4/4 проверка"
+r2 get-bucket-cors --bucket "$BUCKET" >/dev/null && echo "CORS на месте"
+r2 get-bucket-lifecycle-configuration --bucket "$BUCKET" >/dev/null && echo "lifecycle на месте"
 
 cat <<EOF
 
-Готово. Допишите в deploy/.env (секрет показывается один раз):
+Бакет настроен. Дальше в кабинете Cloudflare создайте второй токен —
+Object Read & Write, scope: только бакет $BUCKET — и впишите в deploy/.env:
 
 S3_BUCKET=$BUCKET
-S3_REGION=$REGION
-S3_ENDPOINT=
-S3_ACCESS_KEY_ID=$ACCESS_KEY
-S3_SECRET_ACCESS_KEY=$SECRET_KEY
+S3_REGION=auto
+S3_ENDPOINT=$ENDPOINT
+S3_ACCESS_KEY_ID=<Access Key ID того токена>
+S3_SECRET_ACCESS_KEY=<Secret Access Key, показывается один раз>
 
-Проверка доступа:
-  AWS_ACCESS_KEY_ID=$ACCESS_KEY AWS_SECRET_ACCESS_KEY=$SECRET_KEY \\
-    aws s3 ls "s3://$BUCKET" --region $REGION
+Проверить рабочий токен:
+  AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \\
+    aws s3 ls "s3://$BUCKET" --endpoint-url $ENDPOINT --region auto
+
+Временный Admin-токен после этого удалите — он больше не нужен.
 EOF
