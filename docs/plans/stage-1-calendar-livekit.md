@@ -186,6 +186,40 @@ teacher — только студенты своих групп (состав г
 - Первые Go-тесты репозитория: `rooms_test.go` проверяет гранты выпущенного
   токена тем же SDK и отвергает чужой секрет.
 
+### S1-3 S3 + presigned (2026-08-03)
+
+- `backend/internal/storage/s3.go` — клиент поверх `aws-sdk-go-v2`:
+  `PresignGet` (TTL 30 мин, константа `PresignTTL`), `Exists`,
+  `RecordingKey(lessonID, ext)` по раскладке 05-storage-s3.md. Для R2
+  включается `UsePathStyle` — иначе запрос уходит на `bucket.<account>.r2…`
+  и объект не находится. Без ключей `New` возвращает `nil` без ошибки:
+  стенд поднимается, а медиа-эндпоинты отвечают 503.
+- `GET /media/{lesson_id}/url` (`httpapi/media.go`) — presigned-ссылка
+  участнику урока: та же граница `canSeeLesson`, что у страницы урока;
+  нет записи → 404 `no_recording`, чужой урок → 403, без входа → 401.
+- Ключи `.env`: `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`,
+  `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (проброс — в compose).
+- Бакет настраивается `deploy/s3-bootstrap.sh` (CORS, lifecycle).
+
+### S1-5 Egress → R2 + webhook (2026-08-03)
+
+- `backend/internal/livekitapi/egress.go` — тонкий Twirp-клиент
+  (`POST /twirp/livekit.Egress/StartRoomCompositeEgress`, protojson,
+  токен с грантом `RoomRecord`). `server-sdk-go` не берём: оттуда нужен
+  один вызов, а тянет он полный стек pion/webrtc.
+- `POST /webhooks/livekit` (`httpapi/webhooks.go`) — подпись проверяется
+  `webhook.ReceiveWebhookEvent`; без неё и с мусорной — 401.
+  `room_started` → `StartLessonRecording` (условие `status = 'scheduled'`
+  делает вызов идемпотентным: повторная доставка не запустит второй
+  Egress) → запуск Egress с выводом в R2. `egress_ended` → путь записи
+  в `lessons.recording_s3_key` и статус. Провалившийся Egress
+  (`EGRESS_FAILED`) и чужая комната игнорируются.
+- `EGRESS_AUDIO_ONLY=1` в `.env` переключает запись на звук (OGG вместо
+  MP4, на порядок меньше объём). Ключи хранилища уходят в LiveKit в теле
+  egress-запроса — отсюда требование ADR-009 к узкому токену.
+- Точка вставки ASR — `onEgressEnded`: сейчас урок сразу `done`, с S2-1
+  туда встанет `processing` и джоба `asr_submit`.
+
 ## Риски этапа
 
 GCP Testing mode (лечится сразу Production); free tier LiveKit ≈ 20 уроков/мес —

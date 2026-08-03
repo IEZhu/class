@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/IEZhu/class/backend/internal/livekitapi"
+	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 )
 
@@ -23,14 +25,33 @@ type Config struct {
 	LiveKitURL       string
 	LiveKitAPIKey    string
 	LiveKitAPISecret string
+	// EgressAudioOnly — писать только звук: на порядок дешевле по объёму,
+	// для транскрипта этого достаточно (05-storage-s3.md).
+	EgressAudioOnly bool
+	Storage         storage.Config
 }
 
 type API struct {
-	store *store.Store
-	cfg   Config
+	store   *store.Store
+	cfg     Config
+	storage *storage.Client // nil, если хранилище не настроено
+	livekit *livekitapi.Client
 }
 
-func New(s *store.Store, cfg Config) *API { return &API{store: s, cfg: cfg} }
+// New не падает без ключей интеграций: стенд должен подниматься, а
+// эндпоинты записи и комнаты — отвечать 503.
+func New(s *store.Store, cfg Config) (*API, error) {
+	st, err := storage.New(cfg.Storage)
+	if err != nil {
+		return nil, err
+	}
+	return &API{
+		store:   s,
+		cfg:     cfg,
+		storage: st,
+		livekit: livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
+	}, nil
+}
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -77,6 +98,10 @@ func (a *API) Router() http.Handler {
 	mux.Handle("GET /lessons", user(a.handleListLessons))
 	mux.Handle("GET /lessons/{id}", user(a.handleGetLesson))
 	mux.Handle("GET /lessons/{id}/room-token", user(a.handleRoomToken))
+	mux.Handle("GET /media/{lesson_id}/url", user(a.handleMediaURL))
+
+	// Вебхук LiveKit без auth-middleware: он аутентифицируется подписью
+	mux.HandleFunc("POST /webhooks/livekit", a.handleLiveKitWebhook)
 	mux.Handle("PATCH /lessons/{id}", teacher(a.handleRescheduleLesson))
 	mux.Handle("DELETE /lessons/{id}", teacher(a.handleCancelLesson))
 
