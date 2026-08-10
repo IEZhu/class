@@ -76,6 +76,10 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("GET /signup/{token}", a.handleInvitePreview)
 	mux.HandleFunc("POST /signup/{token}", a.handleAcceptInvite)
 
+	// Публичные: гость на событие представляется именем (ADR-010)
+	mux.HandleFunc("GET /join/{token}", a.handleGuestEvent)
+	mux.HandleFunc("POST /join/{token}", a.handleGuestJoin)
+
 	mux.Handle("GET /invites", staff(a.handleListInvites))
 	mux.Handle("POST /invites", staff(a.handleCreateInvite))
 	mux.Handle("DELETE /invites/{id}", staff(a.handleRevokeInvite))
@@ -99,6 +103,10 @@ func (a *API) Router() http.Handler {
 	mux.Handle("GET /lessons/{id}", user(a.handleGetLesson))
 	mux.Handle("GET /lessons/{id}/room-token", user(a.handleRoomToken))
 	mux.Handle("GET /media/{lesson_id}/url", user(a.handleMediaURL))
+
+	// Гостевая ссылка на событие: распоряжается преподаватель или админ
+	mux.Handle("POST /lessons/{id}/guest-link", staff(a.handleIssueGuestLink))
+	mux.Handle("DELETE /lessons/{id}/guest-link", staff(a.handleRevokeGuestLink))
 
 	// Вебхук LiveKit без auth-middleware: он аутентифицируется подписью
 	mux.HandleFunc("POST /webhooks/livekit", a.handleLiveKitWebhook)

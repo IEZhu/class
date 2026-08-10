@@ -9,7 +9,7 @@
 ## Скетч ключевых таблиц
 
 ```sql
-users(id, email, role /*admin|teacher|student, ADR-007*/, name,
+users(id, email, role /*admin|teacher|student|guest, ADR-007/010*/, name,
       password_hash /*bcrypt*/,
       google_refresh_token /*только у teachers, шифруется*/)
 sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
@@ -17,9 +17,11 @@ invites(id, token_hash /*sha256*/, email, name, role, group_id, created_by,
         created_at, expires_at, accepted_at, accepted_user_id)        -- ADR-008
 groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)
 
-lessons(id, group_id, teacher_id, starts_at, ends_at, status
+lessons(id, group_id /*NULL у открытого события, ADR-010*/, title,
+        teacher_id, starts_at, ends_at, status
         /*scheduled|live|processing|done*/, gcal_event_id,
-        livekit_room, recording_s3_key, transcript_id)
+        livekit_room, recording_s3_key, transcript_id,
+        guest_token_hash /*sha256 гостевой ссылки*/)
 lesson_participants(lesson_id, user_id, attended bool)
 materials(id, lesson_id, kind /*homework|material*/, title, body_md, s3_key)
 
@@ -69,6 +71,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | users, groups, group_members, lessons, lesson_participants, materials | 0 | S0-2 |
 | sessions; колонка users.password_hash | 0 | S0-3 |
 | invites | 1 | S1-10 |
+| колонки lessons.title, guest_token_hash; роль guest | 1 | S1-11 |
 | jobs; колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
 | transcripts, utterances | 2 | S2-2 |
 | terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |
