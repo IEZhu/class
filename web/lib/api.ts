@@ -51,7 +51,10 @@ export interface Invite {
 
 export interface Lesson {
   id: number;
-  group_id: number;
+  // null у открытого события — группы у него нет (ADR-010)
+  group_id: number | null;
+  // Название события; у обычного урока пусто, подпись берётся из группы
+  title: string;
   teacher_id: number;
   starts_at: string;
   ends_at: string;
