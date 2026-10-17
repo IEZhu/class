@@ -60,6 +60,15 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      # S1-3/S1-5: хранилище записей (R2, ADR-009). Без ключей api живёт,
+      # но /media/{id}/url отвечает 503, а запись не запускается
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      # 1 — писать только звук (дешевле, для транскрипта достаточно)
+      EGRESS_AUDIO_ONLY: ${EGRESS_AUDIO_ONLY:-}
     depends_on:
       postgres:
         condition: service_healthy
