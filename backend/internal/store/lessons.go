@@ -9,8 +9,11 @@ import (
 )
 
 type Lesson struct {
-	ID        int64
-	GroupID   int64
+	ID int64
+	// GroupID пуст у открытого события: туда приходят по ссылке,
+	// а не составом группы (ADR-010).
+	GroupID   *int64
+	Title     string
 	TeacherID int64
 	StartsAt  time.Time
 	EndsAt    time.Time
@@ -32,25 +35,29 @@ type LessonDetail struct {
 
 // CreateLesson создаёт урок и в той же транзакции снапшотит участников
 // из текущего состава группы (lesson_participants; нужен и календарю S1-2).
-func (s *Store) CreateLesson(ctx context.Context, groupID, teacherID int64, startsAt, endsAt time.Time) (*Lesson, error) {
+// Без группы это открытое событие (ADR-010): снапшотить некого, участники
+// появятся по гостевой ссылке.
+func (s *Store) CreateLesson(ctx context.Context, groupID *int64, title string, teacherID int64, startsAt, endsAt time.Time) (*Lesson, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	l := &Lesson{GroupID: groupID, TeacherID: teacherID, StartsAt: startsAt, EndsAt: endsAt}
+	l := &Lesson{GroupID: groupID, Title: title, TeacherID: teacherID, StartsAt: startsAt, EndsAt: endsAt}
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO lessons (group_id, teacher_id, starts_at, ends_at)
-		 VALUES ($1, $2, $3, $4) RETURNING id, status`,
-		groupID, teacherID, startsAt, endsAt).Scan(&l.ID, &l.Status); err != nil {
+		`INSERT INTO lessons (group_id, title, teacher_id, starts_at, ends_at)
+		 VALUES ($1, NULLIF($2, ''), $3, $4, $5) RETURNING id, status`,
+		groupID, title, teacherID, startsAt, endsAt).Scan(&l.ID, &l.Status); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO lesson_participants (lesson_id, user_id)
-		 SELECT $1, user_id FROM group_members WHERE group_id = $2`,
-		l.ID, groupID); err != nil {
-		return nil, err
+	if groupID != nil {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO lesson_participants (lesson_id, user_id)
+			 SELECT $1, user_id FROM group_members WHERE group_id = $2`,
+			l.ID, *groupID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -61,13 +68,16 @@ func (s *Store) CreateLesson(ctx context.Context, groupID, teacherID int64, star
 // ListLessonsForUser: teacher видит свои уроки, student — уроки, где он
 // в снапшоте участников (lesson_participants).
 func (s *Store) ListLessonsForUser(ctx context.Context, u *User) ([]LessonListItem, error) {
-	query := `SELECT l.id, l.group_id, l.teacher_id, l.starts_at, l.ends_at, l.status, g.name
-		 FROM lessons l JOIN groups g ON g.id = l.group_id
+	// LEFT JOIN: у открытого события группы нет (ADR-010)
+	query := `SELECT l.id, l.group_id, COALESCE(l.title, ''), l.teacher_id,
+	        l.starts_at, l.ends_at, l.status, COALESCE(g.name, '')
+		 FROM lessons l LEFT JOIN groups g ON g.id = l.group_id
 		 WHERE l.teacher_id = $1 ORDER BY l.starts_at`
 	if u.Role != "teacher" {
-		query = `SELECT l.id, l.group_id, l.teacher_id, l.starts_at, l.ends_at, l.status, g.name
+		query = `SELECT l.id, l.group_id, COALESCE(l.title, ''), l.teacher_id,
+		        l.starts_at, l.ends_at, l.status, COALESCE(g.name, '')
 		 FROM lessons l
-		 JOIN groups g ON g.id = l.group_id
+		 LEFT JOIN groups g ON g.id = l.group_id
 		 JOIN lesson_participants lp ON lp.lesson_id = l.id
 		 WHERE lp.user_id = $1 ORDER BY l.starts_at`
 	}
@@ -80,7 +90,7 @@ func (s *Store) ListLessonsForUser(ctx context.Context, u *User) ([]LessonListIt
 	out := []LessonListItem{}
 	for rows.Next() {
 		it := LessonListItem{}
-		if err := rows.Scan(&it.ID, &it.GroupID, &it.TeacherID, &it.StartsAt, &it.EndsAt, &it.Status, &it.GroupName); err != nil {
+		if err := rows.Scan(&it.ID, &it.GroupID, &it.Title, &it.TeacherID, &it.StartsAt, &it.EndsAt, &it.Status, &it.GroupName); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -91,12 +101,13 @@ func (s *Store) ListLessonsForUser(ctx context.Context, u *User) ([]LessonListIt
 func (s *Store) GetLessonDetail(ctx context.Context, lessonID int64) (*LessonDetail, error) {
 	d := &LessonDetail{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT l.id, l.group_id, l.teacher_id, l.starts_at, l.ends_at, l.status, g.name, t.name
+		`SELECT l.id, l.group_id, COALESCE(l.title, ''), l.teacher_id,
+		        l.starts_at, l.ends_at, l.status, COALESCE(g.name, ''), t.name
 		 FROM lessons l
-		 JOIN groups g ON g.id = l.group_id
+		 LEFT JOIN groups g ON g.id = l.group_id
 		 JOIN users t ON t.id = l.teacher_id
 		 WHERE l.id = $1`, lessonID).
-		Scan(&d.ID, &d.GroupID, &d.TeacherID, &d.StartsAt, &d.EndsAt, &d.Status, &d.GroupName, &d.TeacherName)
+		Scan(&d.ID, &d.GroupID, &d.Title, &d.TeacherID, &d.StartsAt, &d.EndsAt, &d.Status, &d.GroupName, &d.TeacherName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -191,8 +202,8 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 	l := &Lesson{ID: lessonID, TeacherID: teacherID}
 	if err := tx.QueryRow(ctx,
 		`UPDATE lessons SET starts_at = $2, ends_at = $3 WHERE id = $1
-		 RETURNING group_id, starts_at, ends_at, status`,
-		lessonID, startsAt, endsAt).Scan(&l.GroupID, &l.StartsAt, &l.EndsAt, &l.Status); err != nil {
+		 RETURNING group_id, COALESCE(title, ''), starts_at, ends_at, status`,
+		lessonID, startsAt, endsAt).Scan(&l.GroupID, &l.Title, &l.StartsAt, &l.EndsAt, &l.Status); err != nil {
 		return nil, err
 	}
 	return l, tx.Commit(ctx)

@@ -2,7 +2,7 @@
 
 > REST/JSON, отдаёт api (Go). Auth: серверные cookie-сессии в Postgres,
 > cookie `sid` ([ADR-006](decisions.md)); JWT отклонён.
-> Роли: admin | teacher | student ([ADR-007](decisions.md)).
+> Роли: admin | teacher | student | guest ([ADR-007](decisions.md), [ADR-010](decisions.md)).
 > Колонка «Этап» — когда эндпоинт появляется.
 > Пути в таблице — внутренние (как их видит api): снаружи все они с
 > префиксом `/api`, который стрипает caddy (`https://<домен>/api/...`).
@@ -17,13 +17,17 @@
 | `POST /groups` | создать группу (name, level) | admin | 0 |
 | `GET /groups` | список групп с участниками | admin, teacher | 0 |
 | `POST /groups/{id}/members` | добавить участника по email | admin | 0 |
-| `POST /lessons` | создать урок (группа, дата, время); участники — снапшот группы | teacher | 0 |
+| `POST /lessons` | создать урок (группа) или событие (без группы, с title); участники — снапшот группы | teacher | 0 |
 | `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
 | `PATCH /lessons/{id}` | перенос (starts_at/ends_at), только `scheduled` | teacher урока | 0 |
 | `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
 | `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
+| `GET /join/{token}` | предпросмотр события по гостевой ссылке | без входа | 1 |
+| `POST /join/{token}` | войти гостем: имя → участник события + сессия | без входа | 1 |
+| `POST /lessons/{id}/guest-link` | выпустить/перевыпустить гостевую ссылку | admin, teacher события | 1 |
+| `DELETE /lessons/{id}/guest-link` | отозвать гостевую ссылку | admin, teacher события | 1 |
 | `GET /signup/{token}` | предпросмотр приглашения (кого и куда зовут) | без входа | 1 |
 | `POST /signup/{token}` | принять приглашение: свой пароль → учётка и сессия одной транзакцией | без входа | 1 |
 | `GET /invites` | ожидающие приглашения: admin — все, teacher — свои | admin, teacher | 1 |

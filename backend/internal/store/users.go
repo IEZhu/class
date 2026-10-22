@@ -13,6 +13,8 @@ const (
 	RoleAdmin   = "admin"
 	RoleTeacher = "teacher"
 	RoleStudent = "student"
+	// RoleGuest — пришёл по ссылке на событие, живёт до его конца (ADR-010)
+	RoleGuest = "guest"
 )
 
 // UserWithGroups — строка списка людей в админ-кабинете: учётка плюс
@@ -54,9 +56,13 @@ func (s *Store) CreateUser(ctx context.Context, email, role, name, passwordHash 
 	return u, nil
 }
 
-// ListUsers — все учётки с их группами (для admin).
+// ListUsers — учётки с их группами (для admin). Гости исключены: они живут
+// одно событие, и 50 студентов не должны тонуть в случайных посетителях
+// (ADR-010). Состав события видно в самом уроке.
 func (s *Store) ListUsers(ctx context.Context) ([]UserWithGroups, error) {
-	return s.listUsers(ctx, `SELECT u.id, u.email, u.role, u.name FROM users u ORDER BY u.id`)
+	return s.listUsers(ctx,
+		`SELECT u.id, u.email, u.role, u.name FROM users u
+		 WHERE u.role <> '`+RoleGuest+`' ORDER BY u.id`)
 }
 
 // ListUsersOfTeacherGroups — студенты групп преподавателя плюс он сам.

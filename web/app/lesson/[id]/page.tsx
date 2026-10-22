@@ -2,9 +2,11 @@ import { notFound, redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { LessonDetail, Material, User } from "../../../lib/api";
+import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
 import UserBar from "../../user-bar";
+import GuestLink from "./guest-link";
 import LessonPlayer from "./lesson-player";
 import LessonRoom from "./lesson-room";
 
@@ -62,11 +64,15 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
     <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
       <UserBar name={me.name} role={me.role} />
       <h1>
-        {lesson.group_name} — {phaseTitles[phase]}
+        {lessonTitle(lesson)} — {phaseTitles[phase]}
       </h1>
       <p>
         {dateFmt.format(new Date(lesson.starts_at))} (UTC) · преподаватель: {lesson.teacher_name}
       </p>
+      {/* Гостевой ссылкой распоряжается организатор события */}
+      {(me.role === "admin" || me.id === lesson.teacher_id) && phase !== "done" && (
+        <GuestLink lessonId={lesson.id} />
+      )}
 
       {phase === "live" && (
         <section style={{ border: "2px solid #2a7", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
