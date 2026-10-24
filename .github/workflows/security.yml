@@ -70,6 +70,19 @@ jobs:
         run: |
           docker run --rm --network none --entrypoint node security-scan:ci --check server.js
           docker run --rm --network none --entrypoint node security-scan:ci -e 'require("sharp"); console.log("Native image module loaded")'
+          docker run --rm -i --network none --entrypoint node security-scan:ci <<'NODE'
+          const assert = require("node:assert/strict");
+          assert.deepEqual(Intl.DateTimeFormat.supportedLocalesOf("ru-RU"), ["ru-RU"]);
+          const formatter = new Intl.DateTimeFormat("ru-RU", {
+            timeZone: "UTC", day: "numeric", month: "long", year: "numeric"
+          });
+          const date = new Date("2026-01-15T00:30:00Z");
+          const parts = Object.fromEntries(formatter.formatToParts(date).map(({ type, value }) => [type, value]));
+          assert.equal(parts.day, "15");
+          assert.equal(parts.month, "января");
+          assert.equal(parts.year, "2026");
+          console.log(`Russian locale supported: ${formatter.format(date)}`);
+          NODE
           container=$(docker run -d --network none security-scan:ci)
           trap 'docker logs "$container"; docker rm -f "$container"' EXIT
           for attempt in $(seq 1 20); do
