@@ -1,11 +1,7 @@
 name: security
 
-# Fails on HIGH/CRITICAL vulnerabilities that already have a fixed version,
-# in dependency manifests and in the Docker images built from this repo.
-# The daily run re-checks the same code against the fresh vulnerability
-# database. GitHub notifies about a failed scheduled run (by email only if
-# Actions email notifications are enabled in the account settings).
-# Accepted risks with a reason and an expiry date: .trivyignore.yaml.
+# Blocks fixed HIGH/CRITICAL vulnerabilities. Scheduled runs start when this
+# workflow reaches the default branch; email depends on Actions notifications.
 on:
   push:
     branches: [main]
@@ -18,25 +14,34 @@ permissions:
   contents: read
 
 env:
-  # Pinned by digest: Trivy images 0.69.4-0.69.6 were compromised
-  # in March 2026 (CVE-2026-33634)
   TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
-  TRIVY_ARGS: --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --no-progress
 
 jobs:
   dependencies:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Trivy - dependency manifests
-        run: |
-          IGNORE=""; [ -f .trivyignore.yaml ] && IGNORE="--ignorefile /src/.trivyignore.yaml"
-          docker run --rm -v "$PWD:/src:ro" "$TRIVY_IMAGE" fs $TRIVY_ARGS $IGNORE --exit-code 1 /src
+      - name: Test scanner failure and inventory controls
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Scan every locked dependency, including development packages
+        run: bash scripts/security_scan.sh source "$RUNNER_TEMP/security-evidence"
+      - name: Retain inventory, findings and scanner diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependency-security-evidence
+          path: |
+            ${{ runner.temp }}/security-evidence/*.json
+            ${{ runner.temp }}/security-evidence/*.stderr
+          if-no-files-found: error
+          retention-days: 7
 
   images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -47,15 +52,39 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.10'
+          cache: false
       - name: Build ${{ matrix.dockerfile }}
         env:
           DOCKERFILE: ${{ matrix.dockerfile }}
           CONTEXT: ${{ matrix.context }}
         run: docker build --pull -f "$DOCKERFILE" -t security-scan:ci "$CONTEXT"
-      - name: Trivy - image
+      - name: Scan the complete built runtime inventory
         env:
-          # report_only: upstream image (e.g. Caddy) we cannot patch ourselves
-          EXIT_CODE: ${{ matrix.report_only && '0' || '1' }}
+          SERVICE: ${{ matrix.context }}
+        run: bash scripts/security_scan.sh "$SERVICE" "$RUNNER_TEMP/security-evidence"
+      - name: Smoke test the standalone web runtime without network access
+        if: matrix.context == 'web'
         run: |
-          IGNORE=""; [ -f .trivyignore.yaml ] && IGNORE="--ignorefile /src/.trivyignore.yaml"
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro -v "$PWD:/src:ro" "$TRIVY_IMAGE" image $TRIVY_ARGS $IGNORE --exit-code "$EXIT_CODE" security-scan:ci
+          docker run --rm --network none --entrypoint node security-scan:ci --check server.js
+          docker run --rm --network none --entrypoint node security-scan:ci -e 'require("sharp"); console.log("Native image module loaded")'
+          container=$(docker run -d --network none security-scan:ci)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          for attempt in $(seq 1 20); do
+            if docker exec "$container" node -e 'fetch("http://127.0.0.1:3000/").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Retain inventory, findings and scanner diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-security-evidence-${{ matrix.context }}
+          path: |
+            ${{ runner.temp }}/security-evidence/*.json
+            ${{ runner.temp }}/security-evidence/*.stderr
+            ${{ runner.temp }}/security-evidence/go-build-info.txt
+          if-no-files-found: error
+          retention-days: 7
