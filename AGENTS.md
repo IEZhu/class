@@ -40,8 +40,12 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   503). The api also reads `DATABASE_URL` and `API_ADDR` (default `:8080`); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
 - Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`).
-- Backend tests: `cd backend && go test ./...` (unverified; `internal/httpapi/rooms_test.go`
-  exists, but no Makefile target or CI runs it). There is no CI and no lint config.
+- Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
+  to a disposable Postgres database for the HTTP/SQL security suite; it creates isolated
+  schemas and applies the real migrations. CI requires this database and does not skip
+  those tests. `.github/workflows/ci.yml` also verifies modules, runs vet, checks web
+  types and builds Next.js. `.github/workflows/security.yml` blocks all known dependency
+  and runtime vulnerabilities, unfixed findings, source secrets, and missing inventories.
 
 ## Conventions
 

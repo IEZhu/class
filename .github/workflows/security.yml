@@ -1,13 +1,9 @@
 name: security
 
-# Fails on HIGH/CRITICAL vulnerabilities that already have a fixed version,
-# in dependency manifests and in the Docker images built from this repo.
-# The daily run re-checks the same code against the fresh vulnerability
-# database; GitHub emails a failed scheduled run.
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
   schedule:
     - cron: '23 5 * * *'
   workflow_dispatch:
@@ -15,38 +11,65 @@ on:
 permissions:
   contents: read
 
-env:
-  # Pinned by digest: Trivy images 0.69.4-0.69.6 were compromised
-  # in March 2026 (CVE-2026-33634)
-  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
-  TRIVY_ARGS: --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
-
 jobs:
   dependencies:
-    runs-on: ubuntu-latest
+    name: Dependencies and secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Trivy - dependency manifests
-        run: docker run --rm -v "$PWD:/src:ro" "$TRIVY_IMAGE" fs $TRIVY_ARGS /src
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
+        with:
+          version: v0.76.1
+          cache: false
+      - name: Scan all locked dependencies and source secrets
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          trivy fs --config '' --ignorefile '' --ignore-policy '' --secret-config '' \
+            --scanners vuln,secret --pkg-types os,library --detection-priority comprehensive \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+            --include-dev-deps --list-all-pkgs --format json --output "$RUNNER_TEMP/source-scan.json" --exit-code 1 .
+          python3 scripts/check_scan_inventory.py "$RUNNER_TEMP/source-scan.json" source
 
   images:
-    runs-on: ubuntu-latest
+    name: Runtime image (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { dockerfile: web/Dockerfile, context: web }
-          - { dockerfile: backend/Dockerfile, context: backend }
+        image: [api, web, caddy, postgres]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Build ${{ matrix.dockerfile }}
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
+        with:
+          version: v0.76.1
+          cache: false
+      - name: Build or pull the actual Compose runtime image
         env:
-          DOCKERFILE: ${{ matrix.dockerfile }}
-          CONTEXT: ${{ matrix.context }}
-        run: docker build --pull -f "$DOCKERFILE" -t security-scan:ci "$CONTEXT"
-      - name: Trivy - image
-        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro "$TRIVY_IMAGE" image $TRIVY_ARGS security-scan:ci
+          IMAGE: ${{ matrix.image }}
+        run: |
+          case "$IMAGE" in
+            api) docker build --pull -t security-scan:ci backend ;;
+            web) docker build --pull -t security-scan:ci web ;;
+            caddy|postgres)
+              ref=$(docker compose -f deploy/docker-compose.yml config --format json --no-interpolate | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"][sys.argv[1]]["image"])' "$IMAGE")
+              docker pull "$ref"
+              docker tag "$ref" security-scan:ci
+              ;;
+            *) exit 1 ;;
+          esac
+      - name: Block every runtime vulnerability, including unfixed findings
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          trivy image --config '' --ignorefile '' --ignore-policy '' \
+            --scanners vuln --pkg-types os,library --detection-priority comprehensive \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+            --list-all-pkgs --format json --output "$RUNNER_TEMP/image-scan.json" \
+            --image-src docker --timeout 15m --exit-code 1 security-scan:ci
+          python3 scripts/check_scan_inventory.py "$RUNNER_TEMP/image-scan.json" "$IMAGE"
