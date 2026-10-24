@@ -20,6 +20,9 @@ class ScannerBoundaryTests(unittest.TestCase):
         report = {"Results": [{"Target": "web", "Packages": [
             {"Name": name, "Version": "1.0.0"} for name in ("nodejs", "next", "react")
         ], "Secrets": [{"RuleID": "github-pat", "Severity": "HIGH", "Match": "unissued fixture value"}]}]}
+        report["Results"].append({"Class": "os-pkgs", "Packages": [
+            {"Name": "alpine-baselayout", "Version": "3.7"}
+        ]})
         redact(report)
         self.assertNotIn("Match", report["Results"][0]["Secrets"][0])
         self.assertEqual(report["Results"][0]["Secrets"][0]["RuleID"], "github-pat")

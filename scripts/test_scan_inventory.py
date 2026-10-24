@@ -55,15 +55,31 @@ class InventoryTests(unittest.TestCase):
             check(report, "api")
 
     def test_web_requires_the_runtime_and_application_packages(self):
-        report = {"Results": [{"Packages": [
+        report = {"Results": [{"Class": "os-pkgs", "Packages": [
+            {"Name": "alpine-baselayout", "Version": "3.7"},
+        ]}, {"Packages": [
             {"Name": "nodejs", "Version": "22"},
             {"Name": "next", "Version": "15.5.28"},
             {"Name": "react", "Version": "19.2.8"},
         ]}]}
         check(report, "web")
-        report["Results"][0]["Packages"].pop()
+        report["Results"][1]["Packages"].pop()
         with self.assertRaises(ValueError):
             check(report, "web")
+
+    def test_web_rejects_missing_or_empty_os_inventory(self):
+        report = {"Results": [{"Packages": [
+            {"Name": "nodejs", "Version": "22"},
+            {"Name": "next", "Version": "15.5.28"},
+            {"Name": "react", "Version": "19.2.8"},
+        ]}]}
+        for os_result in (None, {"Class": "os-pkgs", "Packages": []}):
+            with self.subTest(os_result=os_result):
+                candidate = copy.deepcopy(report)
+                if os_result is not None:
+                    candidate["Results"].append(os_result)
+                with self.assertRaisesRegex(ValueError, "OS inventory"):
+                    check(candidate, "web")
 
 
 if __name__ == "__main__":
