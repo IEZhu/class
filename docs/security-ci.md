@@ -8,4 +8,6 @@ Reports, expected inventories and scanner diagnostics are uploaded for seven day
 
 The web build and runtime use Alpine 3.22 with Node 22. The runtime installs Alpine's `nodejs` package so the scanner can inventory Node itself; the upstream `node:22-alpine` tarball is absent from the APK package database. The gate also checks that the running Node version agrees with its installed package record. The standalone server command, port and unprivileged user stay the same.
 
+The isolated web smoke check validates the standalone entrypoint, loads the native image module and renders `/login` with networking disabled. The root redirects to authenticated `/lessons`, which requires the API, so it is not used as a self-contained web image check.
+
 Existing accepted risks, when present, use `.trivyignore.yaml`; this change adds no exclusions. To change a manifest format, Go replacement rules, runtime package manager or Dockerfile layout, update the inventory implementation and its regression controls together. Run the controls locally with `python3 -m unittest discover -s scripts -p 'test_*.py'`. Real image validation requires Docker; the API inventory also requires Go to read build metadata.

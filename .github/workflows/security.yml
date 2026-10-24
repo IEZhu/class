@@ -73,7 +73,7 @@ jobs:
           container=$(docker run -d --network none security-scan:ci)
           trap 'docker logs "$container"; docker rm -f "$container"' EXIT
           for attempt in $(seq 1 20); do
-            if docker exec "$container" node -e 'fetch("http://127.0.0.1:3000/").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'; then exit 0; fi
+            if docker exec "$container" node -e 'fetch("http://127.0.0.1:3000/login").then(async r => process.exit(r.ok && (await r.text()).includes("Lingua Class") ? 0 : 1)).catch(() => process.exit(1))'; then exit 0; fi
             sleep 1
           done
           exit 1
