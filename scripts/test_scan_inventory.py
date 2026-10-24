@@ -43,16 +43,34 @@ class InventoryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "findings"):
                     check(report, "source")
 
-    def test_api_requires_both_os_and_compiled_go_inventory(self):
+    def test_go_runtimes_require_both_os_and_compiled_go_inventory(self):
         packages = [{"Name": "alpine-baselayout", "Version": "3.7"}]
         report = {"Results": [{"Class": "os-pkgs", "Packages": packages}]}
-        with self.assertRaises(ValueError):
-            check(report, "api")
-        report["Results"].append({"Packages": [{"Name": "stdlib", "Version": "v1.26.10"}]})
-        check(report, "api")
+        for target in ("api", "caddy"):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                check(report, target)
+        report["Results"].append({"Type": "gobinary", "Packages": [
+            {"Name": "stdlib", "Version": "v1.26.10"},
+        ]})
+        for target in ("api", "caddy"):
+            with self.subTest(target=target):
+                check(report, target)
         report["Results"][0].pop("Class")
-        with self.assertRaises(ValueError):
-            check(report, "api")
+        for target in ("api", "caddy"):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                check(report, target)
+
+    def test_go_runtimes_reject_stdlib_outside_compiled_go_inventory(self):
+        for target in ("api", "caddy"):
+            for result_type in (None, "alpine", "gomod"):
+                with self.subTest(target=target, result_type=result_type):
+                    report = {"Results": [{"Class": "os-pkgs", "Packages": [
+                        {"Name": "alpine-baselayout", "Version": "3.7"},
+                    ]}, {"Packages": [{"Name": "stdlib", "Version": "v1.26.10"}]}]}
+                    if result_type is not None:
+                        report["Results"][1]["Type"] = result_type
+                    with self.assertRaisesRegex(ValueError, "compiled Go runtime"):
+                        check(report, target)
 
     def test_web_requires_the_runtime_and_application_packages(self):
         report = {"Results": [{"Class": "os-pkgs", "Packages": [

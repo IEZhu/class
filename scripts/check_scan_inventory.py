@@ -36,7 +36,12 @@ def check(report, target, package_absence=()):
     elif target in ("api", "caddy", "postgres"):
         if not any(r.get("Class") == "os-pkgs" and r.get("Packages") for r in results):
             raise ValueError("runtime OS inventory missing")
-        if target in ("api", "caddy") and not any(p["Name"] == "stdlib" for p in packages):
+        if target in ("api", "caddy") and not any(
+            r.get("Type") == "gobinary" and any(
+                p["Name"] == "stdlib" for p in r.get("Packages", [])
+            )
+            for r in results
+        ):
             raise ValueError("compiled Go runtime inventory missing")
     elif target == "web":
         if not any(r.get("Class") == "os-pkgs" and r.get("Packages") for r in results):
