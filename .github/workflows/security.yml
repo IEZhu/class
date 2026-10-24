@@ -1,0 +1,103 @@
+name: security
+
+# Blocks fixed HIGH/CRITICAL vulnerabilities. Scheduled runs start when this
+# workflow reaches the default branch; email depends on Actions notifications.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Test scanner failure and inventory controls
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Scan every locked dependency, including development packages
+        run: bash scripts/security_scan.sh source "$RUNNER_TEMP/security-evidence"
+      - name: Retain inventory, findings and scanner diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependency-security-evidence
+          path: |
+            ${{ runner.temp }}/security-evidence/*.json
+            ${{ runner.temp }}/security-evidence/*.stderr
+          if-no-files-found: error
+          retention-days: 7
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dockerfile: web/Dockerfile, context: web }
+          - { dockerfile: backend/Dockerfile, context: backend }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Build ${{ matrix.dockerfile }}
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          CONTEXT: ${{ matrix.context }}
+        run: docker build --pull -f "$DOCKERFILE" -t security-scan:ci "$CONTEXT"
+      - name: Scan the complete built runtime inventory
+        env:
+          SERVICE: ${{ matrix.context }}
+        run: bash scripts/security_scan.sh "$SERVICE" "$RUNNER_TEMP/security-evidence"
+      - name: Smoke test the standalone web runtime without network access
+        if: matrix.context == 'web'
+        run: |
+          docker run --rm --network none --entrypoint node security-scan:ci --check server.js
+          docker run --rm --network none --entrypoint node security-scan:ci -e 'require("sharp"); console.log("Native image module loaded")'
+          docker run --rm -i --network none --entrypoint node security-scan:ci <<'NODE'
+          const assert = require("node:assert/strict");
+          assert.deepEqual(Intl.DateTimeFormat.supportedLocalesOf("ru-RU"), ["ru-RU"]);
+          const formatter = new Intl.DateTimeFormat("ru-RU", {
+            timeZone: "UTC", day: "numeric", month: "long", year: "numeric"
+          });
+          const date = new Date("2026-01-15T00:30:00Z");
+          const parts = Object.fromEntries(formatter.formatToParts(date).map(({ type, value }) => [type, value]));
+          assert.equal(parts.day, "15");
+          assert.equal(parts.month, "января");
+          assert.equal(parts.year, "2026");
+          console.log(`Russian locale supported: ${formatter.format(date)}`);
+          NODE
+          container=$(docker run -d --network none security-scan:ci)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          for attempt in $(seq 1 20); do
+            if docker exec "$container" node -e 'fetch("http://127.0.0.1:3000/login").then(async r => process.exit(r.ok && (await r.text()).includes("Lingua Class") ? 0 : 1)).catch(() => process.exit(1))'; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Retain inventory, findings and scanner diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-security-evidence-${{ matrix.context }}
+          path: |
+            ${{ runner.temp }}/security-evidence/*.json
+            ${{ runner.temp }}/security-evidence/*.stderr
+            ${{ runner.temp }}/security-evidence/go-build-info.txt
+          if-no-files-found: error
+          retention-days: 7
