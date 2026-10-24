@@ -9,6 +9,8 @@ Pull requests and pushes to `main` run the complete Go suite with the race detec
 
 The `security` workflow checks both dependency manifests and source secrets, then scans the actual API, web, Caddy, and Postgres runtime images. It runs on pull requests, `main`, daily, and manually. Every known vulnerability severity, including unfixed findings, blocks the job. Scan failures and missing runtime/package inventories also block; there is no ignore file or report-only image. The migration utility under the optional Compose `tools` profile is outside the runtime image matrix. These checks cover known dependency advisories and tested access boundaries; they do not establish that the application has no unknown vulnerabilities. No check deploys the stack or contacts a production database or LiveKit service.
 
+The web image runs the Next.js standalone server directly with Node. npm and Yarn remain in its build stages; the production stage removes these installation tools and their dependencies because the running server does not use them.
+
 **English summary.** Lingua Class is a self-hosted web platform for a small
 English-language class (5 teachers, 50 students) built with Next.js, Go and
 Postgres on Docker Compose for a single VPS. Working today: accounts and roles,
