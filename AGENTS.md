@@ -46,6 +46,10 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   those tests. `.github/workflows/ci.yml` also verifies modules, runs vet, checks web
   types and builds Next.js. `.github/workflows/security.yml` blocks all known dependency
   and runtime vulnerabilities, unfixed findings, source secrets, and missing inventories.
+  Package-level Go absence proofs must match the exact source snapshot or every
+  inventoried binary in the exact OCI image; affected imports and incomplete,
+  stale or malformed proofs block. Runtime Caddy/Postgres builds are defined in
+  `deploy/`, retain third-party module versions, and preserve upstream contracts.
 
 ## Conventions
 

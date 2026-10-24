@@ -4,21 +4,28 @@ import json
 import sys
 
 
-def check(report, target):
+def check(report, target, package_absence=()):
     results = report.get("Results")
     if not isinstance(results, list) or not results:
         raise ValueError("missing scan results")
     packages = [p for r in results for p in r.get("Packages", [])]
     def own_source_root(package):
+        name = package.get("Name")
         return (
-            package.get("Name") == "github.com/IEZhu/class/backend"
+            name in ("github.com/IEZhu/class/backend", "github.com/IEZhu/class/build/gosu")
+            and package.get("Version", "") in ("", "(devel)")
             and package.get("Relationship") == "root"
             and package.get("AnalyzedBy") in ("gomod", "gobinary")
+            and (name == "github.com/IEZhu/class/backend" or package.get("AnalyzedBy") == "gomod")
             and package.get("DependsOn")
+            and package.get("Identifier", {}).get("PURL") == "pkg:golang/" + name.lower()
         )
 
     if not packages or any(
-        not p.get("Name") or (not p.get("Version") and not own_source_root(p))
+        not p.get("Name") or (
+            p.get("Version", "").lower() in ("", "(devel)", "devel", "unknown")
+            and not own_source_root(p)
+        )
         for p in packages
     ):
         raise ValueError("missing or unversioned package inventory")
@@ -37,9 +44,17 @@ def check(report, target):
                 raise ValueError(f"runtime package missing: {package}")
     else:
         raise ValueError(f"unknown scan target: {target}")
-    if any(r.get("Vulnerabilities") or r.get("Secrets") for r in results):
+    from urllib.parse import unquote
+    if any(
+        r.get("Secrets") or any(
+            (r.get("Target"), v.get("VulnerabilityID"), unquote(v.get("PkgIdentifier", {}).get("PURL", "")))
+            not in package_absence
+            for v in r.get("Vulnerabilities", [])
+        )
+        for r in results
+    ):
         raise ValueError("scan findings must block the pipeline")
-    print(f"Verified {target}: {len(packages)} packages, zero findings")
+    print(f"Verified {target}: {len(packages)} packages, zero applicable findings")
 
 
 if __name__ == "__main__":

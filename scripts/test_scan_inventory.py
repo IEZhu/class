@@ -9,7 +9,8 @@ class InventoryTests(unittest.TestCase):
         self.report = {"Results": [
             {"Target": "backend/go.mod", "Packages": [
                 {"Name": "github.com/IEZhu/class/backend", "Relationship": "root",
-                 "AnalyzedBy": "gomod", "DependsOn": ["stdlib@v1.26.10"]},
+                 "AnalyzedBy": "gomod", "DependsOn": ["stdlib@v1.26.10"],
+                 "Identifier": {"PURL": "pkg:golang/github.com/iezhu/class/backend"}},
                 {"Name": "stdlib", "Version": "v1.26.10"}]},
             {"Target": "web/package-lock.json", "Packages": [
                 {"Name": "next", "Version": "15.5.28"}]},
@@ -19,10 +20,11 @@ class InventoryTests(unittest.TestCase):
         check(self.report, "source")
 
     def test_unversioned_third_party_package_is_rejected(self):
-        for root in (False, True):
-            with self.subTest(root=root):
+        for root, version in ((False, ""), (True, ""), (True, "(devel)"), (True, "unknown")):
+            with self.subTest(root=root, version=version):
                 report = copy.deepcopy(self.report)
                 report["Results"][0]["Packages"][0]["Name"] = "third-party.example/module"
+                report["Results"][0]["Packages"][0]["Version"] = version
                 if not root:
                     report["Results"][0]["Packages"][0].pop("Relationship")
                 with self.assertRaises(ValueError):
