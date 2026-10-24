@@ -125,6 +125,9 @@ class ScanGateTests(unittest.TestCase):
                 (json.dumps(valid), 0, 'WARN err.message="advisory request failed"', False),
             )):
                 env = dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"], TRIVY_IMAGE="control", CONTROL_REPORT=report, CONTROL_EXIT=str(code), CONTROL_STDERR=stderr)
+                if index == 2:
+                    (root / f"evidence-{index}").mkdir()
+                    (root / f"evidence-{index}" / "report.json").write_text(json.dumps(valid))
                 result = subprocess.run(["bash", "scripts/security_scan.sh", "source", str(root / f"evidence-{index}")], cwd=root, env=env, capture_output=True, text=True)
                 with self.subTest(index=index):
                     self.assertEqual(result.returncode == 0, succeeds, result.stderr)

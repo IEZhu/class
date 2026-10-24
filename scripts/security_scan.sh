@@ -4,6 +4,8 @@ set -euo pipefail
 target=${1:?source, web or backend required}
 evidence=${2:?evidence directory required}
 mkdir -p "$evidence"
+# Never let a successful process which wrote nothing reuse an earlier report.
+rm -f -- "$evidence/report.json"
 args=(--config '' --ignore-policy '' --scanners vuln --severity HIGH,CRITICAL
       --ignore-unfixed --no-progress --skip-version-check --list-all-pkgs
       --format json --output /evidence/report.json --exit-code 1)
