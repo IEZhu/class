@@ -23,13 +23,27 @@ case "$service" in
     ;;
   postgres)
     test "$(docker run --rm --network none --entrypoint gosu "$image" postgres id -u)" != 0
-    docker run -d --name class-ci-postgres --network none -e POSTGRES_PASSWORD=ci-disposable-password "$image"
+    docker run -d --name class-ci-postgres --network none \
+      -e POSTGRES_PASSWORD=ci-disposable-password \
+      -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 "$image"
     trap 'docker rm -f -v class-ci-postgres' EXIT
+    ready=0
     for attempt in $(seq 1 30); do
-      if docker exec class-ci-postgres pg_isready -U postgres; then break; fi
+      # The initialization server accepts sockets before it shuts down. Only
+      # the final server listens on TCP and accepts the configured password.
+      if docker exec -e PGPASSWORD=ci-disposable-password class-ci-postgres psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -Atc 'SELECT 1' | grep -Fxq 1; then
+        ready=1
+        break
+      fi
       sleep 1
     done
-    docker exec class-ci-postgres psql -U postgres -v ON_ERROR_STOP=1 -c 'SELECT version();'
+    test "$ready" = 1
+    docker exec class-ci-postgres sh -c 'test "$(stat -c %u /proc/1)" != 0'
+    if docker exec -e PGPASSWORD=ci-wrong-password class-ci-postgres psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -Atc 'SELECT 1'; then
+      echo 'Postgres accepted an invalid password' >&2
+      exit 1
+    fi
+    docker exec -e PGPASSWORD=ci-disposable-password class-ci-postgres psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -c 'SELECT version();'
     ;;
   *) exit 1 ;;
 esac
