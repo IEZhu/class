@@ -13,7 +13,9 @@ x-logging: &logging
 
 services:
   caddy:
-    image: caddy:2.10
+    build:
+      context: ..
+      dockerfile: deploy/caddy.Dockerfile
     restart: unless-stopped
     <<: *logging
     ports:
@@ -71,7 +73,9 @@ services:
       start_period: 10s
 
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ..
+      dockerfile: deploy/postgres.Dockerfile
     restart: unless-stopped
     <<: *logging
     environment:
