@@ -6,6 +6,12 @@ import type { Transcript, Utterance } from "../../../lib/api";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
 import UtteranceText from "./utterance-text";
 
+// Человек урока, с которым преподаватель сопоставляет метку спикера (S2-5):
+// сам teacher урока или участник снапшота — других api не примет.
+export type Person = { user_id: number; name: string };
+
+type Speaker = { speaker_label: string; user_id: number | null; speaker_name: string | null };
+
 const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = {
   queued: "Транскрипт ещё готовится.",
   submitted: "Транскрипт ещё готовится.",
@@ -18,17 +24,19 @@ const mutedStyle = { color: "#666", margin: 0 } as const;
 // Транскрипт по спикерам (S2-4) рядом с плеером: подряд идущие реплики
 // одного спикера — один блок, клик по реплике мотает запись к её началу,
 // звучащая реплика подсвечена и держится в видимой части списка.
-// Преподаватель урока правит текст реплик.
+// Преподаватель урока правит текст реплик и сопоставляет метки с людьми.
 export default function TranscriptPanel({
   lessonId,
   timeMs,
   onSeek,
   canEdit,
+  people,
 }: {
   lessonId: number;
   timeMs: number;
   onSeek: (ms: number) => void;
   canEdit: boolean;
+  people: Person[];
 }) {
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   // missing — транскрипта у урока нет (ASR не настроен или записи не было)
@@ -77,6 +85,18 @@ export default function TranscriptPanel({
     setEditing(null);
   }, []);
 
+  const mapped = useCallback((s: Speaker) => {
+    setTranscript(
+      (t) =>
+        t && {
+          ...t,
+          utterances: t.utterances.map((it) =>
+            it.speaker_label === s.speaker_label ? { ...it, user_id: s.user_id, speaker_name: s.speaker_name } : it,
+          ),
+        },
+    );
+  }, []);
+
   if (missing) return <p style={mutedStyle}>Транскрипта у этого урока нет.</p>;
   if (error) return <p style={{ color: "crimson", margin: 0 }}>Транскрипт недоступен: {error}</p>;
   if (!transcript) return <p style={mutedStyle}>Загружаем транскрипт…</p>;
@@ -86,6 +106,9 @@ export default function TranscriptPanel({
   return (
     <div>
       <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.1rem" }}>Транскрипт</h2>
+      {canEdit && (
+        <SpeakerMapping lessonId={lessonId} utterances={utterances} people={people} onSeek={onSeek} onMapped={mapped} />
+      )}
       <div
         ref={listRef}
         // position: relative — offsetTop реплик отсчитывается от списка
@@ -223,6 +246,84 @@ function UtteranceEditor({
   );
 }
 
+// Маппинг спикеров (S2-5): метка ASR → человек урока. Возле метки — её первая
+// реплика: по голосу и словам легче узнать, кто это. Выбор сохраняется сразу.
+function SpeakerMapping({
+  lessonId,
+  utterances,
+  people,
+  onSeek,
+  onMapped,
+}: {
+  lessonId: number;
+  utterances: Utterance[];
+  people: Person[];
+  onSeek: (ms: number) => void;
+  onMapped: (s: Speaker) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const firstByLabel = useMemo(() => {
+    const first = new Map<string, Utterance>();
+    for (const u of utterances) if (!first.has(u.speaker_label)) first.set(u.speaker_label, u);
+    return [...first.values()];
+  }, [utterances]);
+
+  async function map(label: string, userID: number | null) {
+    setBusy(label);
+    setError(null);
+    try {
+      onMapped(
+        await requestJson<Speaker>(`/api/lessons/${lessonId}/transcript/speakers/${encodeURIComponent(label)}`, "PUT", {
+          user_id: userID,
+        }),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "не удалось сохранить");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <fieldset style={{ border: "1px solid #eee", borderRadius: 6, margin: "0 0 0.75rem", padding: "0.5rem 0.75rem" }}>
+      <legend style={{ fontSize: "0.9rem", color: "#666" }}>Кто говорит</legend>
+      {firstByLabel.map((u) => (
+        <div key={u.speaker_label} style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.25rem" }}>
+          <label>
+            Спикер {u.speaker_label}:{" "}
+            <select
+              value={u.user_id ?? ""}
+              disabled={busy !== null}
+              onChange={(e) => void map(u.speaker_label, e.target.value === "" ? null : Number(e.target.value))}
+            >
+              <option value="">— не указан —</option>
+              {/* Сопоставленный раньше человек мог выпасть из списка — показываем и его */}
+              {u.user_id !== null && !people.some((p) => p.user_id === u.user_id) && (
+                <option value={u.user_id}>{u.speaker_name ?? `#${u.user_id}`}</option>
+              )}
+              {people.map((p) => (
+                <option key={p.user_id} value={p.user_id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => onSeek(u.start_ms)}
+            title="Послушать первую реплику"
+            style={{ border: "none", background: "none", padding: 0, color: "#888", cursor: "pointer", textAlign: "left" }}
+          >
+            ▶ «{preview(u.text)}»
+          </button>
+        </div>
+      ))}
+      <FormStatus error={error} done={false} doneText="" />
+    </fieldset>
+  );
+}
+
 // activeAt — реплика, звучащая в момент ms: последняя начавшаяся. В паузе
 // между репликами подсвечена прошедшая — глаз не теряет место. timeline
 // упорядочен по start_ms.
@@ -242,19 +343,21 @@ function activeAt(timeline: Utterance[], ms: number): number | null {
   return found;
 }
 
-// Подряд идущие реплики одного спикера — один блок с его меткой.
+// Подряд идущие реплики одного спикера — один блок с его именем. Спикер —
+// человек, если метка сопоставлена: ASR иногда делит одного на две метки.
 function groupBySpeaker(utterances: Utterance[]): Utterance[][] {
+  const speaker = (u: Utterance) => (u.user_id !== null ? `user:${u.user_id}` : `label:${u.speaker_label}`);
   const groups: Utterance[][] = [];
   for (const u of utterances) {
     const last = groups[groups.length - 1];
-    if (last && last[0].speaker_label === u.speaker_label) last.push(u);
+    if (last && speaker(last[0]) === speaker(u)) last.push(u);
     else groups.push([u]);
   }
   return groups;
 }
 
 function speakerTitle(u: Utterance): string {
-  return `Спикер ${u.speaker_label}`;
+  return u.speaker_name ?? `Спикер ${u.speaker_label}`;
 }
 
 // clock — позиция записи: 4:05 или 1:02:05.
@@ -264,4 +367,8 @@ function clock(ms: number): string {
   const m = Math.floor((total % 3600) / 60);
   const s = String(total % 60).padStart(2, "0");
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+function preview(text: string): string {
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text;
 }

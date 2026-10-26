@@ -99,6 +99,7 @@ export interface Utterance {
   speaker_label: string;
   // null, пока преподаватель не сопоставил метку с человеком урока (S2-5)
   user_id: number | null;
+  speaker_name: string | null;
   start_ms: number;
   end_ms: number;
   text: string;

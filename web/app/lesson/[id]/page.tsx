@@ -112,9 +112,16 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
 
       {phase === "done" && (
         <section style={replaySectionStyle}>
-          {/* Запись и транскрипт по спикерам (S2-4). Правит реплики только
-              преподаватель урока */}
-          <LessonReplay lessonId={lesson.id} canEdit={isTeacher} />
+          {/* Запись и транскрипт по спикерам (S2-4). Правит реплики и
+              сопоставляет спикеров с людьми урока только его преподаватель */}
+          <LessonReplay
+            lessonId={lesson.id}
+            canEdit={isTeacher}
+            people={[
+              { user_id: lesson.teacher_id, name: lesson.teacher_name },
+              ...lesson.participants.map((p) => ({ user_id: p.user_id, name: p.name })),
+            ]}
+          />
         </section>
       )}
 
