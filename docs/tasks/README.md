@@ -46,7 +46,7 @@ S1-5 (Egress), S1-2 (worker), S2-1…S2-3 (ASR). S1-1 (календарь) не 
 
 | ID | Задача | Зависит от | Ключевой выход | Статус |
 |---|---|---|---|---|
-| S1-1 | Google OAuth2 (Production), шифрованный refresh token | S0-3 | подключение календаря | ☐ |
+| S1-1 | Google OAuth2 (Production), шифрованный refresh token, джоба calendar_sync (ADR-023); живая проверка с Google — долг D-13 | S0-3 | подключение календаря | ☑ |
 | S1-2 | Worker + очередь `jobs` (SKIP LOCKED), джоба-плейсхолдер `recording_ready`; calendar_sync — долг D-7 (ADR-013) | S0-2 | worker, очередь с ретраями | ☑ |
 | S1-3 | S3: bucket, presigned GET, `GET /media/{lesson_id}/url`, lifecycle | S0-4 | S3-механика | ☑ |
 | S1-4 | LiveKit Cloud: room-token, embed комнаты в live | S0-5 | видеокомната | ☑ |
@@ -118,5 +118,6 @@ S1-5 (Egress), S1-2 (worker), S2-1…S2-3 (ASR). S1-1 (календарь) не 
 | D-4 | Файлы материалов в S3 (пока только body_md) | S0-4 | S1-6+ | ☐ |
 | D-5 | Удаление/архивация учёток (пока только заведение и правка) | S1-8 | — | ☐ |
 | D-6 | Токен R2 истекает 2027-08-03 — запись сломается молча; ротирует владелец стенда до 2027-07-20 по [процедуре](../architecture/05-storage-s3.md#ротация-токена-r2-долг-d-6) | S1-3 | ротация токена | ☐ |
-| D-7 | Джоба calendar_sync (события уроков в Google Calendar) — нет OAuth-токенов (ADR-013) | S1-2 | S1-1 | ☐ |
+| D-7 | Джоба calendar_sync (события уроков в Google Calendar) — нет OAuth-токенов (ADR-013); сделана в S1-1 (ADR-023), проверка с настоящим Google — D-13 | S1-2 | S1-1 | ☑ |
 | D-8 | Бэкапы под общим токеном R2 (`BACKUP_S3_*` пусты), таймер на VPS не установлен, первого прогона на R2 не было | S1-7 | — | ☐ |
+| D-13 | OAuth-клиента Google у стенда нет (`GOOGLE_*` пусты): подключение и calendar_sync проверены только на httptest-фейке; перевод в Production, «токен переживает неделю» и урок в календаре студента — после создания клиента владельцем по [deploy/README.md](../../deploy/README.md#google-calendar-s1-1) | S1-1 | — | ☐ |

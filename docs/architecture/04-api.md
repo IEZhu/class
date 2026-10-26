@@ -40,7 +40,10 @@
 | `PATCH /users/{id}` | имя; роль — только admin | admin, teacher | 1 |
 | `POST /users/{id}/password` | сброс пароля, все сессии владельца гасятся | admin, teacher | 1 |
 | `DELETE /groups/{id}/members/{user_id}` | убрать из группы (идемпотентно) | admin | 1 |
-| `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
+| `GET /auth/google` | статус Google Calendar: `available` (ключи на стенде), `connected` (ADR-023) | teacher | 1 |
+| `POST /auth/google/start` | `{url}` экрана согласия Google; state и PKCE-verifier — в cookie `google_oauth`; 503 без ключей | teacher | 1 |
+| `GET /auth/google/callback` | возврат с Google (`code`, `state`): обмен кода, шифрованный refresh token, джобы calendar_sync будущих уроков; всегда 303 на `/account?google=connected\|denied\|scope\|failed\|unavailable` | teacher | 1 |
+| `DELETE /auth/google` | отключить календарь: токен стирается и отзывается в Google (идемпотентно) | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |
 | `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing | LiveKit | 1 |
