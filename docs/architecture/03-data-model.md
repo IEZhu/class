@@ -33,6 +33,7 @@ materials(id, lesson_id, kind /*homework|material*/, title, body_md,
 -- очередь фоновых задач (этап 1); выполненная джоба удаляется (ADR-013)
 jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by,
      failed_at /*попытки исчерпаны — «мёртвая»*/, created_at)
+job_schedules(kind, slot /*период, за который джоба уже поставлена*/)  -- ADR-021
 
 -- словарь
 terms(id, lang /*en*/, lemma /*ключ, ADR-017*/, surface /*форма первого клика*/,
@@ -61,12 +62,15 @@ transcripts(id, lesson_id /*UNIQUE*/, provider /*assemblyai*/,
 utterances(transcript_id, idx, speaker_label, user_id nullable /*ручной маппинг A→Иван*/,
            start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx))
 
--- индекс субтитров (практика-видео)
-videos(id, source /*youtube|ted*/, external_id, title, channel, duration_s, lang, added_at)
+-- индекс субтитров (практика-видео); состояние сборщика — ADR-022
+videos(id, source /*youtube|ted*/, external_id, title, channel, duration_s, lang, added_at,
+       source_id, published_at, subtitles /*manual|auto|none; NULL — не собраны*/,
+       harvest_attempts, harvest_error, harvested_at)
 subtitle_segments(video_id, idx, start_ms, end_ms, text,
                   tsv tsvector GENERATED /*to_tsvector('english', text)*/)
 -- + GIN index on tsv
-subtitle_sources(id, kind /*channel|playlist*/, external_id, title, enabled)  -- seed сборщика
+subtitle_sources(id, kind /*channel|playlist*/, external_id, title, enabled,
+                 polled_at, last_error, created_at)  -- seed сборщика в 0011
 
 -- корпус Tatoeba
 tatoeba_sentences(id, lang, text, owner_skill smallint)
@@ -96,7 +100,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
 | user_terms, lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
-| videos, subtitle_segments, subtitle_sources, tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-1…S5-6 |
+| videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
+| tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-4, S5-6 |
 
 ## Инварианты модели
 

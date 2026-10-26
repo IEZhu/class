@@ -11,6 +11,7 @@ docker-compose.yml   сервисы по этапам:
                        этап 1: + worker
                        этап 3: + libretranslate (--load-only en,ru),
                                + whiteboard (ретранслятор доски, профиль, ADR-020)
+                       этап 5: + harvester (профиль harvester, ADR-022)
                        опция:  redis (только при реальной нужде — ADR-003)
 Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socket.io/'
                      → ретранслятор доски после forward_auth в api
@@ -21,7 +22,7 @@ Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socke
                           GOOGLE_TOKEN_KEY (S1-1), LIVEKIT_*, S3_*,
                           BACKUP_S3_* (ADR-014)
                        2: ASSEMBLYAI_*
-                       5: LLM_PROVIDER, LLM_API_KEY
+                       5: HARVESTER_COOKIES_FILE (ADR-022), LLM_PROVIDER, LLM_API_KEY
 backup-pg.sh         ночной pg_dump | zstd → S3, retention 7/30 (S1-7)
 restore-pg.sh        восстановление из копии в S3 (S1-7)
 backup-lib.sh        общая часть двух скриптов выше
@@ -209,6 +210,28 @@ worker больше нет строки «Google Calendar выключен»; п
    перезапишется тем же.
 3. Проверить: на странице урока прикрепить файл и скачать его;
    временный токен удалить.
+
+## Сборщик субтитров (S5-1, S5-2)
+
+Решение — ADR-021/ADR-022, поток —
+[subtitle-harvester.md](../docs/architecture/flows/subtitle-harvester.md).
+Сервис `harvester` — тот же worker с ролью `harvester` и yt-dlp — стоит
+под профилем compose: он ходит в YouTube с IP стенда, поэтому `make up`
+его не поднимает.
+
+```bash
+make migrate    # миграция 0011_subtitles: таблицы и seed каналов
+docker compose -f deploy/docker-compose.yml --profile harvester up -d --build harvester
+docker compose -f deploy/docker-compose.yml logs -f harvester
+docker compose -f deploy/docker-compose.yml stop harvester    # выключить
+```
+
+Начнёт YouTube проверять «вы не бот» — выгрузить cookies (формат Netscape)
+и указать путь к файлу на хосте в `HARVESTER_COOKIES_FILE`, затем
+пересоздать сервис. Блокирует IP VPS — остановить сервис и запустить тот
+же образ с другой машины (команды — в потоке). Состояние: `make psql`,
+затем `SELECT title, polled_at, last_error FROM subtitle_sources;` и
+`SELECT subtitles, count(*) FROM videos GROUP BY 1;`.
 
 ## Правила
 

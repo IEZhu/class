@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Фид канала BBC Learning English от 2026-10-26, урезан для тестов: четыре
+     записи (одна из них Shorts) без описаний и одна испорченная запись. -->
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCHaHD477h-FeBbVh9Sh7syA"/>
+ <id>yt:channel:HaHD477h-FeBbVh9Sh7syA</id>
+ <yt:channelId>HaHD477h-FeBbVh9Sh7syA</yt:channelId>
+ <title>BBC Learning English</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCHaHD477h-FeBbVh9Sh7syA"/>
+ <author>
+  <name>BBC Learning English</name>
+  <uri>https://www.youtube.com/channel/UCHaHD477h-FeBbVh9Sh7syA</uri>
+ </author>
+ <published>2008-06-17T16:15:16+00:00</published>
+ <entry>
+  <id>yt:video:VFA53-P4yPo</id>
+  <yt:videoId>VFA53-P4yPo</yt:videoId>
+  <yt:channelId>UCHaHD477h-FeBbVh9Sh7syA</yt:channelId>
+  <title>Tips for feeling confident in job interviews 🤝 | Improve your listening with Real Easy English</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=VFA53-P4yPo"/>
+  <author>
+   <name>BBC Learning English</name>
+   <uri>https://www.youtube.com/channel/UCHaHD477h-FeBbVh9Sh7syA</uri>
+  </author>
+  <published>2026-10-26T10:00:27+00:00</published>
+  <updated>2026-10-26T10:12:06+00:00</updated>
+  <media:group>
+   <media:title>Tips for feeling confident in job interviews 🤝 | Improve your listening with Real Easy English</media:title>
+   <media:content url="https://www.youtube.com/v/VFA53-P4yPo?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/VFA53-P4yPo/hqdefault.jpg" width="480" height="360"/>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:3tyG0hkQJ-w</id>
+  <yt:videoId>3tyG0hkQJ-w</yt:videoId>
+  <yt:channelId>UCHaHD477h-FeBbVh9Sh7syA</yt:channelId>
+  <title>🤓 Can you say these advanced English phrases before I do?</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/3tyG0hkQJ-w"/>
+  <author>
+   <name>BBC Learning English</name>
+   <uri>https://www.youtube.com/channel/UCHaHD477h-FeBbVh9Sh7syA</uri>
+  </author>
+  <published>2026-10-23T10:29:01+00:00</published>
+  <updated>2026-10-24T07:32:03+00:00</updated>
+  <media:group>
+   <media:title>🤓 Can you say these advanced English phrases before I do?</media:title>
+   <media:content url="https://www.youtube.com/v/3tyG0hkQJ-w?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/3tyG0hkQJ-w/hqdefault.jpg" width="480" height="360"/>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:broken</id>
+  <yt:videoId>broken</yt:videoId>
+  <title>Запись без корректного id видео</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=broken"/>
+  <published>not-a-date</published>
+ </entry>
+ <entry>
+  <id>yt:video:WXKilGiOQy8</id>
+  <yt:videoId>WXKilGiOQy8</yt:videoId>
+  <yt:channelId>UCHaHD477h-FeBbVh9Sh7syA</yt:channelId>
+  <title>9 English Expressions to describe people's personalities: Live English Class</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=WXKilGiOQy8"/>
+  <author>
+   <name>BBC Learning English</name>
+   <uri>https://www.youtube.com/channel/UCHaHD477h-FeBbVh9Sh7syA</uri>
+  </author>
+  <published>2026-10-22T13:02:20+00:00</published>
+  <updated>2026-10-24T05:48:19+00:00</updated>
+  <media:group>
+   <media:title>9 English Expressions to describe people's personalities: Live English Class</media:title>
+   <media:content url="https://www.youtube.com/v/WXKilGiOQy8?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/WXKilGiOQy8/hqdefault.jpg" width="480" height="360"/>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:pjFlVc-EDzc</id>
+  <yt:videoId>pjFlVc-EDzc</yt:videoId>
+  <yt:channelId>UCHaHD477h-FeBbVh9Sh7syA</yt:channelId>
+  <title>What should you eat for a better night’s sleep? ⏲️ 6 Minute English</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=pjFlVc-EDzc"/>
+  <author>
+   <name>BBC Learning English</name>
+   <uri>https://www.youtube.com/channel/UCHaHD477h-FeBbVh9Sh7syA</uri>
+  </author>
+  <published>2026-10-22T08:55:46+00:00</published>
+  <updated>2026-10-23T15:02:03+00:00</updated>
+  <media:group>
+   <media:title>What should you eat for a better night’s sleep? ⏲️ 6 Minute English</media:title>
+   <media:content url="https://www.youtube.com/v/pjFlVc-EDzc?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/pjFlVc-EDzc/hqdefault.jpg" width="480" height="360"/>
+  </media:group>
+ </entry>
+</feed>

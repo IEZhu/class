@@ -130,3 +130,18 @@ jobs:
       - name: Remove the isolated local registry
         if: always()
         run: docker rm -f -v class-ci-registry
+
+  harvester:
+    # The subtitle harvester image is outside the blocking runtime scan
+    # (ADR-022, debt D-12); its yt-dlp pins are in the source scan above.
+    name: Harvester image (runtime contracts only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build the harvester runtime image
+        run: docker build --pull --no-cache --target harvester -t security-scan:harvester backend
+      - name: Verify runtime contracts without production access
+        run: scripts/security/smoke_runtime.sh harvester security-scan:harvester

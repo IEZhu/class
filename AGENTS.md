@@ -18,9 +18,10 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.
 - `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
-  `tools` profile; the whiteboard relay `whiteboard` under the `whiteboard` profile, ADR-020),
-  `Caddyfile`, `.env.example`; `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`,
-  `systemd/` timer): nightly pg_dump to S3 and restore (S1-7, ADR-014).
+  `tools` profile; the whiteboard relay `whiteboard` under the `whiteboard` profile, ADR-020;
+  the subtitle `harvester` under the `harvester` profile, ADR-022), `Caddyfile`, `.env.example`;
+  `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`, `systemd/` timer): nightly pg_dump to S3
+  and restore (S1-7, ADR-014).
 - `Makefile`: operations for the compose stack.
 - `docs/architecture/`: topology, services, data model, API, S3, integrations, flows, ADR log
   (`decisions.md`); `00-source-variant-c.md` is a frozen snapshot.
@@ -47,9 +48,11 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   Google Calendar connection is unavailable and `calendar_sync` skips lessons, ADR-023),
   `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
   goes straight to `done` without a transcript; ADR-015), `COMPOSE_PROFILES=whiteboard` with
-  `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503). The api also
-  reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL` and
-  `S3_*` (whiteboard snapshots wait in the queue without storage), plus `DOMAIN` and
+  `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503),
+  `HARVESTER_COOKIES_FILE` (YouTube cookies for the `harvester` profile, ADR-022). The api also
+  reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
+  `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
+  `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots wait in the queue without storage), plus `DOMAIN` and
   `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
   secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
@@ -85,8 +88,9 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `deploy/.env.example` and to the stage plan's «Факт» section first.
 - TLS terminates at the host's nginx (ADR-004); caddy is HTTP-only and published on
   `127.0.0.1:${HTTP_PORT}`. Caddy strips `/api`, so API routes have no `/api` prefix inside Go.
-- `backend/Dockerfile` has two targets, `worker` and `api`; `api` is the last stage, so a build
-  without `--target` still yields the api. Apply migrations before deploying an api that
+- `backend/Dockerfile` has three targets, `worker`, `harvester` (worker + pinned yt-dlp, compose
+  profile `harvester`, outside the blocking image scan: debt D-12) and `api`; `api` is the last
+  stage, so a build without `--target` still yields the api. Apply migrations before deploying an api that
   enqueues a new job: `egress_ended` fails without the `jobs` table.
 - `README.md` also links here; `docs/README.md` and `docs/plans/00-flow.md` still link to
   `CLAUDE.md`, which imports this file.

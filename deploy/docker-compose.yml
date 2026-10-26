@@ -1,5 +1,6 @@
 # Этап 0 (S0-1): caddy, web, api, postgres; этап 1 (S1-2): + worker;
-# этап 3 (S3-6): + whiteboard в профиле whiteboard. Состав растёт по этапам —
+# этап 3 (S3-6): + whiteboard в профиле whiteboard;
+# этап 5 (S5-2): + harvester под профилем harvester. Состав растёт по этапам —
 # docs/architecture/02-services.md. TLS-край — host-nginx (ADR-004),
 # caddy опубликован только на 127.0.0.1:${HTTP_PORT}.
 
@@ -128,6 +129,30 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     # После SIGTERM текущей джобе даётся 20 с (jobs.Config.ShutdownGrace);
     # docker по умолчанию ждёт 10 — берём с запасом до SIGKILL
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # S5-1/S5-2: сборщик субтитров (ADR-022) — тот же worker с ролью harvester
+  # и yt-dlp. Под профилем: на VPS включается явно, потому что ходит
+  # в YouTube с IP стенда, а образ вне блокирующего скана (долг D-12).
+  # С другой машины тот же образ запускается с DATABASE_URL этой базы.
+  harvester:
+    build:
+      context: ../backend
+      target: harvester
+    profiles: ["harvester"]
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      HARVESTER_COOKIES: /run/secrets/youtube-cookies.txt
+    volumes:
+      # Cookies YouTube по необходимости (файл Netscape на хосте); без
+      # HARVESTER_COOKIES_FILE монтируется пустой /dev/null — без cookies
+      - ${HARVESTER_COOKIES_FILE:-/dev/null}:/run/secrets/youtube-cookies.txt:ro
+    # Текущее видео пакета доводится за 20 с (jobs.Config.ShutdownGrace)
     stop_grace_period: 30s
     depends_on:
       postgres:

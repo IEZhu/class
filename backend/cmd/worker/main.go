@@ -12,6 +12,7 @@ import (
 
 	"github.com/IEZhu/class/backend/internal/assemblyai"
 	"github.com/IEZhu/class/backend/internal/gcal"
+	"github.com/IEZhu/class/backend/internal/harvester"
 	"github.com/IEZhu/class/backend/internal/jobs"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
@@ -23,18 +24,14 @@ func main() {
 	if databaseURL == "" {
 		log.Fatal("worker: DATABASE_URL is required")
 	}
-	// Хранилище S3_* одно на транскрипты (S2-1) и снимки досок (S3-6);
-	// без ключей — nil, и зависящие от него джобы выключены
-	objects, err := storage.New(storage.ConfigFromEnv())
-	if err != nil {
-		log.Fatalf("worker: storage: %v", err)
+	// S5-2 (ADR-022): core — джобы стенда; harvester — только сборщик
+	// субтитров (образ с yt-dlp), в том числе с другой машины в ту же базу
+	role := os.Getenv("WORKER_ROLE")
+	if role == "" {
+		role = "core"
 	}
-	asr, err := asrFromEnv(objects)
-	if err != nil {
-		log.Fatalf("worker: %v", err)
-	}
-	if asr.Client == nil {
-		log.Printf("worker: ASSEMBLYAI_API_KEY не задан — уроки с записью уходят в done без транскрипта")
+	if role != "core" && role != "harvester" {
+		log.Fatalf("worker: WORKER_ROLE %q: expected core or harvester", role)
 	}
 
 	// docker stop шлёт SIGTERM: новые джобы больше не берём, текущую
@@ -50,7 +47,40 @@ func main() {
 	}
 	defer st.Close()
 
-	runner := jobs.NewRunner(st.Pool(), jobs.Config{})
+	scheduler := jobs.NewScheduler(st.Pool())
+	var runner *jobs.Runner
+	if role == "harvester" {
+		runner = jobs.NewRunner(st.Pool(), jobs.Config{HandlerTimeout: harvester.JobTimeout})
+		worker.RegisterHarvester(runner, scheduler, harvester.New(st, harvester.Config{
+			Fetcher: harvester.YTDLP{Cookies: os.Getenv("HARVESTER_COOKIES")},
+		}))
+	} else {
+		runner = jobs.NewRunner(st.Pool(), jobs.Config{})
+		registerCore(runner, st)
+	}
+	go scheduler.Run(ctx)
+
+	log.Printf("worker: started, role %s", role)
+	runner.Run(ctx)
+	log.Printf("worker: stopped")
+}
+
+// registerCore — джобы стенда (роль core). Ключи интеграций читает только
+// эта роль: harvester с другой машины обходится одним DATABASE_URL.
+func registerCore(runner *jobs.Runner, st *store.Store) {
+	// Хранилище S3_* одно на транскрипты (S2-1) и снимки досок (S3-6);
+	// без ключей — nil, и зависящие от него джобы выключены
+	objects, err := storage.New(storage.ConfigFromEnv())
+	if err != nil {
+		log.Fatalf("worker: storage: %v", err)
+	}
+	asr, err := asrFromEnv(objects)
+	if err != nil {
+		log.Fatalf("worker: %v", err)
+	}
+	if asr.Client == nil {
+		log.Printf("worker: ASSEMBLYAI_API_KEY не задан — уроки с записью уходят в done без транскрипта")
+	}
 	worker.Register(runner, st, asr)
 
 	// S1-1: Google Calendar опционален — без ключей calendar_sync снимает
@@ -81,10 +111,6 @@ func main() {
 	} else {
 		log.Printf("worker: хранилище не настроено — снимки досок ждут в очереди")
 	}
-
-	log.Printf("worker: started")
-	runner.Run(ctx)
-	log.Printf("worker: stopped")
 }
 
 // asrFromEnv — транскрибация AssemblyAI (S2-1, ADR-015). Без ключа —
