@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/IEZhu/class/backend/internal/harvester"
 	"github.com/IEZhu/class/backend/internal/jobs"
 	"github.com/IEZhu/class/backend/internal/store"
 )
@@ -28,4 +29,14 @@ func recordingReady(st *store.Store) jobs.Handler {
 		}
 		return st.FinishLessonProcessing(ctx, p.LessonID)
 	}
+}
+
+// S5-1/S5-2: сборщик субтитров — отдельная роль worker'а (WORKER_ROLE=
+// harvester, ADR-022), потому что ему нужен yt-dlp и свой IP. Обе джобы
+// периодические (ADR-021): расписание ставит тот процесс, что их выполняет.
+func RegisterHarvester(r *jobs.Runner, s *jobs.Scheduler, h *harvester.Harvester) {
+	r.Handle(harvester.JobRSSPoll, func(ctx context.Context, _ jobs.Job) error { return h.PollFeeds(ctx) })
+	r.Handle(harvester.JobSubtitlesFetch, func(ctx context.Context, _ jobs.Job) error { return h.FetchSubtitles(ctx) })
+	s.Every(harvester.JobRSSPoll, harvester.PollEvery)
+	s.Every(harvester.JobSubtitlesFetch, harvester.FetchEvery)
 }

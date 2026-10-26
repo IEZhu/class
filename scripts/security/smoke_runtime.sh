@@ -16,6 +16,24 @@ case "$service" in
     fi
     grep -Fq 'worker: DATABASE_URL is required' <<<"$output"
     ;;
+  harvester)
+    # Subtitle harvester (ADR-022): the worker entrypoint plus exactly the
+    # pinned yt-dlp, a JS runtime it detects, and no pip at runtime.
+    test "$(docker run --rm --network none --entrypoint id "$image" -u)" = 10001
+    pinned=$(sed -n 's/^yt-dlp==\([^ ]*\) .*/\1/p' backend/ytdlp/requirements.txt)
+    test -n "$pinned"
+    test "$(docker run --rm --network none --entrypoint yt-dlp "$image" --version)" = "$pinned"
+    docker run --rm --network none --entrypoint sh "$image" -c '! command -v pip && ! command -v pip3'
+    # Without a URL yt-dlp exits non-zero after printing its debug header.
+    debug=$(docker run --rm --network none --entrypoint yt-dlp "$image" -v 2>&1 || true)
+    grep -Fq '[debug] JS runtimes: node-' <<<"$debug"
+    grep -Fq 'yt_dlp_ejs-' <<<"$debug"
+    if output=$(docker run --rm --network none "$image" 2>&1); then
+      echo 'harvester started without DATABASE_URL' >&2
+      exit 1
+    fi
+    grep -Fq 'worker: DATABASE_URL is required' <<<"$output"
+    ;;
   web)
     docker run --rm --network none --entrypoint sh "$image" -c 'test -x /usr/bin/node && ! command -v npm && ! command -v yarn'
     test "$(docker run --rm --network none --entrypoint node "$image" --version | cut -d. -f1)" = v22
