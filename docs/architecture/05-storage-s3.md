@@ -73,7 +73,11 @@ s3://lingua/
 ## Бэкапы (S1-7)
 
 - Nightly `pg_dump | zstd` → `backups/pg/{date}.dump.zst`,
-  retention 7 дневных / 30 дней.
+  retention 7 дневных / 30 дней: все копии за 7 суток, дальше по одной
+  на неделю до 30 суток ([ADR-014](decisions.md)). Чистит скрипт
+  `deploy/backup-pg.sh`, lifecycle на `backups/pg/` не ставится.
+- Бакет и токен для бэкапов — отдельные (`BACKUP_S3_*`): токен записей
+  уходит в LiveKit Egress, а в дампе хэши паролей и email (ADR-014).
 - Сцены досок (whiteboards) и VTT уже лежат в S3 — отдельно не бэкапим.
 - RTO для hobby: «пересоздать compose за час» из бэкапа.
 
