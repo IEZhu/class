@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
@@ -29,6 +30,9 @@ type Config struct {
 	// для транскрипта этого достаточно (05-storage-s3.md).
 	EgressAudioOnly bool
 	Storage         storage.Config
+	// Google (S1-1): без ключей подключение календаря отвечает 503,
+	// RedirectURL собирает New из PublicBaseURL.
+	Google gcal.Config
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -42,6 +46,7 @@ type API struct {
 	cfg     Config
 	storage *storage.Client // nil, если хранилище не настроено
 	livekit *livekitapi.Client
+	google  *gcal.Client // nil, если Google Calendar не настроен
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -51,13 +56,23 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg.Google.RedirectURL = cfg.PublicBaseURL + googleCallbackPath
+	google, err := gcal.New(cfg.Google)
+	if err != nil {
+		return nil, err
+	}
 	return &API{
 		store:   s,
 		cfg:     cfg,
 		storage: st,
 		livekit: livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
+		google:  google,
 	}, nil
 }
+
+// GoogleConfigured — заданы ли ключи Google: cmd/api пишет в журнал,
+// что календарь выключен.
+func (a *API) GoogleConfigured() bool { return a.google != nil }
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -121,6 +136,13 @@ func (a *API) Router() http.Handler {
 
 	mux.Handle("POST /lessons/{id}/materials", teacher(a.handleCreateMaterial("material")))
 	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
+
+	// S1-1: Google Calendar преподавателя (ADR-023). Callback — GET:
+	// сюда браузер возвращается со страницы согласия Google
+	mux.Handle("GET /auth/google", teacher(a.handleGoogleStatus))
+	mux.Handle("POST /auth/google/start", teacher(a.handleGoogleStart))
+	mux.Handle("GET /auth/google/callback", teacher(a.handleGoogleCallback))
+	mux.Handle("DELETE /auth/google", teacher(a.handleGoogleDisconnect))
 	return mux
 }
 

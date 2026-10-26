@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/jobs"
 	"github.com/IEZhu/class/backend/internal/store"
 )
@@ -28,4 +29,11 @@ func recordingReady(st *store.Store) jobs.Handler {
 		}
 		return st.FinishLessonProcessing(ctx, p.LessonID)
 	}
+}
+
+// RegisterCalendar — S1-1: джоба calendar_sync (ADR-023). cal == nil —
+// Google не настроен: джобы снимаются со строкой в журнале, а не копятся.
+// publicBaseURL — https://<DOMAIN> для ссылки на урок в описании события.
+func RegisterCalendar(r *jobs.Runner, st *store.Store, cal *gcal.Client, publicBaseURL string) {
+	r.Handle(store.JobCalendarSync, calendarSync{st: st, cal: cal, publicBaseURL: publicBaseURL}.handle)
 }
