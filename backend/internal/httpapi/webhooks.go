@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,8 +17,9 @@ import (
 )
 
 const (
-	eventRoomStarted = "room_started"
-	eventEgressEnded = "egress_ended"
+	eventRoomStarted       = "room_started"
+	eventParticipantJoined = "participant_joined"
+	eventEgressEnded       = "egress_ended"
 )
 
 // handleLiveKitWebhook — единственная точка, куда LiveKit сообщает о комнате
@@ -27,7 +29,9 @@ const (
 // Обработчик только меняет состояние; тяжёлой работы здесь нет — она уедет
 // в worker с появлением очереди (S1-2).
 func (a *API) handleLiveKitWebhook(w http.ResponseWriter, r *http.Request) {
-	if a.cfg.LiveKitAPIKey == "" || a.cfg.LiveKitAPISecret == "" {
+	// Без URL запись не запустить: урок ушёл бы в попытку Egress по пустому
+	// адресу. Граница та же, что у комнаты (handleRoomToken).
+	if !a.cfg.liveKitConfigured() {
 		writeError(w, http.StatusServiceUnavailable, "livekit_not_configured", "видеокомната не настроена")
 		return
 	}
@@ -39,46 +43,57 @@ func (a *API) handleLiveKitWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// LiveKit ждёт 200 и повторяет доставку при ошибке. Наши обработчики
-	// идемпотентны, поэтому повтор безопасен.
+	// LiveKit ждёт 2xx и на 5xx повторяет доставку (ограниченно, с паузами).
+	// Наши обработчики идемпотентны, поэтому повтор безопасен.
 	switch event.Event {
-	case eventRoomStarted:
-		a.onRoomStarted(r.Context(), event)
+	case eventRoomStarted, eventParticipantJoined:
+		if err := a.startRecording(r.Context(), event); err != nil {
+			// Урок остался scheduled — повтор доставки запустит запись заново
+			writeError(w, http.StatusServiceUnavailable, "recording_not_started", "запись не запустилась")
+			return
+		}
 	case eventEgressEnded:
 		a.onEgressEnded(r.Context(), event)
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// onRoomStarted — запускаем запись урока. Ошибки только логируем: сорванная
-// запись не повод отвечать LiveKit'у ошибкой и получать бесконечные ретраи.
-func (a *API) onRoomStarted(ctx context.Context, event *livekit.WebhookEvent) {
+// startRecording — запускаем запись урока, если она ещё не идёт (ADR-012).
+// Кроме room_started, сюда ведёт и participant_joined: если запуск сорвался
+// или room_started не дошёл, следующий вошедший участник запустит запись.
+// Ошибка возвращается, только когда запуск не удался и его стоит повторить.
+func (a *API) startRecording(ctx context.Context, event *livekit.WebhookEvent) error {
 	if event.Room == nil {
-		return
+		return nil
 	}
 	lessonID, ok := lessonIDFromRoom(event.Room.Name)
 	if !ok {
-		return // чужая комната — не наша забота
+		return nil // чужая комната — не наша забота
 	}
 	if a.storage == nil {
-		logf("room_started: урок %d, но хранилище не настроено — запись не ведётся", lessonID)
-		return
+		logf("%s: урок %d, но хранилище не настроено — запись не ведётся", event.Event, lessonID)
+		return nil
 	}
-	switch err := a.store.StartLessonRecording(ctx, lessonID); {
+	var egressID string
+	err := a.store.StartLessonRecording(ctx, lessonID, func(ctx context.Context) error {
+		info, err := a.livekit.StartRoomCompositeEgress(ctx, a.egressRequest(lessonID, event.Room.Name))
+		if err != nil {
+			return fmt.Errorf("запуск egress: %w", err)
+		}
+		egressID = info.EgressId
+		return nil
+	})
+	switch {
 	case errors.Is(err, store.ErrNotFound):
-		// Урок уже live: повторная доставка room_started либо ручной старт
-		return
+		// Запись уже идёт (повторная доставка, следующий участник), её
+		// прямо сейчас запускает параллельная доставка либо урок завершён
+		return nil
 	case err != nil:
-		logf("room_started: урок %d: %v", lessonID, err)
-		return
+		logf("%s: урок %d: %v", event.Event, lessonID, err)
+		return err
 	}
-
-	info, err := a.livekit.StartRoomCompositeEgress(ctx, a.egressRequest(lessonID, event.Room.Name))
-	if err != nil {
-		logf("room_started: запуск egress для урока %d: %v", lessonID, err)
-		return
-	}
-	logf("room_started: урок %d, egress %s", lessonID, info.EgressId)
+	logf("%s: урок %d, egress %s", event.Event, lessonID, egressID)
+	return nil
 }
 
 // onEgressEnded — запись дописана: сохраняем путь и двигаем статус.

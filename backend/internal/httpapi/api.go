@@ -31,6 +31,12 @@ type Config struct {
 	Storage         storage.Config
 }
 
+// liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
+// отправить ни браузер, ни запрос Egress; без ключей — нечем подписать.
+func (c Config) liveKitConfigured() bool {
+	return c.LiveKitURL != "" && c.LiveKitAPIKey != "" && c.LiveKitAPISecret != ""
+}
+
 type API struct {
 	store   *store.Store
 	cfg     Config

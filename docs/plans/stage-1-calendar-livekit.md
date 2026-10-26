@@ -193,7 +193,9 @@ teacher — только студенты своих групп (состав г
   `RecordingKey(lessonID, ext)` по раскладке 05-storage-s3.md. Для R2
   включается `UsePathStyle` — иначе запрос уходит на `bucket.<account>.r2…`
   и объект не находится. Без ключей `New` возвращает `nil` без ошибки:
-  стенд поднимается, а медиа-эндпоинты отвечают 503.
+  стенд поднимается, а медиа-эндпоинты отвечают 503. Пустой `S3_REGION`
+  означает `auto` только при заданном `S3_ENDPOINT` (R2); без endpoint
+  (AWS) api с пустым регионом не стартует.
 - `GET /media/{lesson_id}/url` (`httpapi/media.go`) — presigned-ссылка
   участнику урока: та же граница `canSeeLesson`, что у страницы урока;
   нет записи → 404 `no_recording`, чужой урок → 403, без входа → 401.
@@ -208,12 +210,15 @@ teacher — только студенты своих групп (состав г
   токен с грантом `RoomRecord`). `server-sdk-go` не берём: оттуда нужен
   один вызов, а тянет он полный стек pion/webrtc.
 - `POST /webhooks/livekit` (`httpapi/webhooks.go`) — подпись проверяется
-  `webhook.ReceiveWebhookEvent`; без неё и с мусорной — 401.
-  `room_started` → `StartLessonRecording` (условие `status = 'scheduled'`
-  делает вызов идемпотентным: повторная доставка не запустит второй
-  Egress) → запуск Egress с выводом в R2. `egress_ended` → путь записи
-  в `lessons.recording_s3_key` и статус. Провалившийся Egress
-  (`EGRESS_FAILED`) и чужая комната игнорируются.
+  `webhook.ReceiveWebhookEvent`; без неё и с мусорной — 401, без любого
+  из `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` — 503.
+  `room_started` и `participant_joined` → `StartLessonRecording`: переход
+  scheduled → live и запуск Egress с выводом в R2 в одной транзакции
+  (`FOR UPDATE SKIP LOCKED`, ADR-012). Повторная или параллельная доставка
+  второй Egress не запустит; сорванный запуск откатывает переход, вебхук
+  отвечает 503, и запись запускает повтор доставки или следующий вошедший.
+  `egress_ended` → путь записи в `lessons.recording_s3_key` и статус.
+  Провалившийся Egress (`EGRESS_FAILED`) и чужая комната игнорируются.
 - `EGRESS_AUDIO_ONLY=1` в `.env` переключает запись на звук (OGG вместо
   MP4, на порядок меньше объём). Ключи хранилища уходят в LiveKit в теле
   egress-запроса — отсюда требование ADR-009 к узкому токену.

@@ -21,7 +21,10 @@ import (
 // чтобы досмотреть урок, и мало, чтобы ссылка ушла в переписку надолго.
 const PresignTTL = 30 * time.Minute
 
-var ErrNotConfigured = errors.New("storage: ключи хранилища не заданы")
+var (
+	ErrNotConfigured = errors.New("storage: ключи хранилища не заданы")
+	ErrNoRegion      = errors.New("storage: без endpoint (AWS S3) нужен регион")
+)
 
 type Config struct {
 	Bucket    string
@@ -49,6 +52,11 @@ func New(cfg Config) (*Client, error) {
 	}
 	region := cfg.Region
 	if region == "" {
+		// auto понимает только R2; для AWS SDK подставил бы его в адрес
+		// и в подпись запроса, и ссылки молча не работали бы
+		if cfg.Endpoint == "" {
+			return nil, ErrNoRegion
+		}
 		region = "auto" // у R2 регион всегда auto (ADR-009)
 	}
 	opts := []func(*s3.Options){}
@@ -111,8 +119,6 @@ func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	}
 	return true, nil
 }
-
-func (c *Client) Bucket() string { return c.cfg.Bucket }
 
 // RecordingKey — путь записи урока по раскладке из 05-storage-s3.md.
 func RecordingKey(lessonID int64, ext string) string {
