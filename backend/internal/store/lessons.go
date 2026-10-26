@@ -150,6 +150,19 @@ func (s *Store) LessonTeacherID(ctx context.Context, lessonID int64) (int64, err
 	return teacherID, err
 }
 
+// LessonTeacherAndGroup — владелец урока и его группа (nil у открытого
+// события): гостевой ссылкой распоряжаются только у событий (ADR-010).
+func (s *Store) LessonTeacherAndGroup(ctx context.Context, lessonID int64) (int64, *int64, error) {
+	var teacherID int64
+	var groupID *int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT teacher_id, group_id FROM lessons WHERE id = $1`, lessonID).Scan(&teacherID, &groupID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil, ErrNotFound
+	}
+	return teacherID, groupID, err
+}
+
 // IsLessonParticipant — есть ли пользователь в снапшоте участников урока.
 func (s *Store) IsLessonParticipant(ctx context.Context, lessonID, userID int64) (bool, error) {
 	var ok bool

@@ -24,29 +24,36 @@ export default function NewEvent({ groups }: { groups: Group[] }) {
     // время браузера и переводим в UTC, как ждёт api (RFC3339).
     const start = new Date(startsAt);
     const end = new Date(start.getTime() + Number(minutes) * 60_000);
-    const created = await requestJson<Lesson>("/api/lessons", "POST", {
-      group_id: groupId ? Number(groupId) : null,
-      title,
-      starts_at: start.toISOString(),
-      ends_at: end.toISOString(),
-    });
+    const times = { starts_at: start.toISOString(), ends_at: end.toISOString() };
+    // Название — только у события: урок подписывается именем группы,
+    // и api отклоняет title вместе с group_id (ADR-010).
+    const body = groupId ? { group_id: Number(groupId), ...times } : { group_id: null, title, ...times };
+    const created = await requestJson<Lesson>("/api/lessons", "POST", body);
     setTitle("");
     setStartsAt("");
     router.push(`/lesson/${created.id}`);
   });
+
+  // С группой название не нужно: стираем введённое, чтобы оно не ушло
+  // в api и не вернулось, если группу снова уберут
+  function chooseGroup(value: string) {
+    setGroupId(value);
+    if (value) setTitle("");
+  }
 
   return (
     <form onSubmit={submit} style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
       <h2 style={{ marginTop: 0 }}>Новое событие</h2>
       <div style={rowStyle}>
         <input
-          placeholder="Название"
+          placeholder={groupId ? "Название — из группы" : "Название"}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           required={!groupId}
+          disabled={!!groupId}
           style={fieldStyle}
         />
-        <select value={groupId} onChange={(e) => setGroupId(e.target.value)} style={fieldStyle}>
+        <select value={groupId} onChange={(e) => chooseGroup(e.target.value)} style={fieldStyle}>
           <option value="">без группы — открытое событие</option>
           {groups.map((g) => (
             <option key={g.id} value={g.id}>

@@ -17,17 +17,17 @@
 | `POST /groups` | создать группу (name, level) | admin | 0 |
 | `GET /groups` | список групп с участниками | admin, teacher | 0 |
 | `POST /groups/{id}/members` | добавить участника по email | admin | 0 |
-| `POST /lessons` | создать урок (группа) или событие (без группы, с title); участники — снапшот группы | teacher | 0 |
+| `POST /lessons` | создать урок (группа, без title — подпись из группы) или событие (без группы, с непустым title); участники — снапшот группы | teacher | 0 |
 | `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
 | `PATCH /lessons/{id}` | перенос (starts_at/ends_at), только `scheduled` | teacher урока | 0 |
 | `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
 | `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
-| `GET /join/{token}` | предпросмотр события по гостевой ссылке | без входа | 1 |
-| `POST /join/{token}` | войти гостем: имя → участник события + сессия | без входа | 1 |
-| `POST /lessons/{id}/guest-link` | выпустить/перевыпустить гостевую ссылку | admin, teacher события | 1 |
-| `DELETE /lessons/{id}/guest-link` | отозвать гостевую ссылку | admin, teacher события | 1 |
+| `GET /join/{token}` | предпросмотр события по гостевой ссылке; 404 — нет/отозвана/перевыпущена, 410 — событие прошло | без входа | 1 |
+| `POST /join/{token}` | войти гостем: имя → участник события + сессия; 400 — имя пустое или длиннее 60, 404/410 — как у `GET` | без входа | 1 |
+| `POST /lessons/{id}/guest-link` | выпустить/перевыпустить гостевую ссылку; только у события без группы (409 у урока с группой) | admin, teacher события | 1 |
+| `DELETE /lessons/{id}/guest-link` | отозвать гостевую ссылку (идемпотентно); 409 у урока с группой | admin, teacher события | 1 |
 | `GET /signup/{token}` | предпросмотр приглашения (кого и куда зовут) | без входа | 1 |
 | `POST /signup/{token}` | принять приглашение: свой пароль → учётка и сессия одной транзакцией | без входа | 1 |
 | `GET /invites` | ожидающие приглашения: admin — все, teacher — свои | admin, teacher | 1 |
@@ -43,7 +43,7 @@
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |
-| `POST /webhooks/livekit` | `egress_ended` → recording_s3_key, status=processing | LiveKit | 1 |
+| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing | LiveKit | 1 |
 | `GET /media/{lesson_id}/url` | presigned GET на запись, TTL 30 мин | участники | 1 |
 | `POST /webhooks/assemblyai` | `completed` → utterances, VTT | AssemblyAI | 2 |
 | `POST /terms/click` | `{surface, context_sentence}` → перевод/дефиниция | все | 3 |
