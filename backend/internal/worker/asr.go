@@ -13,6 +13,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/jobs"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/webvtt"
 )
 
 // ASR — зависимости транскрибации (ADR-015). Нулевое значение — ключа
@@ -84,6 +85,30 @@ func asrResult(st *store.Store, asr ASR) jobs.Handler {
 		}
 		// Вебхук приходит только по итогу: промежуточный статус — повторим позже
 		return fmt.Errorf("AssemblyAI после вебхука вернул статус %q", res.Status)
+	})
+}
+
+// vttRender — S2-3: реплики → WebVTT → transcripts/{lesson_id}.vtt, урок
+// done. Перерендер (повтор джобы, правка реплик в S2-4) перезаписывает
+// тот же ключ.
+func vttRender(st *store.Store, asr ASR) jobs.Handler {
+	return transcriptStep(st, func(ctx context.Context, t *store.Transcript) error {
+		if t.Status != store.TranscriptCompleted {
+			return nil
+		}
+		utts, err := st.Utterances(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		cues := make([]webvtt.Cue, len(utts))
+		for i, u := range utts {
+			cues[i] = webvtt.Cue{StartMS: u.StartMS, EndMS: u.EndMS, Voice: u.SpeakerLabel, Text: u.Text}
+		}
+		key := storage.TranscriptKey(t.LessonID)
+		if err := asr.Storage.Put(ctx, key, webvtt.ContentType, webvtt.Render(cues)); err != nil {
+			return err
+		}
+		return st.FinishTranscriptVTT(ctx, t.ID, key)
 	})
 }
 

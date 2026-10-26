@@ -117,6 +117,20 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
 - Тесты: вебхук и однократные реплики, доступ к транскрипту, ошибка
   AssemblyAI, конфигурация секрета.
 
+### S2-3 VTT-рендер (2026-10-26)
+
+- `backend/internal/webvtt/` — `Render`: `WEBVTT`, cue на реплику,
+  `HH:MM:SS.mmm --> HH:MM:SS.mmm`, `<v A>`, экранирование `& < >`,
+  переводы строк → пробел, порядок по началу, конец строго позже начала.
+- Джоба `vtt_render`: реплики → VTT → `transcripts/{lesson_id}.vtt`
+  (`text/vtt; charset=utf-8`, `storage.Client.Put`, `storage.TranscriptKey`)
+  → `transcripts.vtt_s3_key`, `lessons.status=done`
+  (`store.FinishTranscriptVTT`). Перерендер перезаписывает тот же ключ.
+- Сбои (ADR-016): 8 попыток очереди, на последней — транскрипт `error`
+  (или `completed` без VTT), урок всё равно `done`.
+- Тесты: `TestASRPipeline` (вся цепочка до VTT в fake S3 и `done`,
+  повторы всех джоб), сбой выкладки VTT, `internal/webvtt`, `storage.Put`.
+
 ## Риски этапа
 
 RU/EN code-switching и перекрывающаяся речь портят текст — принято

@@ -24,6 +24,8 @@ s3://lingua/
   (`GET /media/{lesson_id}/url`, VTT — в `GET /lessons/{id}/transcript`).
   Исключение — ссылка на запись для AssemblyAI: её подписывает worker
   на 24 ч, и уходит она только AssemblyAI (ADR-015).
+- VTT (`transcripts/{lesson_id}.vtt`, `text/vtt; charset=utf-8`) кладёт
+  worker сам: файл маленький и текстовый, медиа-инвариант не задет.
 - S3 отдаёт HTTP Range → перемотка в плеере Plyr работает из коробки.
 - Egress LiveKit пишет в бакет сам (S3 credentials в конфиге egress-запроса);
   AssemblyAI читает запись по presigned GET.

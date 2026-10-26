@@ -212,6 +212,32 @@ func (s *Store) Utterances(ctx context.Context, transcriptID int64) ([]Utterance
 	})
 }
 
+// FinishTranscriptVTT — VTT выложен: путь в транскрипт, урок done. Повтор
+// (перерендер после правки реплик) только обновляет путь; прошлый сбой
+// выкладки забывается.
+func (s *Store) FinishTranscriptVTT(ctx context.Context, id int64, vttKey string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lessonID int64
+	err = tx.QueryRow(ctx,
+		`UPDATE transcripts SET vtt_s3_key = $2, error = NULL
+		 WHERE id = $1 AND status = 'completed' RETURNING lesson_id`, id, vttKey).Scan(&lessonID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := finishLesson(ctx, tx, lessonID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // FailTranscript — транскрибация сдалась (ADR-016): причина в error, урок
 // done — запись смотрится и без транскрипта. Сохранённые реплики остаются:
 // completed не понижается, несостоявшийся VTT виден по error.

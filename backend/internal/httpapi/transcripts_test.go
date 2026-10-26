@@ -95,11 +95,17 @@ func (f *fakeASR) firstSubmit() map[string]any {
 	return f.submits[0]
 }
 
-// Результат AssemblyAI: три реплики двух спикеров, в одной — разметка.
+// Результат AssemblyAI: три реплики двух спикеров, в одной — разметка,
+// которую VTT обязан экранировать.
 const asrCompleted = `{"id":"tr_fixture","status":"completed","text":"...","utterances":[
 	{"speaker":"A","start":250,"end":2100,"confidence":0.9,"text":"Good morning, class.","words":[]},
 	{"speaker":"B","start":2300,"end":3900,"confidence":0.8,"text":"Morning! Is it <b>today</b> & now?","words":[]},
 	{"speaker":"A","start":4000,"end":3725120,"confidence":0.9,"text":"Yes.","words":[]}]}`
+
+const asrCompletedVTT = "WEBVTT\n" +
+	"\n00:00:00.250 --> 00:00:02.100\n<v A>Good morning, class.\n" +
+	"\n00:00:02.300 --> 00:00:03.900\n<v B>Morning! Is it &lt;b&gt;today&lt;/b&gt; &amp; now?\n" +
+	"\n00:00:04.000 --> 01:02:05.120\n<v A>Yes.\n"
 
 // asrStand — api и worker с fake AssemblyAI и fake хранилищем поверх
 // изолированной схемы securityDB; урок в live, в группе — студент.
@@ -505,6 +511,37 @@ func TestASRSubmitRetriesThenGivesUp(t *testing.T) {
 	}
 }
 
+// Хранилище не приняло VTT: реплики уже в базе и остаются, транскрипт
+// completed без VTT, причина в error, урок done.
+func TestVTTUploadFailureKeepsUtterances(t *testing.T) {
+	s := newASRStand(t, 1)
+	s.asr.respond(asrCompleted, 0)
+	s.egressEnded(t)
+	s.run(t, store.JobRecordingReady)
+	s.run(t, store.JobASRSubmit)
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK)
+	s.run(t, store.JobASRResult)
+	s.files.Fail(true)
+	s.run(t, store.JobVTTRender)
+	s.expectQueue(t)
+	tr := s.transcript(t)
+	if tr.status != store.TranscriptCompleted || tr.utterances != 3 || tr.vtt != nil || tr.cause == nil {
+		t.Fatalf("транскрипт %+v", tr)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "done" {
+		t.Fatalf("урок %s", got)
+	}
+	// Перерендер (S2-4) после починки хранилища выкладывает VTT и забывает сбой
+	s.files.Fail(false)
+	if _, err := jobs.Enqueue(context.Background(), s.st.Pool(), store.JobVTTRender, store.TranscriptJob{TranscriptID: tr.id}); err != nil {
+		t.Fatal(err)
+	}
+	s.run(t, store.JobVTTRender)
+	if tr = s.transcript(t); tr.vtt == nil || tr.cause != nil {
+		t.Fatalf("после перерендера %+v", tr)
+	}
+}
+
 // Ключ убрали, пока транскрипт стоял в очереди: джоба не висит вечно,
 // а доводит урок до done.
 func TestASRJobWithoutKeyFinishesLesson(t *testing.T) {
@@ -593,4 +630,64 @@ func TestTranscriptsMigrationReverts(t *testing.T) {
 	}
 	apply("0008_transcripts.up.sql")
 	check()
+}
+
+// Полная цепочка S2-1…S2-3: egress_ended → recording_ready → asr_submit →
+// вебхук → asr_result → vtt_render → VTT в хранилище, урок done. Повторы
+// джоб после этого ничего не меняют.
+func TestASRPipeline(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.asr.respond(asrCompleted, 0)
+	s.fetched(t)
+
+	s.run(t, store.JobVTTRender)
+	key := storage.TranscriptKey(s.lessonID)
+	obj, ok := s.files.Object(key)
+	if !ok || string(obj.Body) != asrCompletedVTT || obj.ContentType != "text/vtt; charset=utf-8" {
+		t.Fatalf("VTT в хранилище (%v): %q %q", ok, obj.ContentType, obj.Body)
+	}
+	tr := s.transcript(t)
+	if tr.vtt == nil || *tr.vtt != key || tr.cause != nil {
+		t.Fatalf("после vtt_render %+v", tr)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "done" {
+		t.Fatalf("урок %s после VTT", got)
+	}
+	s.expectQueue(t)
+
+	// at-least-once: повтор каждой джобы ничего не задваивает, не шлёт
+	// запись в AssemblyAI ещё раз и не возвращает урок из done
+	s.requeue(t, store.JobRecordingReady, store.RecordingReady{LessonID: s.lessonID})
+	s.run(t, store.JobRecordingReady)
+	for _, kind := range []string{store.JobASRSubmit, store.JobASRResult, store.JobVTTRender} {
+		s.requeue(t, kind, store.TranscriptJob{TranscriptID: tr.id})
+		s.run(t, kind)
+	}
+	s.expectQueue(t)
+	if submits, gets := s.asr.calls(); submits != 1 || gets != 1 {
+		t.Fatalf("к AssemblyAI: %d отправок, %d забора; хотели по одному", submits, gets)
+	}
+	if tr = s.transcript(t); tr.status != store.TranscriptCompleted || tr.utterances != 3 || tr.vtt == nil {
+		t.Fatalf("после повторов %+v", tr)
+	}
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK) // запоздалая доставка
+	s.expectQueue(t)
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "done" {
+		t.Fatalf("урок %s после повторов", got)
+	}
+
+	// Вьюер получает presigned-ссылку на этот VTT, как на запись — на 30 мин
+	w := securityRequest(s.h, "GET", fmt.Sprintf("/lessons/%d/transcript", s.lessonID), "", s.student)
+	expectStatus(t, w, http.StatusOK)
+	var resp transcriptResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.VTTURL == nil || resp.VTTExpiresAt == nil {
+		t.Fatalf("ответ %s", w.Body.String())
+	}
+	vtt, err := url.Parse(*resp.VTTURL)
+	if err != nil || vtt.Path != "/"+storagetest.Bucket+"/"+key || vtt.Query().Get("X-Amz-Expires") != "1800" {
+		t.Errorf("vtt_url = %s (%v)", *resp.VTTURL, err)
+	}
 }

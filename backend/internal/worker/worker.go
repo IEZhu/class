@@ -21,6 +21,7 @@ func Register(r *jobs.Runner, st *store.Store, asr ASR) {
 	// доведёт урок до done, а не будет ждать вечно.
 	r.Handle(store.JobASRSubmit, asrSubmit(st, asr))
 	r.Handle(store.JobASRResult, asrResult(st, asr))
+	r.Handle(store.JobVTTRender, vttRender(st, asr))
 }
 
 // recordingReady — точка вставки ASR (S1-5, ADR-013). С AssemblyAI урок

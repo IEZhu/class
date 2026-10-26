@@ -112,3 +112,9 @@ func TestNewRegion(t *testing.T) {
 		t.Errorf("R2 подписан не регионом auto: %q", cred)
 	}
 }
+
+func TestTranscriptKey(t *testing.T) {
+	if got := TranscriptKey(42); got != "transcripts/42.vtt" {
+		t.Errorf("TranscriptKey(42) = %q", got)
+	}
+}

@@ -4,6 +4,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -132,7 +133,31 @@ func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
+// Put кладёт небольшой объект целиком (VTT, S2-3). Медиа так не грузим:
+// их пишут в бакет сами внешние сервисы (Egress), минуя VPS.
+func (c *Client) Put(ctx context.Context, key, contentType string, body []byte) error {
+	if c == nil {
+		return ErrNotConfigured
+	}
+	_, err := c.s3client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(c.cfg.Bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(body),
+		ContentLength: aws.Int64(int64(len(body))),
+		ContentType:   aws.String(contentType),
+	})
+	if err != nil {
+		return fmt.Errorf("put %s: %w", key, err)
+	}
+	return nil
+}
+
 // RecordingKey — путь записи урока по раскладке из 05-storage-s3.md.
 func RecordingKey(lessonID int64, ext string) string {
 	return "recordings/" + strconv.FormatInt(lessonID, 10) + "/room." + ext
+}
+
+// TranscriptKey — путь VTT-транскрипта урока (05-storage-s3.md).
+func TranscriptKey(lessonID int64) string {
+	return "transcripts/" + strconv.FormatInt(lessonID, 10) + ".vtt"
 }

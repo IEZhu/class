@@ -65,7 +65,7 @@ S1-5 (Egress), S1-2 (worker), S2-1…S2-3 (ASR). S1-1 (календарь) не 
 |---|---|---|---|---|
 | S2-1 | Джоба asr_submit → AssemblyAI (speaker_labels, en, webhook); без ключа — плейсхолдер (ADR-015) | S1-2, S1-5 | транскрибация запускается | ☑ |
 | S2-2 | Webhook completed → transcripts, utterances (идемпотентно), `GET /lessons/{id}/transcript` | S2-1 | utterances в PG | ☑ |
-| S2-3 | VTT-рендер (`<v A>`) → S3, status=done | S2-2 | VTT | ☐ |
+| S2-3 | VTT-рендер (`<v A>`) → S3, status=done; сбой — всё равно done (ADR-016) | S2-2 | VTT | ☑ |
 | S2-4 | Транскрипт-вьюер: клик=seek, подсветка, правка текста | S2-2, S1-6 | вьюер | ☐ |
 | S2-5 | Маппинг спикеров A/B/C → участники | S2-4 | имена в транскрипте | ☐ |
 
