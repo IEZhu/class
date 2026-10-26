@@ -1,0 +1,15 @@
+# Расписание ночного бэкапа Postgres (S1-7, ADR-014). Установка —
+# deploy/README.md.
+[Unit]
+Description=Lingua Class: ночной бэкап Postgres (S1-7)
+
+[Timer]
+# 03:30 UTC — глубокая ночь для группы, уроков нет; дата в имени копии —
+# тоже UTC. Persistent: прогон, пропущенный из-за выключенной VPS,
+# выполнится при старте
+OnCalendar=*-*-* 03:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

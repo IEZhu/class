@@ -61,6 +61,10 @@ say "3/4 lifecycle: записи дешевеют, транскрипты не �
 # У R2 только Standard и Infrequent Access, архивного класса нет (ADR-009).
 # Удаление старого видео с сохранением аудио и VTT — отдельное решение,
 # когда накопится статистика просмотров; сейчас только переход в IA.
+# Бэкапы Postgres (backups/pg/, S1-7) правилом не покрыты намеренно:
+# «одну копию в неделю после 7 суток» lifecycle не выразить, а истечение
+# по возрасту стёрло бы последние копии, если бэкапы перестанут делаться.
+# Чистит сам deploy/backup-pg.sh (ADR-014); в IA они тоже не уходят.
 r2 put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration "{
   \"Rules\": [
     {
@@ -96,6 +100,9 @@ S3_SECRET_ACCESS_KEY=<Secret Access Key, показывается один ра�
 Проверить рабочий токен:
   AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \\
     aws s3 ls "s3://$BUCKET" --endpoint-url $ENDPOINT --region auto
+
+Бэкапам Postgres нужен отдельный бакет и свой токен (ADR-014,
+BACKUP_S3_* в deploy/.env) — см. deploy/README.md.
 
 Временный Admin-токен после этого удалите — он больше не нужен.
 EOF
