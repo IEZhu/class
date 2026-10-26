@@ -27,13 +27,16 @@ export interface User {
 // Строка списка людей в админ-кабинете: учётка + названия групп.
 export interface UserWithGroups extends User {
   groups: string[];
+  // null у действующей учётки, момент архивации — у архивной (ADR-024)
+  deactivated_at: string | null;
 }
 
 export interface Group {
   id: number;
   name: string;
   level: string;
-  members: { user_id: number; email: string; name: string; role: Role }[];
+  // archived — учётка в архиве: из группы не убрана, в новые уроки не попадает
+  members: { user_id: number; email: string; name: string; role: Role; archived: boolean }[];
 }
 
 // Приглашение (ADR-008). url приходит только в ответе на создание —
@@ -63,6 +66,15 @@ export interface Lesson {
   group_name: string;
 }
 
+// Файл материала в хранилище (ADR-024). ready=false — загрузка не
+// подтверждена; такой файл api показывает только преподавателю урока.
+export interface MaterialFile {
+  name: string;
+  content_type: string;
+  size: number;
+  ready: boolean;
+}
+
 export interface Material {
   id: number;
   lesson_id: number;
@@ -70,6 +82,8 @@ export interface Material {
   title: string;
   body_md: string;
   created_at: string;
+  // null у текстового материала
+  file: MaterialFile | null;
 }
 
 export interface LessonDetail extends Lesson {

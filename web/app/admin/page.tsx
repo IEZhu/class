@@ -8,12 +8,15 @@ import AdminPanel from "./admin-panel";
 export default async function AdminPage() {
   let me: User;
   let users: UserWithGroups[];
+  let archived: UserWithGroups[];
   let groups: Group[];
   let invites: Invite[];
   try {
-    [me, users, groups, invites] = await Promise.all([
+    [me, users, archived, groups, invites] = await Promise.all([
       apiFetch<User>("/auth/me"),
       apiFetch<UserWithGroups[]>("/users"),
+      // Архив — отдельным списком: в основном его нет (ADR-024)
+      apiFetch<UserWithGroups[]>("/users?archived=1"),
       apiFetch<Group[]>("/groups"),
       apiFetch<Invite[]>("/invites"),
     ]);
@@ -39,7 +42,7 @@ export default async function AdminPage() {
           ? "Админ: полный список людей и групп."
           : "Преподаватель: студенты ваших групп; заводить можно только студентов."}
       </p>
-      <AdminPanel me={me} users={users} groups={groups} invites={invites} />
+      <AdminPanel me={me} users={users} archived={archived} groups={groups} invites={invites} />
     </main>
   );
 }

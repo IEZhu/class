@@ -9,6 +9,7 @@ import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
 import LessonPlayer from "./lesson-player";
 import LessonRoom from "./lesson-room";
+import { DeleteMaterial, FileDownload, MaterialUpload } from "./material-files";
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "full",
@@ -57,6 +58,8 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
   }
 
   const phase = lessonPhase(lesson.status, lesson.starts_at, lesson.ends_at);
+  // Материалы и файлы добавляет и удаляет только преподаватель урока
+  const isTeacher = me.id === lesson.teacher_id;
   const materials = lesson.materials.filter((m) => m.kind === "material");
   const homework = lesson.materials.filter((m) => m.kind === "homework");
 
@@ -106,8 +109,9 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
         </section>
       )}
 
-      <MaterialsSection title="Материалы" items={materials} />
-      <MaterialsSection title="Домашка" items={homework} />
+      {isTeacher && <MaterialUpload lessonId={lesson.id} />}
+      <MaterialsSection title="Материалы" items={materials} isTeacher={isTeacher} />
+      <MaterialsSection title="Домашка" items={homework} isTeacher={isTeacher} />
 
       <p style={{ color: "#666" }}>
         Участники: {lesson.participants.map((p) => p.name).join(", ") || "—"}
@@ -116,17 +120,21 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
   );
 }
 
-function MaterialsSection({ title, items }: { title: string; items: Material[] }) {
+function MaterialsSection({ title, items, isTeacher }: { title: string; items: Material[]; isTeacher: boolean }) {
   return (
     <section style={{ margin: "1.5rem 0" }}>
       <h2>{title}</h2>
       {items.length === 0 && <p style={{ color: "#666" }}>Пока пусто.</p>}
       {items.map((m) => (
         <article key={m.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: "0.75rem 1rem", marginBottom: "0.75rem" }}>
-          <h3 style={{ marginTop: 0 }}>{m.title}</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "baseline" }}>
+            <h3 style={{ marginTop: 0 }}>{m.title}</h3>
+            {isTeacher && <DeleteMaterial materialId={m.id} title={m.title} />}
+          </div>
           {/* body_md рендерится как текст; настоящий markdown-рендер придёт
               вместе с <ClickableText> (S3-1) — единственным рендером текста */}
-          <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0 }}>{m.body_md}</pre>
+          {m.body_md && <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0 }}>{m.body_md}</pre>}
+          {m.file && <FileDownload materialId={m.id} file={m.file} />}
         </article>
       ))}
     </section>

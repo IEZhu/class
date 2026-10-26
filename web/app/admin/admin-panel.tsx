@@ -13,7 +13,7 @@ const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 // Фиксированная зона: на сервере и в браузере она разная, и toLocaleDateString
 // по локальной зоне даёт разный текст — React ругается на несовпадение
 // разметки при гидрации.
-const expiryFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
+const shortDateFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
 
 const fieldStyle = { padding: "0.5rem" };
 const sectionStyle = {
@@ -27,11 +27,13 @@ const rowStyle = { display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems:
 export default function AdminPanel({
   me,
   users,
+  archived,
   groups,
   invites,
 }: {
   me: User;
   users: UserWithGroups[];
+  archived: UserWithGroups[];
   groups: Group[];
   invites: Invite[];
 }) {
@@ -50,6 +52,7 @@ export default function AdminPanel({
         onDone={reload}
       />
       <PeopleSection me={me} users={users} roles={assignableRoles} onDone={reload} />
+      <ArchiveSection users={archived} onDone={reload} />
       <GroupsSection groups={groups} isAdmin={isAdmin} onDone={reload} />
     </>
   );
@@ -170,7 +173,7 @@ function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => 
           <li key={inv.id} style={rowStyle}>
             {inv.name} · {inv.email} · {roleLabels[inv.role]}
             {inv.group_name && <> · {inv.group_name}</>}
-            <span style={{ color: "#666" }}>до {expiryFmt.format(new Date(inv.expires_at))} (UTC)</span>
+            <span style={{ color: "#666" }}>до {shortDateFmt.format(new Date(inv.expires_at))} (UTC)</span>
             <RevokeInviteButton invite={inv} onDone={onDone} />
           </li>
         ))}
@@ -288,10 +291,60 @@ function PeopleSection({
             {me.role === "admin" && u.id !== me.id && (
               <ChangeRoleForm userId={u.id} current={u.role} roles={roles} onDone={onDone} />
             )}
+            {/* Себя в архив не отправить; преподавателю api даст только
+                студентов его групп — других в его списке и нет */}
+            {u.id !== me.id && <ArchiveButton user={u} archive onDone={onDone} />}
           </div>
         </details>
       ))}
     </section>
+  );
+}
+
+// Архив вместо удаления (ADR-024): учётка и её история остаются, вход
+// закрывается, все сессии гаснут сразу; вернуть можно в любой момент.
+function ArchiveSection({ users, onDone }: { users: UserWithGroups[]; onDone: () => void }) {
+  if (users.length === 0) return null;
+
+  return (
+    <section style={sectionStyle}>
+      <h2 style={{ marginTop: 0 }}>Архив ({users.length})</h2>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.35rem" }}>
+        {users.map((u) => (
+          <li key={u.id} style={rowStyle}>
+            {u.name} · {u.email} · {roleLabels[u.role]}
+            {u.deactivated_at && (
+              <span style={{ color: "#666" }}>с {shortDateFmt.format(new Date(u.deactivated_at))} (UTC)</span>
+            )}
+            <ArchiveButton user={u} archive={false} onDone={onDone} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ArchiveButton({ user, archive, onDone }: { user: User; archive: boolean; onDone: () => void }) {
+  const { busy, error, submit } = useSubmit(async () => {
+    await request(`/api/users/${user.id}/${archive ? "deactivate" : "reactivate"}`, "POST");
+    onDone();
+  });
+
+  function confirmThenSubmit(e: FormEvent) {
+    e.preventDefault();
+    // Возврат безопасен, а архивация сразу выкидывает человека отовсюду
+    if (!archive || window.confirm(`Отправить ${user.name} в архив? Вход закроется, все сессии завершатся.`)) {
+      void submit(e);
+    }
+  }
+
+  return (
+    <form onSubmit={confirmThenSubmit} style={rowStyle}>
+      <button type="submit" disabled={busy}>
+        {busy ? "…" : archive ? "В архив" : "Вернуть из архива"}
+      </button>
+      {error && <span style={{ color: "crimson" }}>{error}</span>}
+    </form>
   );
 }
 
@@ -378,6 +431,7 @@ function GroupsSection({
             {g.members.map((m) => (
               <li key={m.user_id} style={rowStyle}>
                 {m.name} · {m.email}
+                {m.archived && <span style={{ color: "#666" }}>· в архиве</span>}
                 {isAdmin && (
                   <RemoveMemberButton groupId={g.id} userId={m.user_id} name={m.name} onDone={onDone} />
                 )}
