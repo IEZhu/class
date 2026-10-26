@@ -420,9 +420,9 @@ AssemblyAI v2 (сверено 2026-10-26): вебхук несёт только 
   старта worker'а, как неполный конфиг хранилища у api.
 - Вебхук только двигает статус и ставит джобу (правило 04-api.md, лимит
   10 с): результат забирает отдельная джоба `asr_result`. Цепочка:
-  `recording_ready` → `asr_submit` → вебхук → `asr_result` →
-  `vtt_render` → `done`. `vtt_render` отдельна, чтобы S2-4 перерендерил
-  VTT после правки реплик той же джобой.
+  `recording_ready` → `asr_submit` → вебхук (или сверка `asr_poll`,
+  ADR-016) → `asr_result` → `vtt_render` → `done`. `vtt_render` отдельна,
+  чтобы S2-4 перерендерил VTT после правки реплик той же джобой.
 - Статусы `transcripts.status`: `queued` → `submitted` (есть
   `external_id`) → `fetching` (вебхук принят) → `completed` (реплики
   в базе; VTT — `vtt_s3_key`) | `error`. Каждый шаг — условный `UPDATE`
@@ -432,20 +432,23 @@ AssemblyAI v2 (сверено 2026-10-26): вебхук несёт только 
   реплика одна на `(transcript_id, idx)` (PK), `external_id` уникален
   у провайдера. `lessons.transcript_id` получает FK и заполняется вместе
   с транскриптом — зеркало `transcripts.lesson_id` из модели данных.
-- Неизвестный `transcript_id` → 404 (AssemblyAI не повторяет), неверный
-  секрет → 401, сбой базы → 500 (повторит).
+- Неизвестный `transcript_id` → 503 (AssemblyAI повторит: вебхук мог
+  обогнать запись `external_id`), неверный секрет → 401, сбой базы → 500
+  (повторит).
 - VTT: свой рендер (`internal/webvtt`), cue на реплику, `<v A>`, тайминг
   `HH:MM:SS.mmm`, экранирование `& < >`, переводы строк — пробел;
   `text/vtt; charset=utf-8` в `transcripts/{lesson_id}.vtt`
-  (`storage.Client.Put`). Чтение — `GET /lessons/{id}/transcript`
+  (`storage.Client.PutObject`, общий со снимками досок S3-6). Чтение —
+  `GET /lessons/{id}/transcript`
   (участники и teacher урока, как `GET /lessons/{id}`): реплики
   и presigned VTT на 30 мин; причину сбоя наружу не отдаём.
-**Последствия.** Без ключа стенд ведёт себя как в S1-5. Транскрипт
-застрянет в `submitted`, если вебхук потерян (api лежал дольше ~100 с
-повторов AssemblyAI или вебхук обогнал запись `external_id` и получил
-404): периодической сверки нет — долг D-9. Падение worker'а между отправкой
-и записью `external_id` отправит запись повторно — вторая оплата и
-вебхук на неизвестный id (404); на hobby-масштабе это дешевле сверки.
+**Последствия.** Без ключа стенд ведёт себя как в S1-5. Потерянный
+вебхук (api лежал дольше ~100 с повторов AssemblyAI) подбирает отложенная
+сверка `asr_poll` (ADR-016; долг D-9 закрыт ею при ревью волны A).
+Падение worker'а между отправкой и записью `external_id` отправит запись
+повторно — вторая оплата, а вебхук первой отправки получает 503, пока
+AssemblyAI не перестанет повторять; на hobby-масштабе это дешевле
+дедупликации.
 
 ## ADR-016 · 2026-10-26 · accepted — Сбой транскрибации: урок всё равно done
 
@@ -454,12 +457,25 @@ AssemblyAI v2 (сверено 2026-10-26): вебхук несёт только 
 (ADR-013) после исчерпания попыток оставляет джобу мёртвой, и урок
 никто не выводит из `processing`.
 **Решение.** Транскрибация сдаётся, но урок доходит до `done`:
-- ошибка шага (`asr_submit`, `asr_result`, `vtt_render`: сеть, 5xx/4xx
-  AssemblyAI, отказ хранилища) — обычный повтор очереди: 8 попыток
-  с backoff 1 мин → 1 ч, ≈ 2 ч. Очередь сообщает хендлеру последнюю
-  попытку (`jobs.Job.LastAttempt`, единственное изменение
-  `internal/jobs`); на ней хендлер вместо ошибки пишет итог
-  (`store.FailTranscript`) и завершает джобу;
+- ошибка шага (`asr_submit`, `asr_poll`, `asr_result`, `vtt_render`: сеть,
+  5xx/4xx AssemblyAI, отказ хранилища) — обычный повтор очереди:
+  8 попыток с backoff 1 мин → 1 ч, ≈ 2 ч. Очередь сообщает хендлеру
+  последнюю попытку (`jobs.Job.LastAttempt`); на ней хендлер вместо
+  ошибки пишет итог (`store.FailTranscript`) и завершает джобу. Попытку,
+  оборванную остановкой worker'а по истечении `ShutdownGrace`, очередь
+  не засчитывает: причина отмены контекста хендлера —
+  `jobs.ErrInterrupted` (`context.Cause`), и на ней последняя попытка
+  итог не пишет, а возвращает ошибку — джоба вернётся в очередь;
+- потерянный вебхук: вместе с `submitted` ставится отложенная джоба
+  `asr_poll` (`jobs.EnqueueOnce`, через `store.ASRPollAfter` = 2 ч).
+  Если транскрипт к тому времени всё ещё `submitted`, она сама
+  запрашивает `GET /v2/transcript/{id}`: `completed`/`error` — тот же
+  переход, что от вебхука (`fetching` + `asr_result` одной транзакцией;
+  лишний GET — цена редкого пути), `queued`/`processing` — ошибка
+  и повтор с backoff, на последней попытке — итог, как выше. Принятый
+  вебхук снимает ждущую сверку (`jobs.Cancel`), запоздалая ничего
+  не делает. Вебхук на ещё неизвестный `external_id` получает 503,
+  и AssemblyAI повторяет доставку;
 - `status=error` у AssemblyAI — итог сразу, без повторов: та же запись
   упадёт так же. Повторная отправка — вручную;
 - итог: `transcripts.status=error`, причина в `transcripts.error`, урок
@@ -467,15 +483,18 @@ AssemblyAI v2 (сверено 2026-10-26): вебхук несёт только 
   остаётся `completed`, реплики видны вьюеру, VTT нет, причина в `error`;
   удачный перерендер её стирает;
 - ключ убрали при транскрипте в очереди — хендлеры зарегистрированы
-  и без ключа и сразу пишут итог «AssemblyAI не настроен».
+  и без ключа и сразу пишут итог «AssemblyAI не настроен»; `vtt_render`
+  проверяет для этого хранилище (без ключа его у ASR нет).
 **Последствия.** Причину видно запросом
 `SELECT lesson_id, status, error FROM transcripts WHERE error IS NOT NULL`.
 Ручной повтор транскрибации: `UPDATE transcripts SET status='queued',
-external_id=NULL, error=NULL WHERE lesson_id=…`, `DELETE FROM utterances`
-этого транскрипта, `UPDATE lessons SET status='processing'` и джоба
-`asr_submit` с `{"transcript_id": …}` (`INSERT INTO jobs`). Брошенные
-захваты (worker падал на каждой попытке) очередь хоронит, не вызывая
-хендлер, — такой урок остаётся в `processing`, как и прежде.
+external_id=NULL, error=NULL, vtt_s3_key=NULL WHERE lesson_id=…` (VTT
+допускается только у `completed`, CHECK `transcripts_vtt_after_completed`),
+`DELETE FROM utterances` этого транскрипта, `UPDATE lessons SET
+status='processing'` и джоба `asr_submit` с `{"transcript_id": …}`
+(`INSERT INTO jobs`). Брошенные захваты (worker падал на каждой попытке)
+очередь хоронит, не вызывая хендлер, — такой урок остаётся
+в `processing`, как и прежде.
 
 ## ADR-017 · 2026-10-26 · accepted — Лемматизация: morphy поверх Open English WordNet 2025
 

@@ -46,8 +46,11 @@ func (a *API) handleAssemblyAIWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	switch err := a.store.TranscriptWebhook(r.Context(), store.ProviderAssemblyAI, req.TranscriptID); {
 	case errors.Is(err, store.ErrNotFound):
-		logf("assemblyai webhook: транскрипт %s нам неизвестен", req.TranscriptID)
-		writeError(w, http.StatusNotFound, "not_found", "транскрипт не найден")
+		// Вебхук мог обогнать коммит external_id (worker пишет его после
+		// ответа AssemblyAI): 503, чтобы AssemblyAI повторил доставку.
+		// Совсем потерянный итог подберёт сверка asr_poll (ADR-016)
+		logf("assemblyai webhook: транскрипт %s пока неизвестен", req.TranscriptID)
+		writeError(w, http.StatusServiceUnavailable, "unknown_transcript", "транскрипт пока не найден")
 		return
 	case err != nil:
 		// 5xx — AssemblyAI повторит доставку

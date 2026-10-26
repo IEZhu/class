@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -446,6 +447,93 @@ func TestShutdownFinishesOrReleasesCurrentJob(t *testing.T) {
 			t.Fatalf("released job not reclaimed as attempt 1 (got %d)", attempt)
 		}
 	})
+}
+
+// Остановка на последней попытке: хендлер видит причину ErrInterrupted
+// и итог не подводит, а джоба возвращается в очередь без списания
+// попытки. Истёкший HandlerTimeout — не остановка: причина у него своя.
+func TestShutdownCutOfLastAttemptIsNotFinal(t *testing.T) {
+	pool := testDB(t)
+	id := enqueue(t, pool)
+	cfg := testConfig("stopping")
+	exec(t, pool, `UPDATE jobs SET attempts = $2 WHERE id = $1`, id, cfg.MaxAttempts-1)
+	cfg.ShutdownGrace = 100 * time.Millisecond
+	r := NewRunner(pool, cfg)
+	started := make(chan struct{})
+	var last bool
+	var cause error
+	r.Handle(testKind, func(ctx context.Context, job Job) error {
+		last = job.LastAttempt
+		close(started)
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		if job.LastAttempt && !errors.Is(cause, ErrInterrupted) {
+			return nil // итог подведён, как у transcriptStep (ADR-016)
+		}
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	<-started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after shutdown")
+	}
+	if !last || !errors.Is(cause, ErrInterrupted) {
+		t.Fatalf("last attempt %v, cause %v; want the last attempt cut with ErrInterrupted", last, cause)
+	}
+	if j := row(t, pool, id); j.attempts != cfg.MaxAttempts-1 || j.locked || j.dead {
+		t.Fatalf("cut last attempt: %+v, want it back in the queue unspent", j)
+	}
+
+	cfg.HandlerTimeout = 50 * time.Millisecond
+	r = NewRunner(pool, cfg)
+	r.Handle(testKind, func(ctx context.Context, _ Job) error {
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		return ctx.Err()
+	})
+	runOnce(t, r)
+	if !errors.Is(cause, context.DeadlineExceeded) {
+		t.Fatalf("handler timeout cause %v, want DeadlineExceeded", cause)
+	}
+	if j := row(t, pool, id); !j.dead {
+		t.Fatalf("timed out last attempt: %+v, want a dead job", j)
+	}
+}
+
+// Cancel снимает только ждущую джобу своего payload: взятая в работу,
+// мёртвая и чужая остаются.
+func TestCancelRemovesOnlyWaitingJob(t *testing.T) {
+	pool := testDB(t)
+	ctx := context.Background()
+	payload := map[string]int{"n": 1}
+	for _, delay := range []time.Duration{time.Hour, 0} {
+		if err := EnqueueOnce(ctx, pool, testKind, payload, delay); err != nil {
+			t.Fatal(err)
+		}
+		if err := Cancel(ctx, pool, testKind, payload); err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t, pool); n != 0 {
+			t.Fatalf("%d jobs after Cancel, want none", n)
+		}
+	}
+	other := enqueue(t, pool) // другой payload — другая сущность
+	exec(t, pool, `UPDATE jobs SET payload = '{"n": 2}' WHERE id = $1`, other)
+	claimed := enqueue(t, pool)
+	exec(t, pool, `UPDATE jobs SET locked_at = now(), locked_by = 'w' WHERE id = $1`, claimed)
+	dead := enqueue(t, pool)
+	exec(t, pool, `UPDATE jobs SET failed_at = now() WHERE id = $1`, dead)
+	if err := Cancel(ctx, pool, testKind, payload); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, pool); n != 3 {
+		t.Fatalf("%d jobs left, want the other, claimed and dead ones", n)
+	}
 }
 
 // EnqueueOnce: частые события одной сущности — одна ждущая джоба, срок

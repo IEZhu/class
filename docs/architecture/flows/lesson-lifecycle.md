@@ -43,7 +43,8 @@ stateDiagram-v2
    presigned GET на запись → AssemblyAI (`speaker_labels: true`,
    `language_code: en`, webhook). *(этапы 1–2; без `ASSEMBLYAI_API_KEY`
    `recording_ready` сразу ставит `done`, ADR-013, ADR-015)*
-7. Webhook AssemblyAI → джоба `asr_result` сохраняет `utterances` → джоба
+7. Webhook AssemblyAI (потерян — через 2 ч сверка `asr_poll` спросит итог
+   сама, ADR-016) → джоба `asr_result` сохраняет `utterances` → джоба
    `vtt_render` рендерит WebVTT (`<v A>…`) в S3 → `status=done`. Сбой
    транскрибации — урок всё равно `done`, транскрипт `error` (ADR-016).
    *(этап 2)*

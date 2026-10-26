@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -10,18 +11,24 @@ import (
 )
 
 // Транскрипт урока (S2-1…S2-3, ADR-015): recording_ready → QueueTranscript
-// (джоба asr_submit) → MarkTranscriptSubmitted → вебхук провайдера
-// TranscriptWebhook (asr_result) → SaveUtterances (vtt_render) →
-// FinishTranscriptVTT. Каждый шаг сдвигает статус условно, поэтому
-// повтор джобы или доставки ничего не дублирует; тупик — FailTranscript
-// (ADR-016).
+// (джоба asr_submit) → MarkTranscriptSubmitted (отложенная asr_poll) →
+// вебхук провайдера или сверка asr_poll: TranscriptWebhook (asr_result) →
+// SaveUtterances (vtt_render) → FinishTranscriptVTT. Каждый шаг сдвигает
+// статус условно, поэтому повтор джобы или доставки ничего не дублирует;
+// тупик — FailTranscript (ADR-016).
 
 // Джобы транскрибации; payload у всех — TranscriptJob.
 const (
 	JobASRSubmit = "asr_submit"
+	JobASRPoll   = "asr_poll"
 	JobASRResult = "asr_result"
 	JobVTTRender = "vtt_render"
 )
+
+// ASRPollAfter — через столько после отправки asr_poll сам спрашивает
+// провайдера об итоге, если вебхук так и не пришёл (ADR-016). Обычно
+// вебхук успевает раньше и снимает сверку.
+const ASRPollAfter = 2 * time.Hour
 
 // TranscriptJob — payload джоб транскрибации.
 type TranscriptJob struct {
@@ -110,18 +117,35 @@ func (s *Store) TranscriptByID(ctx context.Context, id int64) (*Transcript, erro
 }
 
 // MarkTranscriptSubmitted — провайдер принял запись и выдал свой id:
-// по нему придёт вебхук. Повтор ничего не меняет.
+// по нему придёт вебхук, а на случай его потери через ASRPollAfter
+// встанет сверка asr_poll — одной транзакцией. Повтор ничего не меняет.
 func (s *Store) MarkTranscriptSubmitted(ctx context.Context, id int64, externalID string) error {
-	_, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE transcripts SET status = 'submitted', external_id = $2
 		 WHERE id = $1 AND status = 'queued'`, id, externalID)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	if err := jobs.EnqueueOnce(ctx, tx, JobASRPoll, TranscriptJob{TranscriptID: id}, ASRPollAfter); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-// TranscriptWebhook — провайдер сообщил итог: транскрипт уходит в fetching
-// вместе с джобой asr_result, которая заберёт результат. Повторная
-// доставка (транскрипт уже не submitted) ничего не меняет и джобу не
-// ставит. ErrNotFound — такого транскрипта у нас нет.
+// TranscriptWebhook — провайдер сообщил итог (вебхуком или в ответ
+// на сверку asr_poll): транскрипт уходит в fetching вместе с джобой
+// asr_result, которая заберёт результат, а ждущая сверка снимается.
+// Повторная доставка (транскрипт уже не submitted) ничего не меняет
+// и джобу не ставит. ErrNotFound — такого транскрипта у нас нет.
 func (s *Store) TranscriptWebhook(ctx context.Context, provider, externalID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -150,6 +174,9 @@ func (s *Store) TranscriptWebhook(ctx context.Context, provider, externalID stri
 		return err
 	}
 	if _, err := jobs.Enqueue(ctx, tx, JobASRResult, TranscriptJob{TranscriptID: id}); err != nil {
+		return err
+	}
+	if err := jobs.Cancel(ctx, tx, JobASRPoll, TranscriptJob{TranscriptID: id}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

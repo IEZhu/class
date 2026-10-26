@@ -186,9 +186,10 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   `{"lesson_id"}`).
 - `backend/internal/jobs/jobs.go` — `EnqueueOnce`: одна ждущая джоба
   на kind+payload, срок только приближается, ретрай не подтягивается.
-- `backend/internal/storage/s3.go` — `PutObject` (обычный подписанный PUT,
-  без необязательной контрольной суммы), `WhiteboardKey` →
-  `whiteboards/{lesson_id}.json`.
+- `backend/internal/storage/s3.go` — `PutObject` (обычный подписанный PUT
+  с `ContentLength`, без необязательной контрольной суммы; после ревью
+  волны A — единственный хелпер записи объекта, им же пишется VTT S2-3),
+  `WhiteboardKey` → `whiteboards/{lesson_id}.json`.
 - `backend/internal/httpapi/whiteboard.go` — `GET /lessons/{id}/whiteboard`,
   `GET` и `PUT /lessons/{id}/whiteboard/scene` (предел 1 MiB),
   `GET /whiteboard/auth` для forward_auth; `webhooks.go` — `room_finished`

@@ -8,7 +8,7 @@ BEGIN;
 ALTER TABLE lessons DROP CONSTRAINT lessons_transcript_fk;
 UPDATE lessons SET status = 'done' WHERE status = 'processing' AND transcript_id IS NOT NULL;
 UPDATE lessons SET transcript_id = NULL WHERE transcript_id IS NOT NULL;
-DELETE FROM jobs WHERE kind IN ('asr_submit', 'asr_result', 'vtt_render');
+DELETE FROM jobs WHERE kind IN ('asr_submit', 'asr_poll', 'asr_result', 'vtt_render');
 DROP TABLE utterances;
 DROP TABLE transcripts;
 

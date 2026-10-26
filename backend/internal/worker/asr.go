@@ -61,6 +61,31 @@ func asrSubmit(st *store.Store, asr ASR) jobs.Handler {
 	})
 }
 
+// asrPoll — сверка на случай потерянного вебхука (ADR-016): через
+// store.ASRPollAfter транскрипт всё ещё submitted — спрашиваем AssemblyAI
+// сами. Готов — тот же переход, что от вебхука (fetching и asr_result);
+// ещё в работе — ошибка, и очередь повторит сверку со своим backoff.
+// Дошедший вебхук снимает ждущую сверку, а запоздалую делает пустой.
+func asrPoll(st *store.Store, asr ASR) jobs.Handler {
+	return transcriptStep(st, func(ctx context.Context, t *store.Transcript) error {
+		if t.Status != store.TranscriptSubmitted {
+			return nil
+		}
+		if asr.Client == nil {
+			return st.FailTranscript(ctx, t.ID, errASRNotConfigured.Error())
+		}
+		res, err := asr.Client.Transcript(ctx, t.ExternalID)
+		if err != nil {
+			return err
+		}
+		if res.Status != assemblyai.StatusCompleted && res.Status != assemblyai.StatusError {
+			return fmt.Errorf("AssemblyAI: транскрипт %s ещё в статусе %q", t.ExternalID, res.Status)
+		}
+		log.Printf("worker: вебхук AssemblyAI по уроку %d не пришёл, итог %s взят сверкой", t.LessonID, res.Status)
+		return st.TranscriptWebhook(ctx, store.ProviderAssemblyAI, t.ExternalID)
+	})
+}
+
 // asrResult — S2-2: вебхук сообщил итог, забираем реплики. Ошибка у
 // AssemblyAI — итог, а не повод повторять: та же запись упадёт так же
 // (ADR-016).
@@ -96,6 +121,9 @@ func vttRender(st *store.Store, asr ASR) jobs.Handler {
 		if t.Status != store.TranscriptCompleted {
 			return nil
 		}
+		if asr.Storage == nil {
+			return st.FailTranscript(ctx, t.ID, errASRNotConfigured.Error())
+		}
 		utts, err := st.Utterances(ctx, t.ID)
 		if err != nil {
 			return err
@@ -105,7 +133,7 @@ func vttRender(st *store.Store, asr ASR) jobs.Handler {
 			cues[i] = webvtt.Cue{StartMS: u.StartMS, EndMS: u.EndMS, Voice: u.SpeakerLabel, Text: u.Text}
 		}
 		key := storage.TranscriptKey(t.LessonID)
-		if err := asr.Storage.Put(ctx, key, webvtt.ContentType, webvtt.Render(cues)); err != nil {
+		if err := asr.Storage.PutObject(ctx, key, webvtt.ContentType, webvtt.Render(cues)); err != nil {
 			return err
 		}
 		return st.FinishTranscriptVTT(ctx, t.ID, key)
@@ -116,7 +144,9 @@ func vttRender(st *store.Store, asr ASR) jobs.Handler {
 // транскрипта и исход ошибки. Ошибка шага — повтор через очередь с её
 // backoff, а на последней попытке транскрибация сдаётся (ADR-016):
 // транскрипт error, урок done. Иначе джоба умерла бы, а урок навсегда
-// остался бы в processing.
+// остался бы в processing. Последнюю попытку, прерванную остановкой
+// worker'а (jobs.ErrInterrupted), очередь не засчитывает и вернёт джобу:
+// сдаваться рано.
 func transcriptStep(st *store.Store, step func(context.Context, *store.Transcript) error) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p store.TranscriptJob
@@ -131,7 +161,7 @@ func transcriptStep(st *store.Store, step func(context.Context, *store.Transcrip
 			return err
 		}
 		err = step(ctx, t)
-		if err == nil || !job.LastAttempt {
+		if err == nil || !job.LastAttempt || errors.Is(context.Cause(ctx), jobs.ErrInterrupted) {
 			return err
 		}
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failTimeout)
