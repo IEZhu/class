@@ -41,11 +41,11 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 		FileResults: []*livekit.FileInfo{{Filename: key, Size: 1 << 20}},
 	}}
 	h := a.Router()
-	deliver := func() {
+	deliver := func(want int) {
 		t.Helper()
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, signedWebhook(t, event))
-		expectStatus(t, w, http.StatusOK)
+		expectStatus(t, w, want)
 	}
 	expect := func(status, recording string, queued int) {
 		t.Helper()
@@ -68,18 +68,19 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	}
 
 	// Без очереди транзакция откатывается целиком: урок не уходит
-	// в processing без джобы, которая его оттуда выведет
+	// в processing без джобы, которая его оттуда выведет, а LiveKit
+	// получает 503 и повторит доставку
 	if _, err := conn.Exec(ctx, `ALTER TABLE jobs RENAME TO jobs_offline`); err != nil {
 		t.Fatal(err)
 	}
-	deliver()
+	deliver(http.StatusServiceUnavailable)
 	if _, err := conn.Exec(ctx, `ALTER TABLE jobs_offline RENAME TO jobs`); err != nil {
 		t.Fatal(err)
 	}
 	expect("live", "", 0)
 
-	deliver()
-	deliver() // повторная доставка
+	deliver(http.StatusOK) // повтор LiveKit после восстановления
+	deliver(http.StatusOK) // и ещё одна доставка того же события
 	expect("processing", key, 1)
 
 	runner := jobs.NewRunner(a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
@@ -94,7 +95,7 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	runJob()
 	expect("done", key, 0)
 
-	deliver() // запоздалая доставка не возвращает урок в processing
+	deliver(http.StatusOK) // запоздалая доставка не возвращает урок в processing
 	expect("done", key, 0)
 
 	// at-least-once: та же джоба ещё раз выполняется без ошибки и без перемен

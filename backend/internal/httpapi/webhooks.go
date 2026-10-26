@@ -26,8 +26,9 @@ const (
 // и записи. Подпись обязательна (04-api.md): без неё кто угодно мог бы
 // подменить путь к записи урока.
 //
-// Обработчик только меняет состояние; тяжёлой работы здесь нет — она уедет
-// в worker с появлением очереди (S1-2).
+// Обработчик только меняет состояние урока и ставит джобы в jobs; тяжёлая
+// работа — в worker (S1-2, ADR-013). Исключение — запуск Egress: это
+// синхронный вызов LiveKit, пока строка урока занята (ADR-012).
 func (a *API) handleLiveKitWebhook(w http.ResponseWriter, r *http.Request) {
 	// Без URL запись не запустить: урок ушёл бы в попытку Egress по пустому
 	// адресу. Граница та же, что у комнаты (handleRoomToken).
@@ -53,7 +54,11 @@ func (a *API) handleLiveKitWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case eventEgressEnded:
-		a.onEgressEnded(r.Context(), event)
+		if err := a.onEgressEnded(r.Context(), event); err != nil {
+			// Путь записи не сохранён — повтор доставки сохранит его заново
+			writeError(w, http.StatusServiceUnavailable, "recording_not_saved", "запись не сохранена")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -97,22 +102,25 @@ func (a *API) startRecording(ctx context.Context, event *livekit.WebhookEvent) e
 }
 
 // onEgressEnded — запись дописана: сохраняем путь и двигаем статус.
-func (a *API) onEgressEnded(ctx context.Context, event *livekit.WebhookEvent) {
+// Ошибка возвращается, только когда путь не сохранился и повтор доставки
+// его сохранит; чужую комнату, сбой записи, пустой результат и уже
+// принятую запись повторять незачем.
+func (a *API) onEgressEnded(ctx context.Context, event *livekit.WebhookEvent) error {
 	info := event.EgressInfo
 	if info == nil {
-		return
+		return nil
 	}
 	lessonID, ok := lessonIDFromRoom(info.RoomName)
 	if !ok {
-		return
+		return nil
 	}
 	if info.Status == livekit.EgressStatus_EGRESS_FAILED {
 		logf("egress_ended: урок %d, запись не удалась: %s", lessonID, info.Error)
-		return
+		return nil
 	}
 	if len(info.FileResults) == 0 {
 		logf("egress_ended: урок %d, файлов в результате нет", lessonID)
-		return
+		return nil
 	}
 
 	// Filename — путь внутри бакета, ровно тот, что мы задали в Filepath.
@@ -123,12 +131,15 @@ func (a *API) onEgressEnded(ctx context.Context, event *livekit.WebhookEvent) {
 	switch err := a.store.FinishLessonRecording(ctx, lessonID, key); {
 	case errors.Is(err, store.ErrNotFound):
 		// Повторная доставка egress_ended: запись уже принята
-		return
+		return nil
 	case err != nil:
+		// Транзакция откатилась целиком; условие на статус делает повтор
+		// доставки безопасным
 		logf("egress_ended: урок %d: %v", lessonID, err)
-		return
+		return err
 	}
 	logf("egress_ended: урок %d, запись %s (%d байт)", lessonID, key, info.FileResults[0].Size)
+	return nil
 }
 
 // egressRequest — что и куда писать. Учётные данные хранилища уходят
