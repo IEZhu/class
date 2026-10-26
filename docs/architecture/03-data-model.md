@@ -77,7 +77,11 @@ tatoeba_sentences(id, lang, text, owner_skill smallint)
 tatoeba_links(sentence_id, translation_id)
 
 -- практика
-generated_texts(id, group_id, level, genre, body_md, target_term_ids int[], model, created_at)
+-- текст LLM по целевым словам (0017, ADR-030): только прошедший валидатор
+generated_texts(id, user_id, level, genre, max_words, target_lemmas text[] /*= terms.lemma*/,
+                body /*абзацы без разметки*/, word_count, coverage, occurrences jsonb,
+                unknown_share, attempts, provider, model, created_at)
+llm_usage(user_id, day /*UTC*/, requests)   -- суточный лимит генераций (ADR-029)
 cloze_tests(id, source /*lesson|generated_text*/, source_id, term_ids int[])
 cloze_items(test_id, idx, sentence, answer_term_id, distractor_term_ids int[])
 cloze_attempts(id, test_id, user_id, answers jsonb, score, finished_at)
@@ -101,7 +105,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | user_terms, lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
-| tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-4, S5-6 |
+| tatoeba_sentences, tatoeba_links | 5 | S5-4 |
+| generated_texts, llm_usage (миграция `0017_generated_texts`) | 5 | S5-6 |
 
 ## Инварианты модели
 
