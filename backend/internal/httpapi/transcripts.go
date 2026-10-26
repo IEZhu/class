@@ -4,7 +4,10 @@ import (
 	"crypto/subtle"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/IEZhu/class/backend/internal/assemblyai"
 	"github.com/IEZhu/class/backend/internal/storage"
@@ -66,6 +69,15 @@ type utteranceResponse struct {
 	StartMS int64  `json:"start_ms"`
 	EndMS   int64  `json:"end_ms"`
 	Text    string `json:"text"`
+	// null — текст как его распознал ASR; иначе время правки (S2-4)
+	EditedAt *time.Time `json:"edited_at"`
+}
+
+func toUtteranceResponse(u store.Utterance) utteranceResponse {
+	return utteranceResponse{
+		Idx: u.Idx, SpeakerLabel: u.SpeakerLabel, UserID: u.UserID,
+		StartMS: u.StartMS, EndMS: u.EndMS, Text: u.Text, EditedAt: u.EditedAt,
+	}
 }
 
 type transcriptResponse struct {
@@ -112,10 +124,7 @@ func (a *API) handleGetTranscript(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := transcriptResponse{Status: t.Status, Utterances: make([]utteranceResponse, 0, len(utts))}
 	for _, it := range utts {
-		resp.Utterances = append(resp.Utterances, utteranceResponse{
-			Idx: it.Idx, SpeakerLabel: it.SpeakerLabel, UserID: it.UserID,
-			StartMS: it.StartMS, EndMS: it.EndMS, Text: it.Text,
-		})
+		resp.Utterances = append(resp.Utterances, toUtteranceResponse(it))
 	}
 	if t.VTTKey != "" && a.storage != nil {
 		url, err := a.storage.PresignGet(r.Context(), t.VTTKey, storage.PresignTTL)
@@ -127,4 +136,81 @@ func (a *API) handleGetTranscript(w http.ResponseWriter, r *http.Request) {
 		resp.VTTURL, resp.VTTExpiresAt = &url, &expires
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// maxUtteranceRunes — потолок текста реплики: с запасом на долгий монолог
+// одного спикера (около получаса речи).
+const maxUtteranceRunes = 20000
+
+// handleEditUtterance — teacher урока исправляет ошибку ASR в реплике
+// (S2-4, ADR-025). Пробелы схлопываются: реплика — одна строка речи,
+// VTT всё равно сводит переводы строк в пробел. Тот же текст — 200 без
+// новой отметки правки и без перерендера VTT.
+func (a *API) handleEditUtterance(w http.ResponseWriter, r *http.Request) {
+	lessonID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	idx, err := strconv.Atoi(r.PathValue("idx"))
+	if err != nil || idx < 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "некорректный idx в пути")
+		return
+	}
+	if !a.transcriptOwner(w, r, lessonID) {
+		return
+	}
+	var req struct {
+		Text *string `json:"text"`
+	}
+	if err := decodeBody(w, r, &req); err != nil {
+		badBody(w, err, "невалидный JSON")
+		return
+	}
+	if req.Text == nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "нужен text")
+		return
+	}
+	text := strings.Join(strings.Fields(*req.Text), " ")
+	switch {
+	case text == "":
+		writeError(w, http.StatusBadRequest, "bad_request", "текст реплики пуст")
+		return
+	case strings.ContainsRune(text, 0):
+		// Postgres не принимает NUL в text, а JSON его пропускает (\u0000)
+		writeError(w, http.StatusBadRequest, "bad_request", "в тексте недопустимый символ")
+		return
+	case utf8.RuneCountInString(text) > maxUtteranceRunes:
+		writeError(w, http.StatusBadRequest, "bad_request",
+			"текст реплики длиннее "+strconv.Itoa(maxUtteranceRunes)+" символов")
+		return
+	}
+	u, err := a.store.EditUtterance(r.Context(), lessonID, idx, text, userFrom(r.Context()).ID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no_utterance", "такой реплики в транскрипте урока нет")
+		return
+	}
+	if err != nil {
+		internalError(w, "edit utterance", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toUtteranceResponse(*u))
+}
+
+// transcriptOwner — правит транскрипт только teacher урока: урока нет —
+// 404, чужой урок — 403. false — ответ уже записан.
+func (a *API) transcriptOwner(w http.ResponseWriter, r *http.Request, lessonID int64) bool {
+	teacherID, err := a.store.LessonTeacherID(r.Context(), lessonID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "урок не найден")
+		return false
+	}
+	if err != nil {
+		internalError(w, "load lesson for transcript", err)
+		return false
+	}
+	if userFrom(r.Context()).ID != teacherID {
+		writeError(w, http.StatusForbidden, "forbidden", "транскрипт правит teacher этого урока")
+		return false
+	}
+	return true
 }
