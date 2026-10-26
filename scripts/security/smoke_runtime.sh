@@ -15,6 +15,12 @@ case "$service" in
       exit 1
     fi
     grep -Fq 'worker: DATABASE_URL is required' <<<"$output"
+    # S3-4: разовый импорт словаря живёт в том же образе и без базы не стартует
+    if output=$(docker run --rm --network none --entrypoint dictimport "$image" -source /dev/null 2>&1); then
+      echo 'dictimport started without DATABASE_URL' >&2
+      exit 1
+    fi
+    grep -Fq 'dictimport: DATABASE_URL is required' <<<"$output"
     ;;
   web)
     docker run --rm --network none --entrypoint sh "$image" -c 'test -x /usr/bin/node && ! command -v npm && ! command -v yarn'
