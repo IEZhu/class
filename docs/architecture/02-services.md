@@ -14,7 +14,7 @@
 | api | Go | 50–150 MB | 0 | REST/JSON API, auth (sessions/JWT), FSRS (go-fsrs), выдача presigned URL, LiveKit tokens |
 | postgres | postgres:16 | 300–500 MB | 0 | всё состояние + full-text search субтитров/текстов |
 | worker | Go | 100–300 MB | 1 | очереди: календарь, ASR-джобы, импорт Tatoeba, LLM-генерация, VTT-рендер |
-| harvester | Go + yt-dlp (target `harvester`) | 50–150 MB | 5 | сборщик субтитров: тот же worker с `WORKER_ROLE=harvester`, профиль compose `harvester` — включается явно ([ADR-022](decisions.md)) |
+| harvester | Go + yt-dlp (target `harvester`) | 50–150 MB (оценка, не замерено; потолок 512 MB, 1 CPU до замера S5-2) | 5 | сборщик субтитров: тот же worker с `WORKER_ROLE=harvester`, профиль compose `harvester` — включается явно; своя роль базы только с его таблицами, корень только на чтение ([ADR-022](decisions.md)) |
 | libretranslate | libretranslate:v1.9.6 (digest) | 1–1.5 GB (замер ~380 MB) | 3 | перевод en↔ru; `LT_LOAD_ONLY=en,ru`, `LT_THREADS=1`; профиль `translate`, сеть `translate` (internal) — ADR-018 |
 | whiteboard | excalidraw/excalidraw-room (профиль `whiteboard`) | ~15 MB | 3 | ретранслятор доски: пересылает зашифрованные сообщения участников комнаты `lesson-{id}`; редактор — в web, сцена — в api/Postgres, снимки — в S3 (ADR-020) |
 | redis | redis:7 | 50 MB | опц. | кэш переводов, rate-limit; очереди держим в PG (SKIP LOCKED) — redis не зависимость |

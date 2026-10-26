@@ -22,10 +22,12 @@ Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socke
                           GOOGLE_TOKEN_KEY (S1-1), LIVEKIT_*, S3_*,
                           BACKUP_S3_* (ADR-014)
                        2: ASSEMBLYAI_*
-                       5: HARVESTER_COOKIES_FILE (ADR-022), LLM_PROVIDER, LLM_API_KEY
+                       5: HARVESTER_COOKIES_FILE, HARVESTER_DATABASE_URL (ADR-022),
+                          LLM_PROVIDER, LLM_API_KEY
 backup-pg.sh         ночной pg_dump | zstd → S3, retention 7/30 (S1-7)
 restore-pg.sh        восстановление из копии в S3 (S1-7)
 backup-lib.sh        общая часть двух скриптов выше
+harvester-db-role.sh своя роль базы сборщика субтитров (S5-2, ADR-022)
 systemd/             юнит и таймер ночного бэкапа (S1-7)
 ```
 
@@ -219,8 +221,17 @@ worker больше нет строки «Google Calendar выключен»; п
 под профилем compose: он ходит в YouTube с IP стенда, поэтому `make up`
 его не поднимает.
 
+Сборщик запускает yt-dlp, который разбирает ответы YouTube в том же
+контейнере и видит его окружение, поэтому DSN ему — своей роли только
+с таблицами сборщика и очереди, а не владельца базы. Перед первым
+запуском: в `deploy/.env` — `HARVESTER_DATABASE_URL` (шаблон и пароль
+`openssl rand -hex 32` — в `.env.example`), затем скрипт роли; он
+идемпотентен, повтор обновляет пароль и сводит права к списку в скрипте.
+Пустой `HARVESTER_DATABASE_URL` — сборщик под владельцем, как до ревью.
+
 ```bash
 make migrate    # миграция 0011_subtitles: таблицы и seed каналов
+deploy/harvester-db-role.sh   # роль из HARVESTER_DATABASE_URL
 docker compose -f deploy/docker-compose.yml --profile harvester up -d --build harvester
 docker compose -f deploy/docker-compose.yml logs -f harvester
 docker compose -f deploy/docker-compose.yml stop harvester    # выключить
@@ -228,8 +239,12 @@ docker compose -f deploy/docker-compose.yml stop harvester    # выключит
 
 Начнёт YouTube проверять «вы не бот» — выгрузить cookies (формат Netscape)
 и указать путь к файлу на хосте в `HARVESTER_COOKIES_FILE`, затем
-пересоздать сервис. Блокирует IP VPS — остановить сервис и запустить тот
-же образ с другой машины (команды — в потоке). Состояние: `make psql`,
+пересоздать сервис. Файл cookies должен читаться пользователем контейнера
+uid 10001: `chown 10001 <файл> && chmod 600 <файл>`; иначе сборщик пишет
+«yt-dlp не запускается: cookies: …» и ждёт, не тратя попытки видео.
+Сервис работает с корнем только на чтение, без capabilities, с потолком
+512 MB и 1 CPU до замера S5-2. Блокирует IP VPS — остановить сервис
+и запустить тот же образ с другой машины (команды — в потоке). Состояние: `make psql`,
 затем `SELECT title, polled_at, last_error FROM subtitle_sources;` и
 `SELECT subtitles, count(*) FROM videos GROUP BY 1;`.
 

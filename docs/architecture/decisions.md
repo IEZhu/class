@@ -788,6 +788,18 @@ RSS-фиды, yt-dlp в темпе 1 видео / 15–30 с, manual > auto, р�
   сервис `harvester` под профилем `harvester`: на VPS он включается явно,
   потому что ходит в YouTube с IP стенда. С другой машины запускается тот же
   образ с `DATABASE_URL` базы стенда (доступ — VPN/Tailscale).
+- **Права сборщика.** yt-dlp разбирает ответы YouTube в контейнере worker'а
+  и прочтёт его окружение (`/proc/1/environ` того же uid), поэтому DSN
+  сборщику — своей роли: `deploy/harvester-db-role.sh` (идемпотентный,
+  запускает владелец стенда) создаёт её с `SELECT, INSERT, UPDATE, DELETE`
+  только на `subtitle_sources`, `videos`, `subtitle_segments`, `jobs`,
+  `job_schedules`; имя и пароль — из `HARVESTER_DATABASE_URL` в
+  `deploy/.env`, в репозиторий и в аргументы процессов пароль не попадает.
+  compose отдаёт сервису `harvester` в `DATABASE_URL` этот DSN, а пока он
+  пуст — DSN владельца, как раньше; с другой машины передают тот же DSN.
+  Сервис — `read_only` с tmpfs `/tmp` и `HOME` (`/home/app`, кэш yt-dlp),
+  `cap_drop: [ALL]`, `no-new-privileges`, потолки `mem_limit: 512m`,
+  `cpus: 1` до замера S5-2.
 - **yt-dlp** и **yt-dlp-ejs** (решатель JS-задач, которые YouTube ставит
   клиенту) — колёса PyPI, закреплённые версией и sha256 в
   `backend/ytdlp/requirements.txt`, ставятся `pip --require-hashes`
@@ -798,8 +810,10 @@ RSS-фиды, yt-dlp в темпе 1 видео / 15–30 с, manual > auto, р�
   по вики yt-dlp задача решается минутами (вероятно, поэтому единственный
   пробный вызов с VPS упёрся в таймаут 2 мин); `quickjs` — ложное
   срабатывание сканера из-за смены схемы версий пакета. yt-dlp
-  запускается с урезанным окружением (PATH, HOME, локаль, прокси):
-  `DATABASE_URL` ему не виден.
+  запускается с урезанным окружением (PATH, HOME, локаль, прокси) — лишь
+  слой защиты: процесс того же uid прочтёт окружение worker'а из `/proc`.
+  Настоящие барьеры — `node --permission`, закреплённое колесо и своя роль
+  базы (выше).
 - **Вызов** — один на видео:
   `--skip-download --write-subs --write-auto-subs --sub-langs en --sub-format vtt --write-info-json`.
   Для одного языка yt-dlp сам берёт ручные субтитры и только без них —
@@ -828,7 +842,10 @@ RSS-фиды, yt-dlp в темпе 1 видео / 15–30 с, manual > auto, р�
 - **Cookies** — по необходимости: `HARVESTER_COOKIES` (путь в контейнере),
   в compose — файл хоста `HARVESTER_COOKIES_FILE`; yt-dlp получает копию
   в каталоге вызова (он дописывает jar при выходе, а оригинал смонтирован
-  только на чтение). Пустой файл — как без cookies.
+  только на чтение). Пустой файл — как без cookies. Файл должен читаться
+  uid 10001 контейнера; не читается (нет прав, на хосте нет файла и docker
+  смонтировал каталог) — это `ErrNoRunner`, беда окружения: джоба падает
+  и повторяется, попытки видео не тратятся.
 - **Сверх модели данных**: `subtitle_sources.polled_at/last_error/created_at`,
   `videos.source_id/published_at/subtitles/harvest_attempts/harvest_error/harvested_at`.
 - **S5-3 не делается.** Открытого дампа транскриптов TED с таймкодами,

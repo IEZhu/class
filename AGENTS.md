@@ -49,7 +49,9 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
   goes straight to `done` without a transcript; ADR-015), `COMPOSE_PROFILES=whiteboard` with
   `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503),
-  `HARVESTER_COOKIES_FILE` (YouTube cookies for the `harvester` profile, ADR-022). The api also
+  `HARVESTER_COOKIES_FILE` (YouTube cookies for the `harvester` profile, readable by uid 10001),
+  `HARVESTER_DATABASE_URL` (the harvester's own least-privilege role, created by
+  `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022). The api also
   reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
   `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
   `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots wait in the queue without storage), plus `DOMAIN` and

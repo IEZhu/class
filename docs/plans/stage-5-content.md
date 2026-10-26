@@ -130,11 +130,25 @@ LLM с контекстом предложения — **закрывает до
 - Окружение: в контейнере `WORKER_ROLE`, `HARVESTER_COOKIES` (путь к cookies;
   пусто или пустой файл — без cookies); новый ключ `deploy/.env` —
   `HARVESTER_COOKIES_FILE` (файл на хосте, по умолчанию `/dev/null`).
+  Нечитаемый файл cookies — `ErrNoRunner`: попытки видео не тратятся.
+- Правки ревью волны A (ADR-022): ключ `deploy/.env`
+  `HARVESTER_DATABASE_URL` — DSN своей роли сборщика, compose отдаёт его
+  в `DATABASE_URL` (пусто — DSN владельца); роль создаёт идемпотентный
+  `deploy/harvester-db-role.sh` (только `subtitle_sources`, `videos`,
+  `subtitle_segments`, `jobs`, `job_schedules`). Проверено на одноразовом
+  Postgres 16 с миграциями 0001–0013: два запуска подряд, роли закрыты
+  `users`, `sessions`, `lessons`, `transcripts`, а настоящий worker
+  с `WORKER_ROLE=harvester` под ней поставил джобы расписания, собрал
+  видео поддельным yt-dlp и записал сбой второго. Сервис `harvester` —
+  `read_only`, tmpfs `/tmp` и `/home/app`, `cap_drop: [ALL]`,
+  `no-new-privileges`, `mem_limit: 512m`, `cpus: 1` (потолки до замера);
+  образ под этими флагами запускает yt-dlp и Node.js.
 - Тесты: `backend/internal/harvester/*_test.go` (VTT, RSS, темп и backoff
   на поддельных часах, `YTDLP` поверх `testdata/fake-yt-dlp`),
   `backend/internal/jobs/schedule_test.go`,
   `backend/internal/httpapi/subtitles_test.go` (миграция, FTS, обе джобы
-  на общей тестовой базе). Харнесс тестовой базы: накат миграций
+  на общей тестовой базе; нечитаемые cookies не трогают `harvest_attempts`).
+  Харнесс тестовой базы: накат миграций
   сериализован advisory-блокировкой — параллельные пакеты тестов падали
   на одновременном `CREATE EXTENSION pgcrypto`.
 - **Не подтверждено живьём.** Единственный пробный вызов с VPS (видео TED
