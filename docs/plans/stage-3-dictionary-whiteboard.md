@@ -218,6 +218,68 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   со снимком. Ретранслятор занимает ~12 MiB RAM.
 - Долг D-11: образ ретранслятора вне блокирующего скана.
 
+### S3-1 `<ClickableText>` (2026-10-26)
+
+- Решение — [ADR-026](../architecture/decisions.md): токенизация в
+  браузере, леммы и статусы — от api.
+- `web/lib/tokenize.ts` — `tokenize` (слова и всё между ними, склейка
+  токенов = исходный текст), `wordKey`, `uniqueKeys`, `sentenceAround`
+  (`context_sentence` ≤ 1000 символов); `web/lib/term-status.ts` —
+  `TermStatuses` (кэш статусов на вкладку, пачки lookup по 2000 слов),
+  `TermStatus`, `STATUS_LABELS`. Тесты — `web/lib/tokenize.test.ts`,
+  `web/lib/term-status.test.ts`, `npm test` (`node --test`, шаг web
+  в `.github/workflows/ci.yml`).
+- `web/app/clickable-text.tsx` — `ClickableText` (по умолчанию) и
+  `ClickableTextScope` (`lessonId`, `dictionary`); попап — лемма и форма,
+  перевод, статус, дефиниции с подписью «Wiktionary, CC BY-SA», примеры
+  `examples[{text, translation}]`, если есть. `web/app/term-status-control.tsx`
+  — `TermStatusControl` и общий кэш `termStatuses`.
+- Обёрнуты: тексты материалов и домашки (`body_md`) на странице урока —
+  её видят и гости события. Контекст урока —
+  `web/app/lesson/[id]/layout.tsx` (раскраска и статус — у студента).
+- Для S2-4: реплику рендерить `<ClickableText text={u.text} />` в
+  `UtteranceText` — layout урока уже даёт `lesson_id` и раскраску.
+- Для S3-7: клик на странице урока уходит в `POST /terms/click` с
+  `lesson_id`, api проверяет урок в `checkClickLesson` — запись
+  кандидата `source='click'` добавляется там же, web менять не нужно.
+- Проверено в браузере (Chromium, Playwright, одноразовый стенд
+  `classci-b2`): один lookup на все тексты страницы, клик → попап с
+  дефиницией и атрибуцией → «в мой словарь» → Running/ran/runs
+  перекрашены, статус 3 перекрасил все формы и пережил перезагрузку;
+  слово дефиниции переводит тот же попап; у преподавателя попап без
+  статуса и без запросов `/user-terms`.
+- Долг D-17: `body_md` показывается текстом, разметка markdown не
+  рендерится.
+
+### S3-5 user_terms и личный словарь (2026-10-26)
+
+- Решение — [ADR-027](../architecture/decisions.md). Миграция
+  `backend/migrations/0015_user_terms` (up/down): таблица `user_terms`
+  (user_id, term_id, status 1..5, source_lesson_id `ON DELETE SET NULL`,
+  added_at, updated_at; PK `(user_id, term_id)`, индекс
+  `user_terms_user_added_idx`).
+- `backend/internal/store/user_terms.go` — `SaveUserTerm` (upsert:
+  статус, первый урок-источник), `DeleteUserTerm`, `GetUserTerm`,
+  `ListUserTerms` (фильтр по статусам, курсор), `UserTermStatus`,
+  `UserTermStatusesByLemma`; `MinTermStatus`/`MaxTermStatus`.
+- `backend/internal/httpapi/user_terms.go`, только student:
+  `POST /user-terms` (201/200), `GET /user-terms?status=&limit=&cursor=`
+  → `{items, next_cursor}`, `DELETE /user-terms/{term_id}`,
+  `POST /user-terms/lookup {words ≤ 2000}` → `{lemmas, statuses}`.
+  `POST /terms/click` отдаёт `status` (у не-студента `null`).
+- web: страница `/dictionary` (`web/app/dictionary/page.tsx`, фильтры
+  «Все», «Учу (1–4)», 1…5, урок-источник, страницы по курсору),
+  `dictionary-status.tsx`; ссылка «Словарь» в шапке у студента.
+- Тесты — `internal/httpapi/user_terms_test.go`: добавление, смена и
+  удаление; 400 на статус вне 1..5 и кривые фильтры, CHECK и PK в схеме;
+  параллельные добавления — одна строка; урок-источник (чужой — 403,
+  нет — 404, первый не переписывается, отмена урока обнуляет);
+  страницы курсора; lookup отдаёт только статусы вошедшего, пачка
+  2000 слов — 72 мс под `-race`; 401/403 для гостя, преподавателя,
+  админа; откат и повторный накат 0015.
+- Для S3-8: назначение слов — `store.SaveUserTerm(ctx, studentID,
+  termID, &1, &lessonID)`; для S4-1 — строки `user_terms`.
+
 ## Риски этапа
 
 RAM LibreTranslate (лечится `--load-only`); качество лемматизации решает
