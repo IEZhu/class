@@ -1,5 +1,5 @@
-# Этап 0 (S0-1): caddy, web, api, postgres; этап 1 (S1-2): + worker.
-# Состав растёт по этапам —
+# Этап 0 (S0-1): caddy, web, api, postgres; этап 1 (S1-2): + worker;
+# этап 3 (S3-6): + whiteboard в профиле whiteboard. Состав растёт по этапам —
 # docs/architecture/02-services.md. TLS-край — host-nginx (ADR-004),
 # caddy опубликован только на 127.0.0.1:${HTTP_PORT}.
 
@@ -72,6 +72,9 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # 1 — писать только звук (дешевле, для транскрипта достаточно)
       EGRESS_AUDIO_ONLY: ${EGRESS_AUDIO_ONLY:-}
+      # S3-6: 1 — поднят ретранслятор доски (профиль whiteboard, ADR-020);
+      # пусто — доска отвечает 503
+      WHITEBOARD_ENABLED: ${WHITEBOARD_ENABLED:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +96,13 @@ services:
     <<: *logging
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # S3-6: снимки досок — в хранилище записей (ADR-020). Без ключей
+      # джобы снимков ждут в очереди, остальные джобы работают
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     # После SIGTERM текущей джобе даётся 20 с (jobs.Config.ShutdownGrace);
     # docker по умолчанию ждёт 10 — берём с запасом до SIGKILL
     stop_grace_period: 30s
@@ -119,6 +129,36 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+
+  # S3-6: ретранслятор доски Excalidraw — официальный excalidraw-room,
+  # закреплён тегом и digest'ом (ADR-020). Только пересылает зашифрованные
+  # сообщения участников комнаты; сцена — в БД api, снимки — в хранилище.
+  # Образ 2023 года (Node 12) не проходит блокирующий скан ADR-011, поэтому
+  # сервис в профиле и включается явно: COMPOSE_PROFILES=whiteboard и
+  # WHITEBOARD_ENABLED=1 в deploy/.env (долг D-11). Портов нет: снаружи
+  # к нему ведёт только caddy после forward_auth в api.
+  whiteboard:
+    image: excalidraw/excalidraw-room:sha-03ff435@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70
+    profiles: ["whiteboard"]
+    restart: unless-stopped
+    <<: *logging
+    # Не root и без yarn: node напрямую на непривилегированном порту
+    user: node
+    working_dir: /excalidraw-room
+    command: ["node", "dist/index.js"]
+    environment:
+      NODE_ENV: production
+      PORT: "3002"
+      CORS_ORIGIN: https://${DOMAIN}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3002/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 10s
 
   # Инструмент миграций (S0-2+): make migrate → docker compose run --rm migrate up
