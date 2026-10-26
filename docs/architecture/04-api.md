@@ -43,12 +43,16 @@
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |
-| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing | LiveKit | 1 |
+| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing; `room_finished` → снимок доски сразу (S3-6) | LiveKit | 1 |
 | `GET /media/{lesson_id}/url` | presigned GET на запись, TTL 30 мин | участники | 1 |
 | `POST /webhooks/assemblyai` | `completed` → utterances, VTT | AssemblyAI | 2 |
 | `POST /terms/click` | `{surface, context_sentence}` → перевод/дефиниция | все | 3 |
 | `POST /user-terms` | «в мой словарь» / смена статуса | student | 3 |
 | `POST /lessons/{id}/terms/confirm` | `{term_ids[], assign_to[]}` — словарь урока | teacher | 3 |
+| `GET /lessons/{id}/whiteboard` | вход на доску: `{room, key, socket_path}` — комната `lesson-{id}`, ключ AES-GCM, путь ретранслятора; доска заводится при первом входе; 409 — урок в processing/done, 503 — доска не включена (ADR-020) | участники | 3 |
+| `GET /lessons/{id}/whiteboard/scene` | сцена файлом `.excalidraw` (элементы как есть, с удалёнными), и после урока; 404 — доску не открывали | участники | 3 |
+| `PUT /lessons/{id}/whiteboard/scene` | `{elements: [...]}` → поэлементное слияние с сохранённой, `{version}`; снимок в S3 не чаще раза в минуту; 409/503 — как у входа, 413 — больше 1 MiB | участники | 3 |
+| `GET /whiteboard/auth` | решение forward_auth caddy для `/whiteboard/lesson-{id}/socket.io/` (урок — из `X-Forwarded-Uri`): 204 участнику незавершённого урока, 401/403/409 иначе | участники | 3 |
 | `GET /practice/queue` | due-карточки по FSRS | student | 4 |
 | `POST /reviews` | рейтинг карточки (again/hard/good/easy) | student | 4 |
 | `POST /cloze/{id}/attempt` | ответы cloze-теста → счёт → FSRS | student | 4 |

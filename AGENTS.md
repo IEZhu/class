@@ -18,7 +18,8 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.
 - `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
-  `tools` profile), `Caddyfile`, `.env.example`.
+  `tools` profile; the whiteboard relay `whiteboard` under the `whiteboard` profile, ADR-020),
+  `Caddyfile`, `.env.example`.
 - `Makefile`: operations for the compose stack.
 - `docs/architecture/`: topology, services, data model, API, S3, integrations, flows, ADR log
   (`decisions.md`); `00-source-variant-c.md` is a frozen snapshot.
@@ -39,9 +40,12 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
 - Required keys in `deploy/.env` (checked by `make check-env`): `DOMAIN`, `POSTGRES_DB`,
   `POSTGRES_USER`, `POSTGRES_PASSWORD`. Optional: `HTTP_PORT` (default 8090), `SEED_PASSWORD`,
   `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (without them the lesson room returns
-  503). The api also reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads
-  only `DATABASE_URL`; web reads `INTERNAL_API_URL` (default `http://api:8080`).
-- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`).
+  503), `COMPOSE_PROFILES=whiteboard` with `WHITEBOARD_ENABLED=1` (the lesson whiteboard;
+  without them it returns 503). The api also reads `DATABASE_URL` and `API_ADDR` (default
+  `:8080`); the worker reads `DATABASE_URL` and `S3_*` (whiteboard snapshots wait in the queue
+  without storage); web reads `INTERNAL_API_URL` (default `http://api:8080`).
+- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`; `predev`
+  and `prebuild` copy the Excalidraw fonts into the git-ignored `public/excalidraw/`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
   to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`
   queue tests; they create isolated schemas and apply the real migrations. CI requires this

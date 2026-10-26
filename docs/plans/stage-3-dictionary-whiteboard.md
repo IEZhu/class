@@ -88,7 +88,59 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S3-6 Доска Excalidraw (2026-10-26)
+
+- Решение — [ADR-020](../architecture/decisions.md): excalidraw-complete
+  закрыт автором, доска собрана из редактора `@excalidraw/excalidraw`
+  0.18.1 в web, ретранслятора `excalidraw/excalidraw-room` (тег
+  `sha-03ff435` + digest) и хранения сцены в api. Комната — `lesson-{id}`,
+  сообщения шифруются ключом комнаты; вместо `?room=` — путь
+  `/whiteboard/lesson-{id}/socket.io/` за forward_auth.
+- Миграция `backend/migrations/0010_whiteboards.up.sql` (откат — `.down.sql`,
+  заодно убирает ждущие снимки): таблица `whiteboards` — `lesson_id` (PK,
+  каскад с уроком), `room_key`, `scene jsonb` (массив элементов как есть,
+  с удалёнными), `scene_version`, `snapshot_version`, `scene_s3_key`,
+  `updated_at`, `created_at`.
+- `backend/internal/store/whiteboards.go` — `OpenWhiteboard`,
+  `WhiteboardScene`, `SaveWhiteboardScene` (поэлементное слияние
+  `mergeElements` по правилу `reconcileElements`, порядок по `index`),
+  `ScheduleWhiteboardSnapshot`, `WhiteboardForSnapshot`,
+  `MarkWhiteboardSnapshot`, `WhiteboardFile` (формат `.excalidraw`).
+  Джоба `whiteboard_snapshot` (`store.JobWhiteboardSnapshot`, payload
+  `{"lesson_id"}`).
+- `backend/internal/jobs/jobs.go` — `EnqueueOnce`: одна ждущая джоба
+  на kind+payload, срок только приближается, ретрай не подтягивается.
+- `backend/internal/storage/s3.go` — `PutObject` (обычный подписанный PUT,
+  без необязательной контрольной суммы), `WhiteboardKey` →
+  `whiteboards/{lesson_id}.json`.
+- `backend/internal/httpapi/whiteboard.go` — `GET /lessons/{id}/whiteboard`,
+  `GET` и `PUT /lessons/{id}/whiteboard/scene` (предел 1 MiB),
+  `GET /whiteboard/auth` для forward_auth; `webhooks.go` — `room_finished`
+  ставит снимок сразу. Ключ `.env` api: `WHITEBOARD_ENABLED` (без `1` — 503).
+- `backend/internal/worker/whiteboard.go` + `worker.RegisterWhiteboard`;
+  `cmd/worker` читает `S3_*` и без хранилища kind не регистрирует (джобы
+  ждут в очереди).
+- deploy: сервис `whiteboard` в профиле `whiteboard` (`node`, read_only,
+  без портов), маршрут в `Caddyfile` (forward_auth → rewrite →
+  ретранслятор), worker получил `S3_*`; ключи `.env.example`:
+  `COMPOSE_PROFILES`, `WHITEBOARD_ENABLED`.
+- web: вкладки `app/lesson/[id]/live-tabs.tsx` («Класс» / «Доска», только
+  в фазе live; живая секция шире колонки), `whiteboard.tsx` (next/dynamic
+  без SSR), `whiteboard-canvas.tsx` (синхронизация, сохранение через 2 с,
+  курсоры), `whiteboard-sync.ts` (AES-GCM); `scripts/excalidraw-assets.mjs`
+  (`predev`/`prebuild`) кладёт шрифты в `public/excalidraw/` (в .gitignore).
+  Зависимости: `@excalidraw/excalidraw` 0.18.1, `socket.io-client` ^4.8.4,
+  `overrides` для nanoid, lodash-es, katex.
+- Для S3-7: текстовые элементы — `whiteboards.scene` (`type = 'text'`,
+  `isDeleted = false`), тот же массив — в снимке `whiteboards/{lesson_id}.json`.
+- Проверено на изолированном стенде (compose-проект `classci-a3`, S3 —
+  заглушка): двое участников в комнате через caddy и WebSocket, чужой
+  студент — 403, аноним — 401; двухбраузерная проверка (Playwright):
+  прямоугольник преподавателя доходит до студента через ретранслятор,
+  его удаление сохраняется; периодический снимок записан через минуту,
+  после перезапуска контейнера `whiteboard` сцена на месте и совпадает
+  со снимком. Ретранслятор занимает ~12 MiB RAM.
+- Долг D-11: образ ретранслятора вне блокирующего скана.
 
 ## Риски этапа
 

@@ -78,7 +78,10 @@ s3://lingua/
   `deploy/backup-pg.sh`, lifecycle на `backups/pg/` не ставится.
 - Бакет и токен для бэкапов — отдельные (`BACKUP_S3_*`): токен записей
   уходит в LiveKit Egress, а в дампе хэши паролей и email (ADR-014).
-- Сцены досок (whiteboards) и VTT уже лежат в S3 — отдельно не бэкапим.
+- Сцены досок и VTT уже лежат в S3 — отдельно не бэкапим. Снимок доски
+  `whiteboards/{lesson_id}.json` (файл `.excalidraw`) пишет worker джобой
+  `whiteboard_snapshot`: не чаще раза в минуту, пока рисуют, и сразу
+  по `room_finished`; рабочая сцена — в Postgres (ADR-020).
 - RTO для hobby: «пересоздать compose за час» из бэкапа.
 
 Связано: [01-topology.md](01-topology.md) ·
