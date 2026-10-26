@@ -25,17 +25,24 @@ const (
 	// whiteboardSnapshotDelay — пока на доске рисуют, снимок в хранилище
 	// не чаще раза в минуту; конец урока снимает сразу (room_finished).
 	whiteboardSnapshotDelay = time.Minute
-	// maxSceneBytes — потолок тела сохранения сцены. Столько же по
-	// умолчанию пропускают host-nginx (client_max_body_size) и
-	// ретранслятор (maxHttpBufferSize socket.io): больше всё равно не дойдёт.
+	// maxSceneBytes — предел сцены: и тела сохранения, и итога слияния
+	// с сохранённой. 1 MiB — client_max_body_size host-nginx по умолчанию;
+	// ретранслятор принимает до 1 000 000 байт (maxHttpBufferSize
+	// socket.io), поэтому сцена больше MAX_RELAY_BYTES клиента
+	// сохраняется, но целиком не рассылается. Сохранённую сцену любой
+	// участник может прислать обратно целиком.
 	maxSceneBytes = 1 << 20
 	// Путь ретранслятора снаружи — /whiteboard/lesson-{id}/socket.io/
-	// (Caddyfile): по нему caddy и api узнают урок
+	// (Caddyfile): по нему caddy и api узнают урок. Комната внутри
+	// соединения — другое, случайное имя (whiteboardResponse.Room)
 	whiteboardPathPrefix = "/whiteboard/"
 	whiteboardSocketPath = "socket.io"
 )
 
 type whiteboardResponse struct {
+	// Room — имя комнаты у ретранслятора (128 случайных бит, base64url).
+	// Ретранслятор пускает в любую комнату по имени, поэтому из id урока
+	// оно не выводится и выдаётся, как и ключ, только участникам
 	Room string `json:"room"`
 	// Key — ключ AES-GCM комнаты (base64url, 128 бит): ретранслятор
 	// пересылает всем в комнате, поэтому сообщения шифруются им
@@ -109,19 +116,19 @@ func (a *API) handleWhiteboard(w http.ResponseWriter, r *http.Request) {
 		lessonFinished(w)
 		return
 	}
-	newKey, err := newRoomKey()
+	fresh, err := newWhiteboardRoom()
 	if err != nil {
-		internalError(w, "room key", err)
+		internalError(w, "whiteboard room", err)
 		return
 	}
-	key, err := a.store.OpenWhiteboard(r.Context(), d.ID, newKey)
+	room, err := a.store.OpenWhiteboard(r.Context(), d.ID, fresh)
 	if err != nil {
 		internalError(w, "open whiteboard", err)
 		return
 	}
-	room := roomName(d.ID)
 	writeJSON(w, http.StatusOK, whiteboardResponse{
-		Room: room, Key: key, SocketPath: whiteboardPathPrefix + room + "/" + whiteboardSocketPath,
+		Room: room.ID, Key: room.Key,
+		SocketPath: whiteboardPathPrefix + roomName(d.ID) + "/" + whiteboardSocketPath,
 	})
 }
 
@@ -178,8 +185,11 @@ func (a *API) handleSaveWhiteboardScene(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "bad_request", "нужен JSON {elements: [...]}")
 		return
 	}
-	version, err := a.store.SaveWhiteboardScene(r.Context(), d.ID, req.Elements, whiteboardSnapshotDelay)
+	version, err := a.store.SaveWhiteboardScene(r.Context(), d.ID, req.Elements, maxSceneBytes, whiteboardSnapshotDelay)
 	switch {
+	case errors.Is(err, store.ErrSceneTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "scene_too_large", "сцена доски вместе с сохранённой больше 1 MiB")
+		return
 	case errors.Is(err, store.ErrBadScene):
 		writeError(w, http.StatusBadRequest, "bad_scene", "элементы сцены не похожи на Excalidraw")
 		return
@@ -198,9 +208,10 @@ func (a *API) handleSaveWhiteboardScene(w http.ResponseWriter, r *http.Request) 
 // /whiteboard/lesson-{id}/socket.io/, который caddy передаёт в
 // X-Forwarded-Uri, пользователь — из cookie сессии: пускаем участника
 // урока, пока урок не завершён. 204 — пускать; иначе caddy отдаёт этот
-// ответ клиенту. Ретранслятор комнату внутри соединения не проверяет —
-// чужую комнату закрывает шифрование ключом, который выдаётся только
-// участникам (ADR-020).
+// ответ клиенту. Комнату внутри соединения (join-room) ретранслятор
+// не проверяет, а caddy её не видит: в чужую комнату не войти, потому что
+// её имя случайное, а сообщения закрыты ключом — то и другое выдаётся
+// только участникам (ADR-020).
 func (a *API) handleWhiteboardAuth(w http.ResponseWriter, r *http.Request) {
 	if !a.cfg.WhiteboardEnabled {
 		whiteboardNotConfigured(w)
@@ -259,9 +270,20 @@ func (a *API) onRoomFinished(ctx context.Context, event *livekit.WebhookEvent) e
 	return nil
 }
 
-// newRoomKey — 128-битный ключ AES-GCM в виде JWK "k" (base64url без
-// паддинга, 22 символа): так его импортирует WebCrypto в браузере.
-func newRoomKey() (string, error) {
+// newWhiteboardRoom — комната новой доски: имя и ключ — независимые
+// 128 случайных бит.
+func newWhiteboardRoom() (store.WhiteboardRoom, error) {
+	id, err := random128()
+	if err != nil {
+		return store.WhiteboardRoom{}, err
+	}
+	key, err := random128()
+	return store.WhiteboardRoom{ID: id, Key: key}, err
+}
+
+// random128 — 128 случайных бит в base64url без паддинга (22 символа):
+// в таком виде ключ AES-GCM импортирует WebCrypto как JWK "k".
+func random128() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", err

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,21 @@ func (f *whiteboardFixture) auth(uri string, cookie *http.Cookie) *httptest.Resp
 	return w
 }
 
+// randomRoom — имя комнаты и ключ: 128 бит в base64url без паддинга
+var randomRoom = regexp.MustCompile(`^[A-Za-z0-9_-]{22}$`)
+
+// open — вход на доску урока участником.
+func (f *whiteboardFixture) open(t *testing.T, cookie *http.Cookie) whiteboardResponse {
+	t.Helper()
+	w := securityRequest(f.h, "GET", f.path(""), "", cookie)
+	expectStatus(t, w, http.StatusOK)
+	var resp whiteboardResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func (f *whiteboardFixture) socketURI(lessonID int64) string {
 	return fmt.Sprintf("/whiteboard/lesson-%d/socket.io/?EIO=4&transport=polling&t=abc", lessonID)
 }
@@ -107,30 +123,29 @@ func TestWhiteboardAccessBoundary(t *testing.T) {
 	f := newWhiteboardFixture(t)
 	h := f.h
 
-	var keys []string
+	var sessions []whiteboardResponse
 	for _, cookie := range []*http.Cookie{f.teacher, f.student} {
-		w := securityRequest(h, "GET", f.path(""), "", cookie)
-		expectStatus(t, w, http.StatusOK)
-		var resp whiteboardResponse
-		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-			t.Fatal(err)
-		}
-		room := fmt.Sprintf("lesson-%d", f.lessonID)
-		if resp.Room != room || resp.SocketPath != "/whiteboard/"+room+"/socket.io" || len(resp.Key) != 22 {
+		resp := f.open(t, cookie)
+		if !randomRoom.MatchString(resp.Room) || !randomRoom.MatchString(resp.Key) || resp.Room == resp.Key ||
+			resp.SocketPath != fmt.Sprintf("/whiteboard/lesson-%d/socket.io", f.lessonID) {
 			t.Fatalf("whiteboard session %+v", resp)
 		}
-		keys = append(keys, resp.Key)
+		sessions = append(sessions, resp)
 		expectStatus(t, f.auth(f.socketURI(f.lessonID), cookie), http.StatusNoContent)
 		expectStatus(t, securityRequest(h, "PUT", f.path("/scene"), sceneBody(), cookie), http.StatusOK)
 		expectStatus(t, securityRequest(h, "GET", f.path("/scene"), "", cookie), http.StatusOK)
 	}
-	// Одна комната — один ключ на всех участников
-	if keys[0] != keys[1] {
-		t.Fatal("participants got different room keys")
+	// Одна доска — одна комната и один ключ на всех участников
+	if sessions[0] != sessions[1] {
+		t.Fatalf("participants got different rooms: %+v", sessions)
 	}
 
 	for _, cookie := range []*http.Cookie{f.outsider, f.guest} {
-		expectStatus(t, securityRequest(h, "GET", f.path(""), "", cookie), http.StatusForbidden)
+		w := securityRequest(h, "GET", f.path(""), "", cookie)
+		expectStatus(t, w, http.StatusForbidden)
+		if strings.Contains(w.Body.String(), sessions[0].Room) || strings.Contains(w.Body.String(), sessions[0].Key) {
+			t.Fatalf("non-participant saw the room: %s", w.Body)
+		}
 		expectStatus(t, f.auth(f.socketURI(f.lessonID), cookie), http.StatusForbidden)
 		expectStatus(t, securityRequest(h, "PUT", f.path("/scene"), sceneBody(element("x", 1, "spam")), cookie), http.StatusForbidden)
 		expectStatus(t, securityRequest(h, "GET", f.path("/scene"), "", cookie), http.StatusForbidden)
@@ -174,6 +189,91 @@ func TestWhiteboardAccessBoundary(t *testing.T) {
 	expectStatus(t, f.auth(f.socketURI(f.lessonID), f.teacher), http.StatusServiceUnavailable)
 	expectStatus(t, securityRequest(h, "PUT", f.path("/scene"), sceneBody(), f.teacher), http.StatusServiceUnavailable)
 	expectStatus(t, securityRequest(h, "GET", f.path("/scene"), "", f.teacher), http.StatusOK)
+}
+
+// Ретранслятор пускает в любую комнату по имени, поэтому имя комнаты
+// не выводится из id урока: у доски другого урока своё имя, а заведённая
+// заново доска того же урока получает новое. В БД лежит выданное имя.
+func TestWhiteboardRoomUnguessable(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	ctx := context.Background()
+	first := f.open(t, f.teacher)
+	var stored string
+	if err := f.conn.QueryRow(ctx, `SELECT room_id FROM whiteboards WHERE lesson_id = $1`, f.lessonID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != first.Room || strings.Contains(first.Room, "lesson") {
+		t.Fatalf("room %q, stored %q", first.Room, stored)
+	}
+
+	other := securityRequest(f.h, "GET", fmt.Sprintf("/lessons/%d/whiteboard", f.eventID), "", f.teacher)
+	expectStatus(t, other, http.StatusOK)
+	var otherBoard whiteboardResponse
+	if err := json.Unmarshal(other.Body.Bytes(), &otherBoard); err != nil {
+		t.Fatal(err)
+	}
+	if otherBoard.Room == first.Room || otherBoard.Key == first.Key {
+		t.Fatalf("two lessons share a room: %+v, %+v", first, otherBoard)
+	}
+
+	if _, err := f.conn.Exec(ctx, `DELETE FROM whiteboards WHERE lesson_id = $1`, f.lessonID); err != nil {
+		t.Fatal(err)
+	}
+	again := f.open(t, f.student)
+	if again.Room == first.Room || again.Key == first.Key || !randomRoom.MatchString(again.Room) {
+		t.Fatalf("reopened board kept the room: %+v, was %+v", again, first)
+	}
+}
+
+// Предел сцены — на итог слияния, а не на одно сохранение: сохранения
+// по частям (каждое меньше 1 MiB) сцену дальше предела не растят — 413,
+// сохранённое не меняется. Обычные сохранения и замена элемента новой
+// версией того же размера проходят.
+func TestWhiteboardSceneTotalLimit(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	h := f.h
+	f.open(t, f.teacher)
+	big := func(id string, version int) string {
+		return element(id, version, strings.Repeat("x", maxSceneBytes*6/10))
+	}
+	saved := func() string {
+		t.Helper()
+		w := securityRequest(h, "GET", f.path("/scene"), "", f.teacher)
+		expectStatus(t, w, http.StatusOK)
+		var file struct {
+			Elements []struct {
+				ID      string `json:"id"`
+				Version int    `json:"version"`
+			} `json:"elements"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &file); err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, e := range file.Elements {
+			out = append(out, fmt.Sprintf("%s@%d", e.ID, e.Version))
+		}
+		return strings.Join(out, ",")
+	}
+
+	expectStatus(t, securityRequest(h, "PUT", f.path("/scene"), sceneBody(big("a", 1)), f.teacher), http.StatusOK)
+	w := securityRequest(h, "PUT", f.path("/scene"), sceneBody(big("b", 1)), f.student)
+	expectStatus(t, w, http.StatusRequestEntityTooLarge)
+	if !strings.Contains(w.Body.String(), `"scene_too_large"`) {
+		t.Fatalf("413 body %s", w.Body)
+	}
+	if got := saved(); got != "a@1" {
+		t.Fatalf("rejected save changed the scene: %s", got)
+	}
+	if b := f.board(t); b.sceneVersion != 1 {
+		t.Fatalf("rejected save bumped the version to %d", b.sceneVersion)
+	}
+
+	expectStatus(t, securityRequest(h, "PUT", f.path("/scene"), sceneBody(element("c", 1, "cat")), f.student), http.StatusOK)
+	expectStatus(t, securityRequest(h, "PUT", f.path("/scene"), sceneBody(big("a", 2)), f.teacher), http.StatusOK)
+	if got := saved(); got != "a@2,c@1" {
+		t.Fatalf("scene after normal saves: %s", got)
+	}
 }
 
 type fakeScenes struct {
@@ -390,7 +490,7 @@ func TestWhiteboardSceneSavesAndSnapshots(t *testing.T) {
 	}
 }
 
-// Миграция 0010 — модель данных плюс ключ комнаты, сцена и версии
+// Миграция 0010 — модель данных плюс комната, её ключ, сцена и версии
 // (ADR-020); откат убирает таблицу и ждущие снимки, повторный накат
 // возвращает таблицу.
 func TestWhiteboardMigrationReverts(t *testing.T) {
@@ -408,7 +508,7 @@ func TestWhiteboardMigrationReverts(t *testing.T) {
 		}
 		return strings.Join(names, ",")
 	}
-	want := "created_at,lesson_id,room_key,scene,scene_s3_key,scene_version,snapshot_version,updated_at"
+	want := "created_at,lesson_id,room_id,room_key,scene,scene_s3_key,scene_version,snapshot_version,updated_at"
 	if got := columns(); got != want {
 		t.Fatalf("columns %s, want %s", got, want)
 	}
