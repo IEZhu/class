@@ -16,7 +16,7 @@
       │                 │   ├─ postgres   основная БД + FTS        │
       │                 │   ├─ redis      (опц.: очереди/кэш)      │
       │  WebRTC         │   ├─ libretranslate  (--load-only en,ru) │
-      │                 │   └─ excalidraw-complete (доска, Go)     │
+      │                 │   └─ whiteboard (ретранслятор доски)     │
       │                 └───────────────┬──────────────────────────┘
       ▼                                 │ presigned URLs, webhooks
  LiveKit Cloud ───── Egress ─────► AWS S3 (записи, VTT, бэкапы)
@@ -41,7 +41,8 @@
 ## Правила потоков данных
 
 - **Входящий трафик** — только через caddy (TLS, reverse proxy): `/` → web,
-  `/api` → api, путь доски → excalidraw.
+  `/api` → api, `/whiteboard/lesson-{id}/socket.io/` → ретранслятор доски
+  (после forward_auth в api, ADR-020).
 - **Webhooks** (LiveKit `egress_ended`, AssemblyAI `completed`) приходят в api
   и только меняют состояние + ставят джобы в очередь; тяжёлая работа — в worker.
 - **Медиа-инвариант**: ни один видео/аудио байт урока не проксируется через

@@ -18,7 +18,8 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.
 - `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
-  `tools` profile), `Caddyfile`, `.env.example`; `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`,
+  `tools` profile; the whiteboard relay `whiteboard` under the `whiteboard` profile, ADR-020),
+  `Caddyfile`, `.env.example`; `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`,
   `systemd/` timer): nightly pg_dump to S3 and restore (S1-7, ADR-014).
 - `Makefile`: operations for the compose stack.
 - `docs/architecture/`: topology, services, data model, API, S3, integrations, flows, ADR log
@@ -45,12 +46,15 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (all three or the
   Google Calendar connection is unavailable and `calendar_sync` skips lessons, ADR-023),
   `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
-  goes straight to `done` without a transcript; ADR-015). The api also reads `DATABASE_URL`
-  and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`, plus `DOMAIN` and
-  `GOOGLE_*` for `calendar_sync`, and with `ASSEMBLYAI_API_KEY` also the webhook secret,
-  `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads `INTERNAL_API_URL`
-  (default `http://api:8080`).
-- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`).
+  goes straight to `done` without a transcript; ADR-015), `COMPOSE_PROFILES=whiteboard` with
+  `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503). The api also
+  reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL` and
+  `S3_*` (whiteboard snapshots wait in the queue without storage), plus `DOMAIN` and
+  `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
+  secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
+  `INTERNAL_API_URL` (default `http://api:8080`).
+- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`; `predev`
+  and `prebuild` copy the Excalidraw fonts into the git-ignored `public/excalidraw/`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
   to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`
   queue tests; they create isolated schemas and apply the real migrations through the one

@@ -2,7 +2,8 @@
 
 > Живёт в `deploy/docker-compose.yml`. Состав растёт по этапам:
 > этап 0 — caddy, web, api, postgres; этап 1 — + worker;
-> этап 3 — + libretranslate, + excalidraw; redis — опция при необходимости.
+> этап 3 — + libretranslate, + whiteboard (профиль compose, ADR-020); redis —
+> опция при необходимости.
 
 ## Состав
 
@@ -14,7 +15,7 @@
 | postgres | postgres:16 | 300–500 MB | 0 | всё состояние + full-text search субтитров/текстов |
 | worker | Go | 100–300 MB | 1 | очереди: календарь, ASR-джобы, сборщик субтитров, импорт Tatoeba, LLM-генерация, VTT-рендер |
 | libretranslate | libretranslate:v1.9.6 (digest) | 1–1.5 GB (замер ~380 MB) | 3 | перевод en↔ru; `LT_LOAD_ONLY=en,ru`, `LT_THREADS=1`; профиль `translate`, сеть `translate` (internal) — ADR-018 |
-| excalidraw | PatWie/excalidraw-complete | 50–100 MB | 3 | доска: фронт + storage + realtime в одном Go-бинаре; сцены привязаны к lesson_id |
+| whiteboard | excalidraw/excalidraw-room (профиль `whiteboard`) | ~15 MB | 3 | ретранслятор доски: пересылает зашифрованные сообщения участников комнаты `lesson-{id}`; редактор — в web, сцена — в api/Postgres, снимки — в S3 (ADR-020) |
 | redis | redis:7 | 50 MB | опц. | кэш переводов, rate-limit; очереди держим в PG (SKIP LOCKED) — redis не зависимость |
 
 ## Ресурсы VPS
@@ -34,8 +35,12 @@
   со своей копией моделей, поэтому 1; потолки `cpus: 1.5`, `mem_limit: 2g`.
   Образ вне блокирующего скана — сервис в профиле `translate`, модели
   ставит разовый `libretranslate-models` (ADR-018, долг D-10).
-- **excalidraw-complete** держит realtime-сессии сам; наша интеграция —
-  URL `?room=lesson-{id}` + бэкап JSON-сцены в S3 (этап 3).
+- **whiteboard** заменил excalidraw-complete — проект закрыт автором
+  ([ADR-020](decisions.md)). Состояния не хранит; снаружи — только
+  `/whiteboard/lesson-{id}/socket.io/` через caddy после forward_auth
+  в api. Образ не проходит блокирующий скан ADR-011, поэтому сервис
+  в профиле и включается явно (`COMPOSE_PROFILES=whiteboard`,
+  `WHITEBOARD_ENABLED=1`), долг D-11.
 - Тома: данные postgres; конфиг caddy. Healthcheck'и — минимум на postgres
   и api.
 

@@ -9,9 +9,11 @@
 docker-compose.yml   сервисы по этапам:
                        этап 0: caddy, web, api, postgres
                        этап 1: + worker
-                       этап 3: + libretranslate (--load-only en,ru), + excalidraw
+                       этап 3: + libretranslate (--load-only en,ru),
+                               + whiteboard (ретранслятор доски, профиль, ADR-020)
                        опция:  redis (только при реальной нужде — ADR-003)
-Caddyfile            TLS (Let's Encrypt), '/' → web, '/api' → api, доска
+Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socket.io/'
+                     → ретранслятор доски после forward_auth в api
 .env.example         шаблон секретов; растёт по этапам:
                        0: POSTGRES_*, DOMAIN, HTTP_PORT (ADR-004),
                           SEED_PASSWORD (ADR-006; SESSION_SECRET удалён)

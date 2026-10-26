@@ -229,3 +229,31 @@ func NewMaterialKey(lessonID int64, ext string) (string, error) {
 func TranscriptKey(lessonID int64) string {
 	return "transcripts/" + strconv.FormatInt(lessonID, 10) + ".vtt"
 }
+
+// PutObject кладёт небольшой объект целиком: снимки досок (S3-6) — это
+// килобайты JSON, а не медиа, которое пишет Egress мимо VPS.
+func (c *Client) PutObject(ctx context.Context, key, contentType string, body []byte) error {
+	if c == nil {
+		return ErrNotConfigured
+	}
+	_, err := c.s3client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.cfg.Bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String(contentType),
+	}, func(o *s3.Options) {
+		// Без необязательной контрольной суммы SDK шлёт обычный подписанный
+		// PUT, а не aws-chunked с трейлером: так запрос одинаково понимают
+		// R2, AWS и S3-совместимые заглушки
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+	})
+	if err != nil {
+		return fmt.Errorf("put %s: %w", key, err)
+	}
+	return nil
+}
+
+// WhiteboardKey — снимок сцены доски урока (05-storage-s3.md).
+func WhiteboardKey(lessonID int64) string {
+	return "whiteboards/" + strconv.FormatInt(lessonID, 10) + ".json"
+}

@@ -47,3 +47,11 @@ func recordingReady(st *store.Store, asr ASR) jobs.Handler {
 func RegisterCalendar(r *jobs.Runner, st *store.Store, cal *gcal.Client, publicBaseURL string) {
 	r.Handle(store.JobCalendarSync, calendarSync{st: st, cal: cal, publicBaseURL: publicBaseURL}.handle)
 }
+
+// RegisterWhiteboard — S3-6: снимки досок в хранилище (ADR-020). Зовётся,
+// только когда хранилище настроено; без него kind не регистрируется,
+// и джобы ждут в очереди — по одной на доску (jobs.EnqueueOnce), — пока
+// хранилище не появится.
+func RegisterWhiteboard(r *jobs.Runner, st *store.Store, objects SceneStorage) {
+	r.Handle(store.JobWhiteboardSnapshot, whiteboardSnapshot(st, objects))
+}

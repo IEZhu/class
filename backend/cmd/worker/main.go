@@ -23,7 +23,13 @@ func main() {
 	if databaseURL == "" {
 		log.Fatal("worker: DATABASE_URL is required")
 	}
-	asr, err := asrFromEnv()
+	// Хранилище S3_* одно на транскрипты (S2-1) и снимки досок (S3-6);
+	// без ключей — nil, и зависящие от него джобы выключены
+	objects, err := storage.New(storage.ConfigFromEnv())
+	if err != nil {
+		log.Fatalf("worker: storage: %v", err)
+	}
+	asr, err := asrFromEnv(objects)
 	if err != nil {
 		log.Fatalf("worker: %v", err)
 	}
@@ -68,6 +74,14 @@ func main() {
 	}
 	worker.RegisterCalendar(runner, st, cal, "https://"+domain)
 
+	// S3-6: снимки досок пишутся в то же хранилище, что и записи (ADR-020).
+	// Без ключей джобы снимков ждут в очереди, остальное работает
+	if objects != nil {
+		worker.RegisterWhiteboard(runner, st, objects)
+	} else {
+		log.Printf("worker: хранилище не настроено — снимки досок ждут в очереди")
+	}
+
 	log.Printf("worker: started")
 	runner.Run(ctx)
 	log.Printf("worker: stopped")
@@ -77,16 +91,12 @@ func main() {
 // нулевое значение: ASR выключен. С ключом нужны секрет вебхука,
 // хранилище (ссылка на запись, выгрузка VTT) и DOMAIN для адреса
 // вебхука; неполная настройка — ошибка старта, а не молчаливый пропуск.
-func asrFromEnv() (worker.ASR, error) {
+func asrFromEnv(files *storage.Client) (worker.ASR, error) {
 	client, err := assemblyai.New(assemblyai.Config{
 		APIKey:        os.Getenv("ASSEMBLYAI_API_KEY"),
 		WebhookSecret: os.Getenv("ASSEMBLYAI_WEBHOOK_SECRET"),
 	})
 	if err != nil || client == nil {
-		return worker.ASR{}, err
-	}
-	files, err := storage.New(storage.ConfigFromEnv())
-	if err != nil {
 		return worker.ASR{}, err
 	}
 	if files == nil {

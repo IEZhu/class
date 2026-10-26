@@ -8,6 +8,22 @@
 }
 
 :80 {
+	# S3-6: ретранслятор доски (ADR-020) — только участникам незавершённого
+	# урока. forward_auth спрашивает api (сессия из cookie, урок из пути),
+	# потом путь урока срезается: ретранслятор слушает /socket.io/.
+	# route держит порядок: иначе rewrite сработал бы раньше forward_auth,
+	# и api не увидел бы урок в X-Forwarded-Uri
+	@whiteboard path_regexp ^/whiteboard/lesson-[0-9]+/socket\.io/$
+	handle @whiteboard {
+		route {
+			forward_auth api:8080 {
+				uri /whiteboard/auth
+			}
+			rewrite * /socket.io/?{query}
+			reverse_proxy whiteboard:3002
+		}
+	}
+
 	# /api/* → api; префикс стрипается, внутри api пути без /api
 	# (контракт — docs/architecture/04-api.md)
 	handle_path /api/* {

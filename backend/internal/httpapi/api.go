@@ -43,6 +43,9 @@ type Config struct {
 	// LibreTranslateURL — внутренний адрес LibreTranslate (S3-3, ADR-018).
 	// Пусто — клик по слову отвечает дефинициями без перевода.
 	LibreTranslateURL string
+	// WhiteboardEnabled — в compose поднят ретранслятор доски (профиль
+	// whiteboard, S3-6). Без него доска отвечает 503, остальное работает.
+	WhiteboardEnabled bool
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -193,6 +196,13 @@ func (a *API) Router() http.Handler {
 	// S3-2: клик по слову — лемма, перевод, дефиниции (flows/word-click.md).
 	// Любой вошедший, включая гостя события: попап есть во всех текстах
 	mux.Handle("POST /terms/click", user(a.handleTermClick))
+
+	// S3-6: доска урока (ADR-020). /whiteboard/auth зовёт caddy (forward_auth)
+	// перед каждым запросом к ретранслятору
+	mux.Handle("GET /lessons/{id}/whiteboard", user(a.handleWhiteboard))
+	mux.Handle("GET /lessons/{id}/whiteboard/scene", user(a.handleWhiteboardScene))
+	mux.Handle("PUT /lessons/{id}/whiteboard/scene", user(a.handleSaveWhiteboardScene))
+	mux.Handle("GET /whiteboard/auth", user(a.handleWhiteboardAuth))
 	return mux
 }
 
