@@ -72,6 +72,10 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # 1 — писать только звук (дешевле, для транскрипта достаточно)
       EGRESS_AUDIO_ONLY: ${EGRESS_AUDIO_ONLY:-}
+      # S1-1: Google Calendar (ADR-023); без ключей подключение отвечает 503
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_TOKEN_KEY: ${GOOGLE_TOKEN_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +97,12 @@ services:
     <<: *logging
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # S1-1: calendar_sync (ADR-023); без ключей джобы снимаются со строкой
+      # в журнале, DOMAIN — для ссылки на урок в описании события
+      DOMAIN: ${DOMAIN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_TOKEN_KEY: ${GOOGLE_TOKEN_KEY:-}
     # После SIGTERM текущей джобе даётся 20 с (jobs.Config.ShutdownGrace);
     # docker по умолчанию ждёт 10 — берём с запасом до SIGKILL
     stop_grace_period: 30s

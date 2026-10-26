@@ -15,7 +15,8 @@ Caddyfile            TLS (Let's Encrypt), '/' → web, '/api' → api, доск�
 .env.example         шаблон секретов; растёт по этапам:
                        0: POSTGRES_*, DOMAIN, HTTP_PORT (ADR-004),
                           SEED_PASSWORD (ADR-006; SESSION_SECRET удалён)
-                       1: GOOGLE_OAUTH_*, TOKEN_ENC_KEY, LIVEKIT_*, S3_*
+                       1: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+                          GOOGLE_TOKEN_KEY (S1-1), LIVEKIT_*, S3_*
                        2: ASSEMBLYAI_*
                        5: LLM_PROVIDER, LLM_API_KEY
 backup-pg.sh         ночной pg_dump | zstd → S3, retention 7/30 (S1-7)
@@ -107,6 +108,61 @@ make up
 Переменные для эксплуатации и проверки на одноразовом стенде
 (`BACKUP_ENV_FILE`, `BACKUP_PG_CONTAINER`, `BACKUP_AWS_IMAGE`,
 `BACKUP_DOCKER_NETWORK`) описаны в шапке `backup-lib.sh`.
+
+## Google Calendar (S1-1)
+
+Решение — ADR-023 в [decisions.md](../docs/architecture/decisions.md).
+Преподаватель подключает свой Google Calendar на `/account`; дальше worker
+ставит в него уроки событиями (`calendar_sync`), и участники получают
+приглашения от Google. Пока ключей нет, раздел на `/account` пишет
+«недоступно», а остальной стенд работает.
+
+**Redirect URI стенда:** `https://lang.wondermr.com/api/auth/google/callback`
+(в общем виде — `https://<DOMAIN>/api/auth/google/callback`; caddy стрипает
+`/api`, внутри api это `GET /auth/google/callback`). Он должен совпасть
+с записанным в клиенте Google до символа.
+
+Создание OAuth-клиента в [Google Cloud console](https://console.cloud.google.com/)
+(названия разделов — по документации Google на октябрь 2026, консоль
+их иногда переименовывает):
+
+1. Создать проект (например `lingua-class`) и выбрать его.
+2. APIs & Services → Library → **Google Calendar API** → Enable.
+3. Google Auth Platform → Branding: название приложения, email поддержки,
+   в Authorized domains — `wondermr.com`.
+4. Audience: User type **External**.
+5. Data Access → Add or remove scopes → вписать
+   `https://www.googleapis.com/auth/calendar.events` → Update → Save.
+   Других scope приложению не нужно.
+6. Clients (он же APIs & Services → Credentials) → Create client →
+   Application type **Web application**; Authorized redirect URIs —
+   redirect URI стенда выше. JavaScript origins не нужны.
+   Скопировать Client ID и Client secret.
+7. Audience → **Publish app** (статус In production). В статусе Testing
+   refresh token живёт 7 дней — календарь отваливался бы раз в неделю.
+   Без проверки Google экран согласия покажет предупреждение «приложение
+   не проверено», а пользователей будет до ~100 — для пяти преподавателей
+   это приемлемо ([google-calendar.md](../docs/architecture/integrations/google-calendar.md)).
+
+Затем в `deploy/.env`:
+
+```bash
+GOOGLE_CLIENT_ID=…apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=…
+GOOGLE_TOKEN_KEY=$(openssl rand -base64 32)   # вписать значение, не команду
+```
+
+и выкат: `make migrate` (миграция `0012` — колонка токенов), затем
+`make up` (api и worker перечитают ключи). Проверка: в журнале api и
+worker больше нет строки «Google Calendar выключен»; преподаватель на
+`/account` → «Подключить Google Календарь» → экран Google → обратно
+с «Календарь подключён»; новый урок через минуту в его календаре,
+у студентов — приглашение.
+
+`GOOGLE_TOKEN_KEY` шифрует refresh-токены в БД (и в бэкапах). Потерян или
+заменён ключ — сохранённые токены не расшифровываются: календари
+считаются отключёнными, преподаватели подключают их заново. Хранить
+ключ вместе с остальным `deploy/.env` в менеджере паролей.
 
 ## Правила
 
