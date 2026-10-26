@@ -31,6 +31,10 @@ type Job struct {
 	Payload json.RawMessage
 	// Attempt — номер текущей попытки, с единицы
 	Attempt int
+	// LastAttempt — попыток больше не будет: ошибка сделает джобу мёртвой.
+	// Хендлер, которому есть чем закончить и без успеха (транскрипт
+	// со статусом error, ADR-016), делает это здесь и возвращает nil.
+	LastAttempt bool
 }
 
 // Handler выполняет джобу одного kind. Ошибка — повтор с backoff, после

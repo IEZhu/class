@@ -41,10 +41,13 @@ srs_cards(user_id, term_id, due_at, stability, difficulty,
           reps, lapses, state, last_review_at, PRIMARY KEY(user_id, term_id))
 srs_reviews(id, user_id, term_id, rating /*again|hard|good|easy*/, reviewed_at, source /*card|cloze*/)
 
--- транскрипты
-transcripts(id, lesson_id, provider, status, vtt_s3_key)
+-- транскрипты (0008, ADR-015): один на урок; external_id — id у провайдера,
+-- error — причина сбоя (ADR-016)
+transcripts(id, lesson_id /*UNIQUE*/, provider /*assemblyai*/,
+            status /*queued|submitted|fetching|completed|error*/,
+            external_id, vtt_s3_key, error, created_at)
 utterances(transcript_id, idx, speaker_label, user_id nullable /*ручной маппинг A→Иван*/,
-           start_ms, end_ms, text)
+           start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx))
 
 -- индекс субтитров (практика-видео)
 videos(id, source /*youtube|ted*/, external_id, title, channel, duration_s, lang, added_at)
@@ -75,7 +78,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | invites | 1 | S1-10 |
 | колонки lessons.title, guest_token_hash; роль guest; CHECK правил события (0006) | 1 | S1-11 |
 | jobs (миграция `0007_jobs`); колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
-| transcripts, utterances | 2 | S2-2 |
+| transcripts, utterances (миграция `0008_transcripts`); FK lessons.transcript_id | 2 | S2-1…S2-3 |
 | terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
 | videos, subtitle_segments, subtitle_sources, tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-1…S5-6 |
@@ -102,5 +105,11 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   для видео-практики только по нему.
 - `users.google_refresh_token` хранится шифрованным (ключ в `.env`),
   есть только у teachers.
+- Транскрипт у урока один (`transcripts.lesson_id` UNIQUE,
+  `lessons.transcript_id` — зеркало); реплика одна на
+  `(transcript_id, idx)`, поэтому повторная доставка вебхука не
+  задваивает `utterances`. Статус транскрипта меняют только условные
+  переходы `store` (ADR-015); `vtt_s3_key` есть только у `completed`
+  (CHECK в 0008).
 
 Связано: [04-api.md](04-api.md) · планы этапов [../plans/](../plans/)

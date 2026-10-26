@@ -43,13 +43,7 @@ func main() {
 		LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
 		LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
 		EgressAudioOnly:  os.Getenv("EGRESS_AUDIO_ONLY") == "1",
-		Storage: storage.Config{
-			Bucket:    os.Getenv("S3_BUCKET"),
-			Region:    os.Getenv("S3_REGION"),
-			Endpoint:  os.Getenv("S3_ENDPOINT"),
-			AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
-			SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
-		},
+		Storage:          storage.ConfigFromEnv(),
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)

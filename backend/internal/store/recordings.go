@@ -45,9 +45,10 @@ func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, start 
 	return tx.Commit(ctx)
 }
 
-// JobRecordingReady — джоба-плейсхолдер точки вставки ASR (S1-5, ADR-013):
-// запись принята, урок в processing. Пока транскрибации нет, worker сразу
-// переводит урок в done; S2-1 заменит её джобой asr_submit.
+// JobRecordingReady — точка вставки ASR (S1-5, ADR-013): запись принята,
+// урок в processing. С ключом AssemblyAI worker заводит транскрипт
+// и ставит asr_submit (S2-1, ADR-015); без ключа остаётся плейсхолдер —
+// урок сразу done.
 const JobRecordingReady = "recording_ready"
 
 // RecordingReady — payload джобы JobRecordingReady.
@@ -87,7 +88,13 @@ func (s *Store) FinishLessonRecording(ctx context.Context, lessonID int64, s3Key
 // FinishLessonProcessing — обработка записи завершена, урок done. Повторный
 // вызов (at-least-once доставка джобы) ничего не меняет.
 func (s *Store) FinishLessonProcessing(ctx context.Context, lessonID int64) error {
-	_, err := s.pool.Exec(ctx,
+	return finishLesson(ctx, s.pool, lessonID)
+}
+
+// finishLesson — переход processing → done: в пуле или в транзакции
+// вызывающего (итог транскрипта, ADR-016).
+func finishLesson(ctx context.Context, db jobs.DB, lessonID int64) error {
+	_, err := db.Exec(ctx,
 		`UPDATE lessons SET status = 'done' WHERE id = $1 AND status = 'processing'`, lessonID)
 	return err
 }

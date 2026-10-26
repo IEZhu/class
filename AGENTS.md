@@ -39,8 +39,11 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
 - Required keys in `deploy/.env` (checked by `make check-env`): `DOMAIN`, `POSTGRES_DB`,
   `POSTGRES_USER`, `POSTGRES_PASSWORD`. Optional: `HTTP_PORT` (default 8090), `SEED_PASSWORD`,
   `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (without them the lesson room returns
-  503). The api also reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads
-  only `DATABASE_URL`; web reads `INTERNAL_API_URL` (default `http://api:8080`).
+  503), `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
+  goes straight to `done` without a transcript; ADR-015). The api also reads `DATABASE_URL` and
+  `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`, and with `ASSEMBLYAI_API_KEY`
+  also the webhook secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web
+  reads `INTERNAL_API_URL` (default `http://api:8080`).
 - Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
   to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`

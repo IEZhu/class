@@ -22,6 +22,8 @@ s3://lingua/
 - Bucket приватный; CORS — только GET для домена платформы.
 - Presigned GET (TTL ~30 мин) выдаёт api после проверки прав
   (`GET /media/{lesson_id}/url`).
+  Исключение — ссылка на запись для AssemblyAI: её подписывает worker
+  на 24 ч, и уходит она только AssemblyAI (ADR-015).
 - S3 отдаёт HTTP Range → перемотка в плеере Plyr работает из коробки.
 - Egress LiveKit пишет в бакет сам (S3 credentials в конфиге egress-запроса);
   AssemblyAI читает запись по presigned GET.

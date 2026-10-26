@@ -16,8 +16,9 @@ import (
 )
 
 // egress_ended — точка вставки ASR (S1-5, S1-2): путь записи, processing
-// и джоба recording_ready атомарно; worker доводит урок до done. Повторная
-// доставка и вебхука, и джобы ничего не ломает.
+// и джоба recording_ready атомарно; без ключа AssemblyAI worker сразу
+// доводит урок до done и транскрипт не заводит (S2-1). Повторная доставка
+// и вебхука, и джобы ничего не ломает.
 func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	a, conn := securityDB(t)
 	ctx := context.Background()
@@ -83,7 +84,7 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	expect("processing", key, 1)
 
 	runner := jobs.NewRunner(a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
-	worker.Register(runner, a.store)
+	worker.Register(runner, a.store, worker.ASR{})
 	runJob := func() {
 		t.Helper()
 		worked, err := runner.RunOnce(ctx)
@@ -104,8 +105,11 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	}
 	runJob()
 	expect("done", key, 0)
-	var left int
+	var left, transcripts int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM jobs`).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("jobs left: %d, %v", left, err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM transcripts`).Scan(&transcripts); err != nil || transcripts != 0 {
+		t.Fatalf("без ключа AssemblyAI заведено транскриптов: %d, %v", transcripts, err)
 	}
 }

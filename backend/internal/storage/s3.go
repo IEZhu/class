@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -32,6 +33,17 @@ type Config struct {
 	Endpoint  string // пусто для AWS; для R2 — https://<account>.r2.cloudflarestorage.com
 	AccessKey string
 	SecretKey string
+}
+
+// ConfigFromEnv — ключи S3_* из deploy/.env; читают и api, и worker.
+func ConfigFromEnv() Config {
+	return Config{
+		Bucket:    os.Getenv("S3_BUCKET"),
+		Region:    os.Getenv("S3_REGION"),
+		Endpoint:  os.Getenv("S3_ENDPOINT"),
+		AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
+		SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+	}
 }
 
 func (c Config) configured() bool {

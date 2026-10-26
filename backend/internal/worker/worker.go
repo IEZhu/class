@@ -13,19 +13,27 @@ import (
 )
 
 // Register подключает к runner все джобы worker'а.
-func Register(r *jobs.Runner, st *store.Store) {
-	r.Handle(store.JobRecordingReady, recordingReady(st))
+func Register(r *jobs.Runner, st *store.Store, asr ASR) {
+	r.Handle(store.JobRecordingReady, recordingReady(st, asr))
+
+	// S2-1…S2-3: транскрибация AssemblyAI (ADR-015, ADR-016). Хендлеры
+	// подключены и без ключа: джоба, поставленная до того, как ключ убрали,
+	// доведёт урок до done, а не будет ждать вечно.
+	r.Handle(store.JobASRSubmit, asrSubmit(st, asr))
 }
 
-// recordingReady — плейсхолдер точки вставки ASR (S1-5, ADR-013): пока
-// транскрибации нет, урок с принятой записью сразу done. S2-1 заменит его
-// джобой asr_submit.
-func recordingReady(st *store.Store) jobs.Handler {
+// recordingReady — точка вставки ASR (S1-5, ADR-013). С AssemblyAI урок
+// получает транскрипт и джобу asr_submit (S2-1); без ключа остаётся
+// плейсхолдер — урок с принятой записью сразу done.
+func recordingReady(st *store.Store, asr ASR) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p store.RecordingReady
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("payload: %w", err)
 		}
-		return st.FinishLessonProcessing(ctx, p.LessonID)
+		if asr.Client == nil {
+			return st.FinishLessonProcessing(ctx, p.LessonID)
+		}
+		return st.QueueTranscript(ctx, p.LessonID, store.ProviderAssemblyAI)
 	}
 }
