@@ -126,8 +126,8 @@ func (a *API) onEgressEnded(ctx context.Context, event *livekit.WebhookEvent) er
 	// Filename — путь внутри бакета, ровно тот, что мы задали в Filepath.
 	key := info.FileResults[0].Filename
 	// Точка вставки ASR: урок уходит в processing вместе с джобой
-	// recording_ready; пока ASR нет, worker сразу ставит done, в S2-1 её
-	// заменит asr_submit.
+	// recording_ready; worker отправляет запись в AssemblyAI (S2-1),
+	// а без ключа сразу ставит done.
 	switch err := a.store.FinishLessonRecording(ctx, lessonID, key); {
 	case errors.Is(err, store.ErrNotFound):
 		// Повторная доставка egress_ended: запись уже принята

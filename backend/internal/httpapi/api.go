@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/IEZhu/class/backend/internal/assemblyai"
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
@@ -35,6 +36,9 @@ type Config struct {
 	// Google (S1-1): без ключей подключение календаря отвечает 503,
 	// RedirectURL собирает New из PublicBaseURL.
 	Google gcal.Config
+	// AssemblyAIWebhookSecret (S2-2) — секрет, который AssemblyAI
+	// возвращает в заголовке вебхука; пусто — вебхук отвечает 503.
+	AssemblyAIWebhookSecret string
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -66,6 +70,11 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	st, err := storage.New(cfg.Storage)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.AssemblyAIWebhookSecret != "" {
+		if err := assemblyai.CheckWebhookSecret(cfg.AssemblyAIWebhookSecret); err != nil {
+			return nil, err
+		}
 	}
 	cfg.Google.RedirectURL = cfg.PublicBaseURL + googleCallbackPath
 	google, err := gcal.New(cfg.Google)
@@ -168,6 +177,11 @@ func (a *API) Router() http.Handler {
 	mux.Handle("DELETE /materials/{id}", teacher(a.handleDeleteMaterial))
 	mux.Handle("POST /users/{id}/deactivate", staff(a.handleSetUserArchived(true)))
 	mux.Handle("POST /users/{id}/reactivate", staff(a.handleSetUserArchived(false)))
+
+	// S2-2/S2-3: транскрипт урока. Вебхук AssemblyAI без auth-middleware:
+	// он аутентифицируется секретным заголовком
+	mux.HandleFunc("POST /webhooks/assemblyai", a.handleAssemblyAIWebhook)
+	mux.Handle("GET /lessons/{id}/transcript", user(a.handleGetTranscript))
 	return mux
 }
 

@@ -231,9 +231,11 @@ func TestFailureRetriesWithGrowingBackoffThenDies(t *testing.T) {
 	pool := testDB(t)
 	id := enqueue(t, pool)
 	calls := 0
+	var last []bool
 	r := NewRunner(pool, testConfig("retrier"))
-	r.Handle(testKind, func(context.Context, Job) error {
+	r.Handle(testKind, func(_ context.Context, job Job) error {
 		calls++
+		last = append(last, job.LastAttempt)
 		return fmt.Errorf("boom %d", calls)
 	})
 
@@ -271,6 +273,10 @@ func TestFailureRetriesWithGrowingBackoffThenDies(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("handler called %d times, want 3", calls)
+	}
+	// Хендлер узнаёт последнюю попытку заранее, а не по смерти джобы
+	if fmt.Sprint(last) != "[false false true]" {
+		t.Fatalf("LastAttempt by attempt %v, want [false false true]", last)
 	}
 }
 

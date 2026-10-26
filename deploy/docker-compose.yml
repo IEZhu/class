@@ -76,6 +76,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_TOKEN_KEY: ${GOOGLE_TOKEN_KEY:-}
+      # S2-2: секрет вебхука AssemblyAI; пусто — POST /webhooks/assemblyai
+      # отвечает 503
+      ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,7 +90,7 @@ services:
       start_period: 10s
 
   # S1-2: фоновые джобы из таблицы jobs (ADR-003, ADR-013). Портов нет:
-  # worker только ходит в postgres. Healthcheck не заведён — HTTP у worker'а
+  # worker ходит в postgres, а с S2-1 — ещё в AssemblyAI и хранилище. Healthcheck не заведён — HTTP у worker'а
   # нет, а упавший процесс поднимет restart.
   worker:
     build:
@@ -103,6 +106,17 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_TOKEN_KEY: ${GOOGLE_TOKEN_KEY:-}
+      # S2-1…S2-3: транскрибация AssemblyAI (ADR-015). Без ключа урок
+      # с записью сразу done; с ключом worker'у нужны секрет вебхука,
+      # хранилище (ссылка на запись, выгрузка VTT) и DOMAIN (выше) для
+      # адреса вебхука, иначе он не стартует
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
+      ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     # После SIGTERM текущей джобе даётся 20 с (jobs.Config.ShutdownGrace);
     # docker по умолчанию ждёт 10 — берём с запасом до SIGKILL
     stop_grace_period: 30s

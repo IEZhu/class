@@ -63,7 +63,73 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S2-1 Джоба asr_submit (2026-10-26)
+
+- Миграция `backend/migrations/0008_transcripts.up.sql` (+ `.down.sql`):
+  таблицы `transcripts` (`lesson_id` UNIQUE, `provider`, `status`
+  `queued|submitted|fetching|completed|error`, `external_id`
+  UNIQUE с провайдером, `vtt_s3_key`, `error`) и `utterances`
+  (PK `(transcript_id, idx)`); FK `lessons.transcript_id → transcripts`.
+  Откат переводит уроки с идущей транскрибацией в `done` и убирает их
+  джобы; накат/откат/накат проверены golang-migrate v4.17.1 на
+  одноразовом Postgres 16.
+- `backend/internal/assemblyai/` — клиент REST v2 (ADR-015): `New`
+  (без ключа — nil), `Submit` (`speech_models: [universal-2]`,
+  `language_code: en`, `punctuate`, `speaker_labels`, вебхук
+  с заголовком `X-Lingua-Webhook-Secret`), `Transcript`,
+  `CheckWebhookSecret` (≥ 32 символов).
+- Точка вставки — хендлер `recording_ready` (`backend/internal/worker/worker.go`):
+  без ключа урок сразу `done` (плейсхолдер ADR-013), с ключом —
+  `store.QueueTranscript`: строка `transcripts` + джоба `asr_submit`
+  одной транзакцией. Джоба `asr_submit` (`backend/internal/worker/asr.go`):
+  presigned GET записи на 24 ч → AssemblyAI → `submitted` + `external_id`.
+  Payload джоб транскрибации — `{"transcript_id": N}`.
+- `backend/internal/store/transcripts.go` — `QueueTranscript`,
+  `TranscriptByID`, `MarkTranscriptSubmitted`, `FailTranscript` (итог
+  сбоя, ADR-016); `jobs.Job.LastAttempt` — хендлер знает, что попытка
+  последняя.
+- Ключи `.env` (`deploy/.env.example`, compose): `ASSEMBLYAI_API_KEY`
+  (worker), `ASSEMBLYAI_WEBHOOK_SECRET` (api и worker); worker теперь
+  читает и `DOMAIN`, `S3_*` (`storage.ConfigFromEnv`, общий с api).
+  Без ключа api и worker стартуют как раньше; ключ без секрета,
+  хранилища или `DOMAIN` — worker не стартует.
+- Потерянный вебхук не сверяется — долг D-9.
+- Тесты: `internal/assemblyai`, `internal/httpapi/transcripts_test.go`
+  (`TestASRSubmit`, отказы и повтор, джоба без ключа, откат 0008) с fake
+  AssemblyAI и fake S3 `internal/storage/storagetest`.
+
+### S2-2 Webhook completed → utterances (2026-10-26)
+
+- `POST /webhooks/assemblyai` (`backend/internal/httpapi/transcripts.go`):
+  без секрета — 503 `assemblyai_not_configured`; неверный заголовок — 401;
+  тело `{transcript_id, status: completed|error}`, иначе 400; неизвестный
+  транскрипт — 404; принятый — `fetching` + джоба `asr_result`, повтор
+  доставки — 200 без новой джобы.
+- Джоба `asr_result`: `GET /v2/transcript/{id}` → `completed` —
+  `utterances` (idx по порядку, `speaker_label`, `start_ms`, `end_ms`,
+  `text`) + `completed` + джоба `vtt_render` одной транзакцией; `error` —
+  итог по ADR-016. Store: `TranscriptWebhook`, `SaveUtterances`,
+  `Utterances`, `LessonTranscript`.
+- `GET /lessons/{id}/transcript` — для вьюера S2-4: `{status,
+  utterances[{idx, speaker_label, user_id, start_ms, end_ms, text}],
+  vtt_url, vtt_expires_at}`; доступ как у `GET /lessons/{id}` (teacher
+  урока и участники; прочим 403), нет транскрипта — 404 `no_transcript`.
+- Тесты: вебхук и однократные реплики, доступ к транскрипту, ошибка
+  AssemblyAI, конфигурация секрета.
+
+### S2-3 VTT-рендер (2026-10-26)
+
+- `backend/internal/webvtt/` — `Render`: `WEBVTT`, cue на реплику,
+  `HH:MM:SS.mmm --> HH:MM:SS.mmm`, `<v A>`, экранирование `& < >`,
+  переводы строк → пробел, порядок по началу, конец строго позже начала.
+- Джоба `vtt_render`: реплики → VTT → `transcripts/{lesson_id}.vtt`
+  (`text/vtt; charset=utf-8`, `storage.Client.Put`, `storage.TranscriptKey`)
+  → `transcripts.vtt_s3_key`, `lessons.status=done`
+  (`store.FinishTranscriptVTT`). Перерендер перезаписывает тот же ключ.
+- Сбои (ADR-016): 8 попыток очереди, на последней — транскрипт `error`
+  (или `completed` без VTT), урок всё равно `done`.
+- Тесты: `TestASRPipeline` (вся цепочка до VTT в fake S3 и `done`,
+  повторы всех джоб), сбой выкладки VTT, `internal/webvtt`, `storage.Put`.
 
 ## Риски этапа
 

@@ -23,7 +23,12 @@ s3://lingua/
   скачивание) и PUT с заголовками `Content-Type`, `Content-Disposition`
   (загрузка файлов материалов).
 - Presigned GET (TTL ~30 мин) выдаёт api после проверки прав
-  (`GET /media/{lesson_id}/url`, `GET /materials/{id}/url`).
+  (`GET /media/{lesson_id}/url`, `GET /materials/{id}/url`, VTT — в
+  `GET /lessons/{id}/transcript`). Исключение — ссылка на запись для
+  AssemblyAI: её подписывает worker на 24 ч, и уходит она только
+  AssemblyAI (ADR-015).
+- VTT (`transcripts/{lesson_id}.vtt`, `text/vtt; charset=utf-8`) кладёт
+  worker сам: файл маленький и текстовый, медиа-инвариант не задет.
 - Файлы материалов (ADR-024): преподаватель урока получает presigned PUT
   на 10 мин — тип, длина и `Content-Disposition` с именем файла входят
   в подпись; затем `POST /materials/{id}/confirm`, где api сверяет объект

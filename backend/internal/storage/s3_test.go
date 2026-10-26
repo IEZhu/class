@@ -233,3 +233,9 @@ func TestStatAndDelete(t *testing.T) {
 		t.Errorf("Delete на nil-клиенте = %v", err)
 	}
 }
+
+func TestTranscriptKey(t *testing.T) {
+	if got := TranscriptKey(42); got != "transcripts/42.vtt" {
+		t.Errorf("TranscriptKey(42) = %q", got)
+	}
+}

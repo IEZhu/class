@@ -172,6 +172,7 @@ func (r *Runner) process(ctx context.Context, job Job) {
 		return
 	}
 
+	job.LastAttempt = job.Attempt >= r.cfg.MaxAttempts
 	interrupted, err := r.call(ctx, job)
 	switch {
 	case err == nil:
