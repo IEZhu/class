@@ -84,7 +84,7 @@ func registerCore(runner *jobs.Runner, st *store.Store) {
 	worker.Register(runner, st, asr)
 
 	// S1-1: Google Calendar опционален — без ключей calendar_sync снимает
-	// джобы со строкой в журнале (ADR-023)
+	// создание и перенос со строкой в журнале, удаления ждут (ADR-023)
 	googleCfg := gcal.Config{
 		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),

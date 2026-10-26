@@ -16,7 +16,8 @@ const JobCalendarSync = "calendar_sync"
 
 // CalendarSync — payload джобы JobCalendarSync. Отмена удаляет строку
 // урока, поэтому её джоба несёт всё, что нужно для удаления события:
-// чей это календарь и какой id у события.
+// чей это календарь и какой id у события. По teacher_id SetGoogleToken
+// находит удаления, ждущие нового токена.
 type CalendarSync struct {
 	LessonID  int64  `json:"lesson_id"`
 	TeacherID int64  `json:"teacher_id,omitempty"`
@@ -29,7 +30,8 @@ type CalendarSync struct {
 const newEventID = `replace(gen_random_uuid()::text, '-', '')`
 
 // calendarConnected — подключён ли Google у преподавателя. Транзакция,
-// меняющая урок, спрашивает это первой, до блокировки строки урока:
+// создающая или переносящая урок, спрашивает это первой, до блокировки
+// строки урока:
 // FOR SHARE встаёт в очередь за параллельным подключением, а порядок
 // блокировок тот же, что у SetGoogleToken (users, затем lessons), — без
 // взаимной блокировки урок либо увидит новый токен, либо попадёт в
@@ -58,8 +60,9 @@ func queueCalendarSync(ctx context.Context, tx pgx.Tx, lessonID int64) error {
 // SetGoogleToken — календарь подключён: шифртекст refresh token и джобы
 // calendar_sync для будущих уроков преподавателя одной транзакцией, чтобы
 // уроки, заведённые до подключения, тоже появились в календаре. Повторное
-// подключение (в том числе другого аккаунта) синхронизирует их ещё раз —
-// джоба идемпотентна. ErrNotFound — учётки нет или это не преподаватель.
+// подключение синхронизирует будущие уроки ещё раз (джоба идемпотентна
+// в пределах одного календаря); события в календаре прежнего аккаунта
+// остаются. ErrNotFound — учётки нет или это не преподаватель.
 func (s *Store) SetGoogleToken(ctx context.Context, teacherID int64, sealed []byte) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -91,6 +94,17 @@ func (s *Store) SetGoogleToken(ctx context.Context, teacherID int64, sealed []by
 		if _, err := jobs.Enqueue(ctx, tx, JobCalendarSync, CalendarSync{LessonID: id}); err != nil {
 			return err
 		}
+	}
+	// Удаления событий отменённых уроков, которые ждали рабочего токена
+	// (повторы с backoff или уже мёртвые), — снова в работу и с первой
+	// попытки. Захваченную сейчас джобу сброс attempts лишает итога её
+	// попытки (токен владения в jobs.Runner), и она вернётся в очередь по
+	// истечении захвата: так удаление не теряется ни при каком порядке
+	if _, err := tx.Exec(ctx,
+		`UPDATE jobs SET attempts = 0, failed_at = NULL, run_at = now()
+		 WHERE kind = $1 AND payload ? 'event_id' AND (payload->>'teacher_id')::bigint = $2`,
+		JobCalendarSync, teacherID); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

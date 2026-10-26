@@ -45,7 +45,8 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   503), `BACKUP_S3_*` for `deploy/backup-pg.sh` (all empty → the recordings bucket and token
   with a journal warning, debt D-8; any one set → `BACKUP_S3_BUCKET` is required),
   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (all three or the
-  Google Calendar connection is unavailable and `calendar_sync` skips lessons, ADR-023),
+  Google Calendar connection is unavailable and `calendar_sync` skips lesson creates and
+  reschedules while event deletes wait in the queue, ADR-023),
   `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
   goes straight to `done` without a transcript; ADR-015), `COMPOSE_PROFILES=whiteboard` with
   `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503),
