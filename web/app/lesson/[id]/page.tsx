@@ -9,6 +9,8 @@ import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
 import LessonPlayer from "./lesson-player";
 import LessonRoom from "./lesson-room";
+import LiveTabs from "./live-tabs";
+import Whiteboard from "./whiteboard";
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "full",
@@ -23,6 +25,17 @@ const phaseTitles: Record<LessonPhase, string> = {
   processing: "Запись обрабатывается",
   done: "Прошёл",
 };
+
+// Живой урок шире колонки страницы (640px): доске и видео нужно место.
+// Секция выходит за колонку симметрично — до 1200px или почти всего экрана.
+const liveSectionStyle = {
+  border: "2px solid #2a7",
+  borderRadius: 8,
+  padding: "1rem",
+  boxSizing: "border-box",
+  width: "min(96vw, 1200px)",
+  margin: "1rem 0 1rem calc((100% - min(96vw, 1200px)) / 2)",
+} as const;
 
 // общий вид секций-заглушек будущих этапов (S1-5/S1-6/S2-4)
 const placeholderSectionStyle = {
@@ -76,9 +89,12 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       )}
 
       {phase === "live" && (
-        <section style={{ border: "2px solid #2a7", borderRadius: 8, padding: "1rem", margin: "1rem 0" }}>
-          {/* Доска и словарь урока приедут на этапе 3 */}
-          <LessonRoom lessonId={lesson.id} />
+        <section style={liveSectionStyle}>
+          {/* Доска — только на живом уроке (S3-6); словарь урока приедет в S3-7 */}
+          <LiveTabs
+            room={<LessonRoom lessonId={lesson.id} />}
+            board={<Whiteboard lessonId={lesson.id} userName={me.name} />}
+          />
         </section>
       )}
 

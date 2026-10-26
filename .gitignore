@@ -8,6 +8,8 @@ node_modules/
 .next/
 out/
 *.tsbuildinfo
+# шрифты доски копируются из пакета при сборке (web/scripts/excalidraw-assets.mjs)
+web/public/excalidraw/
 
 # backend
 bin/
