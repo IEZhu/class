@@ -3,7 +3,11 @@ package storage
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,5 +114,122 @@ func TestNewRegion(t *testing.T) {
 	}
 	if cred := u.Query().Get("X-Amz-Credential"); !strings.Contains(cred, "/auto/s3/") {
 		t.Errorf("R2 подписан не регионом auto: %q", cred)
+	}
+}
+
+// Ключ файла материала выбирает api: префикс урока по раскладке
+// 05-storage-s3.md и случайное имя, разное у каждого вызова.
+func TestNewMaterialKey(t *testing.T) {
+	a, err := NewMaterialKey(42, "pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewMaterialKey(42, "pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^materials/42/[0-9a-f]{32}\.pdf$`).MatchString(a) {
+		t.Errorf("ключ %q не по раскладке materials/{lesson_id}/", a)
+	}
+	if a == b {
+		t.Error("два ключа совпали — имя не случайное")
+	}
+}
+
+// Тип, длина и Content-Disposition входят в подпись: браузер не загрузит
+// по этой ссылке другой тип или другой объём (ADR-024). Host и
+// Content-Length ему не отдаём — их выставляет сам браузер.
+func TestPresignPutShape(t *testing.T) {
+	c, err := New(Config{
+		Bucket: "lingua-class", Endpoint: "https://acc.r2.cloudflarestorage.com",
+		AccessKey: "AKIAtest", SecretKey: "secret-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const disposition = `attachment; filename="notes.pdf"`
+	put, err := c.PresignPut(context.Background(), "materials/5/abc.pdf", "application/pdf", disposition, 1234, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("PresignPut: %v", err)
+	}
+	u, err := url.Parse(put.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/lingua-class/materials/5/abc.pdf"; u.Path != want {
+		t.Errorf("path = %q, хотели %q", u.Path, want)
+	}
+	q := u.Query()
+	if got := q.Get("X-Amz-Expires"); got != "600" {
+		t.Errorf("X-Amz-Expires = %q, хотели 600", got)
+	}
+	signed := strings.Split(q.Get("X-Amz-SignedHeaders"), ";")
+	for _, h := range []string{"content-disposition", "content-length", "content-type", "host"} {
+		if !slices.Contains(signed, h) {
+			t.Errorf("%s не в подписи: %v", h, signed)
+		}
+	}
+	if got := put.Header.Get("Content-Type"); got != "application/pdf" {
+		t.Errorf("Content-Type для браузера = %q", got)
+	}
+	if got := put.Header.Get("Content-Disposition"); got != disposition {
+		t.Errorf("Content-Disposition для браузера = %q", got)
+	}
+	for _, h := range []string{"Host", "Content-Length"} {
+		if put.Header.Get(h) != "" {
+			t.Errorf("заголовок %s браузер задать не может, а он в списке", h)
+		}
+	}
+	if strings.Contains(put.URL, "secret-value") {
+		t.Error("секрет утёк в presigned-ссылку")
+	}
+}
+
+// Stat и Delete ходят в хранилище — здесь его подменяет httptest-сервер
+// с ответами S3 API.
+func TestStatAndDelete(t *testing.T) {
+	var deleted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/b/materials/1/present.pdf":
+			w.Header().Set("Content-Length", "42")
+			w.Header().Set("Content-Type", "application/pdf")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+	c, err := New(Config{Bucket: "b", Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	info, err := c.Stat(ctx, "materials/1/present.pdf")
+	if err != nil || info.Size != 42 || info.ContentType != "application/pdf" {
+		t.Errorf("Stat = (%+v, %v), хотели 42 байта application/pdf", info, err)
+	}
+	if _, err := c.Stat(ctx, "materials/1/missing.pdf"); !errors.Is(err, ErrObjectNotFound) {
+		t.Errorf("Stat отсутствующего = %v, хотели ErrObjectNotFound", err)
+	}
+	if err := c.Delete(ctx, "materials/1/present.pdf"); err != nil {
+		t.Errorf("Delete: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0] != "/b/materials/1/present.pdf" {
+		t.Errorf("DELETE ушёл на %v", deleted)
+	}
+
+	var none *Client
+	if _, err := none.Stat(ctx, "k"); err != ErrNotConfigured {
+		t.Errorf("Stat на nil-клиенте = %v", err)
+	}
+	if err := none.Delete(ctx, "k"); err != ErrNotConfigured {
+		t.Errorf("Delete на nil-клиенте = %v", err)
 	}
 }

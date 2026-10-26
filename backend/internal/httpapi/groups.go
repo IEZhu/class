@@ -19,16 +19,21 @@ type groupResponse struct {
 }
 
 type memberResponse struct {
-	UserID int64  `json:"user_id"`
-	Email  string `json:"email"`
-	Name   string `json:"name"`
-	Role   string `json:"role"`
+	UserID   int64  `json:"user_id"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Archived bool   `json:"archived"`
+}
+
+func toMemberResponse(m store.GroupMember) memberResponse {
+	return memberResponse{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role, Archived: m.Archived}
 }
 
 func toMemberResponses(ms []store.GroupMember) []memberResponse {
 	out := make([]memberResponse, 0, len(ms))
 	for _, m := range ms {
-		out = append(out, memberResponse{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role})
+		out = append(out, toMemberResponse(m))
 	}
 	return out
 }
@@ -98,7 +103,7 @@ func (a *API) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		internalError(w, "add group member", err)
 	default:
-		writeJSON(w, http.StatusCreated, memberResponse{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role})
+		writeJSON(w, http.StatusCreated, toMemberResponse(*m))
 	}
 }
 

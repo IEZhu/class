@@ -117,7 +117,7 @@ func (a *API) handleGetLesson(w http.ResponseWriter, r *http.Request) {
 	resp := lessonDetailResponse{
 		lessonResponse: lessonToResponse(&d.Lesson, d.GroupName),
 		TeacherName:    d.TeacherName,
-		Materials:      toMaterialResponses(d.Materials),
+		Materials:      toMaterialResponses(visibleMaterials(d.Materials, u.ID == d.TeacherID)),
 		Participants:   toMemberResponses(d.Participants),
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -152,10 +152,12 @@ func (a *API) handleCancelLesson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.store.CancelLesson(r.Context(), lessonID, u.ID); err != nil {
+	keys, err := a.store.CancelLesson(r.Context(), lessonID, u.ID)
+	if err != nil {
 		writeLessonUpdateError(w, "cancel lesson", err)
 		return
 	}
+	a.deleteFiles(r.Context(), keys)
 	w.WriteHeader(http.StatusNoContent)
 }
 

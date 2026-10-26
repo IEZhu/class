@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Настройка бакета для записей уроков (S1-3): CORS и lifecycle.
+# Настройка бакета для записей уроков (S1-3) и файлов материалов (D-4):
+# CORS и lifecycle.
 # Провайдер — Cloudflare R2 (ADR-009), API S3-совместимый, поэтому работаем
 # обычным aws cli с --endpoint-url. Раскладка и политика хранения —
 # docs/architecture/05-storage-s3.md.
@@ -44,15 +45,24 @@ else
     r2 create-bucket --bucket "$BUCKET"
 fi
 
-say "2/4 CORS: только GET и HEAD, только с домена платформы"
-# Нужен плееру: запись отдаётся браузеру по presigned GET напрямую из R2,
-# минуя VPS. ExposeHeaders — чтобы работала перемотка по Range.
+say "2/4 CORS: GET/HEAD и PUT, только с домена платформы"
+# GET/HEAD нужен плееру: запись отдаётся браузеру по presigned GET напрямую
+# из R2, минуя VPS. ExposeHeaders — чтобы работала перемотка по Range.
+# PUT — загрузка файлов материалов браузером по presigned PUT (ADR-024):
+# ровно те два заголовка, что api вносит в подпись; длину браузер ставит
+# сам. Правило PUT появилось с долгом D-4 — бакет, настроенный раньше,
+# надо перенастроить повторным запуском скрипта (долг D-14).
 r2 put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
   \"CORSRules\": [{
     \"AllowedOrigins\": [\"$ORIGIN\"],
     \"AllowedMethods\": [\"GET\", \"HEAD\"],
     \"AllowedHeaders\": [\"*\"],
     \"ExposeHeaders\": [\"Content-Length\", \"Content-Range\", \"Accept-Ranges\", \"ETag\"],
+    \"MaxAgeSeconds\": 3000
+  }, {
+    \"AllowedOrigins\": [\"$ORIGIN\"],
+    \"AllowedMethods\": [\"PUT\"],
+    \"AllowedHeaders\": [\"Content-Type\", \"Content-Disposition\"],
     \"MaxAgeSeconds\": 3000
   }]
 }"

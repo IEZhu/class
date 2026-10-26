@@ -46,14 +46,16 @@ type User struct {
 	Role         string
 	Name         string
 	PasswordHash string
+	// DeactivatedAt — учётка в архиве (ADR-024): войти нельзя, сессий нет
+	DeactivatedAt *time.Time
 }
 
 func (s *Store) UserByEmail(ctx context.Context, email string) (*User, error) {
 	u := &User{}
 	var hash *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, email, role, name, password_hash FROM users WHERE email = $1`,
-		email).Scan(&u.ID, &u.Email, &u.Role, &u.Name, &hash)
+		`SELECT id, email, role, name, password_hash, deactivated_at FROM users WHERE email = $1`,
+		email).Scan(&u.ID, &u.Email, &u.Role, &u.Name, &hash, &u.DeactivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -73,13 +75,16 @@ func (s *Store) CreateSession(ctx context.Context, userID int64, tokenHash strin
 	return err
 }
 
+// UserBySessionTokenHash — владелец живой сессии. Учётка в архиве сессий
+// не имеет (DeactivateUser гасит их), но фильтр стоит и здесь: логин,
+// успевший проверить пароль до архивации, мог дописать сессию после неё.
 func (s *Store) UserBySessionTokenHash(ctx context.Context, tokenHash string) (*User, error) {
 	u := &User{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT u.id, u.email, u.role, u.name
 		 FROM sessions s
 		 JOIN users u ON u.id = s.user_id
-		 WHERE s.token_hash = $1 AND s.expires_at > now()`,
+		 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deactivated_at IS NULL`,
 		tokenHash).Scan(&u.ID, &u.Email, &u.Role, &u.Name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
