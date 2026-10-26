@@ -11,17 +11,23 @@ sequenceDiagram
     participant B as Browser (ClickableText)
     participant A as api
     participant LT as LibreTranslate
-    B->>A: POST /terms/click {surface, context_sentence}
+    B->>A: POST /terms/click {surface, context_sentence, lesson_id?}
     A->>A: лемматизация (en)
     A->>A: terms.translation_cache?
     alt кэш-мисс
         A->>LT: перевод en→ru
         LT-->>A: перевод (пишем в кэш)
     end
-    A->>A: дефиниция из словарного датасета (PG)
-    A-->>B: {перевод, дефиниция, примеры Tatoeba, статус слова}
+    A->>A: дефиниции из словарного датасета (PG) — по лемме и по самой форме
+    A-->>B: {term_id, lemma, surface, translation | null, definitions[], examples: []}
     B->>A: POST /user-terms («в мой словарь»)
 ```
+
+Контракт — [04-api.md](../04-api.md): `translation` — `null`, если перевода
+нет в кэше, а LibreTranslate не настроен или не ответил; `examples` пуст
+до S5-4 (долг D-1); статуса слова в ответе пока нет — он появится
+с `user_terms` в S3-5. Датасет ищется и по лемме, и по самой форме слова:
+у building в попапе есть и build, и building (ADR-017).
 
 ## Содержимое попапа
 
