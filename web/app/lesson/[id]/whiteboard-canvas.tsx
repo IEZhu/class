@@ -54,6 +54,13 @@ const FULL_SYNC_MS = 20_000;
 const SAVE_DEBOUNCE_MS = 2_000;
 const SAVE_RETRY_MS = 10_000;
 const POINTER_THROTTLE_MS = 50;
+// Новичку отвечаем всей сценой (SCENE_INIT), но не на каждый new-user:
+// ретранслятор шлёт его на любой join-room, в том числе повторный от того
+// же сокета. Одному сокету — не чаще раза в 10 с; новичкам, пришедшим
+// разом, — одна рассылка через 1 с. Сохранённую сцену новичок уже взял
+// из api, ответ лишь досылает несохранённое.
+const SCENE_INIT_PER_PEER_MS = 10_000;
+const SCENE_INIT_DELAY_MS = 1_000;
 // keepalive-запрос при уходе со страницы браузер ограничивает 64 КБ
 const KEEPALIVE_MAX_BYTES = 60_000;
 
@@ -72,10 +79,16 @@ class BoardSync {
   private peers = 1;
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private initTimer: ReturnType<typeof setTimeout> | null = null;
+  // Сокет новичка → когда ему последний раз ответили всей сценой
+  private initSentAt = new Map<string, number>();
   private fullSync: ReturnType<typeof setInterval>;
   private lastPointerAt = 0;
   private dirty = false;
-  private saving = false;
+  // Обычные (не keepalive) сохранения в полёте: уход со страницы их оборвёт
+  private inFlight = 0;
+  // Срок сохранения пришёл, пока предыдущее в полёте: следующее уйдёт сразу за ним
+  private again = false;
   private stopped = false;
 
   constructor(
@@ -96,22 +109,45 @@ class BoardSync {
       // После переподключения догоняем остальных тем, что нарисовали без связи
       void this.broadcastAll("SCENE_UPDATE", true);
     });
-    this.socket.on("new-user", () => void this.broadcastAll("SCENE_INIT", true));
+    this.socket.on("new-user", (peer: string) => this.onNewUser(peer));
     this.socket.on("room-user-change", (ids: string[]) => this.onPeers(ids));
     this.socket.on("client-broadcast", (data: ArrayBuffer, iv: ArrayBuffer) => void this.onMessage(data, iv));
     this.socket.on("connect", () => this.status({ text: "на связи" }));
     this.socket.on("disconnect", () => this.status({ text: "нет связи с доской, переподключаемся…", error: true }));
     this.socket.on("connect_error", () => this.status({ text: "нет связи с доской, переподключаемся…", error: true }));
     this.fullSync = setInterval(() => void this.broadcastAll("SCENE_UPDATE", false), FULL_SYNC_MS);
+    // Закрытие вкладки, перезагрузка, уход в фон на телефоне: очистка
+    // эффекта React тогда не выполняется — сохраняемся по событиям страницы
+    window.addEventListener("pagehide", this.onPageHide);
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
   stop() {
     this.stopped = true;
     clearInterval(this.fullSync);
     if (this.broadcastTimer) clearTimeout(this.broadcastTimer);
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    void this.save(true);
+    if (this.initTimer) clearTimeout(this.initTimer);
+    window.removeEventListener("pagehide", this.onPageHide);
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    this.leave();
     this.socket.disconnect();
+  }
+
+  private onPageHide = () => this.leave();
+
+  private onVisibilityChange = () => {
+    if (document.visibilityState === "hidden") this.leave();
+  };
+
+  // Уход со страницы или с доски: несохранённое уходит сразу запросом
+  // keepalive — его браузер доводит и после закрытия вкладки. Обычное
+  // сохранение в полёте выгрузка оборвёт, поэтому его сцену шлём ещё раз
+  // вместе со всем, что нарисовано после.
+  private leave() {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    if (this.inFlight > 0) this.dirty = true;
+    void this.save(true);
   }
 
   // onChange Excalidraw: зовётся и на движение мыши, поэтому сначала —
@@ -212,10 +248,25 @@ class BoardSync {
     }
   }
 
+  private onNewUser(peer: string) {
+    const now = Date.now();
+    if (now - (this.initSentAt.get(peer) ?? -Infinity) < SCENE_INIT_PER_PEER_MS) return;
+    this.initSentAt.set(peer, now);
+    // Рассылка уже собирается — она достанется и этому новичку
+    if (this.initTimer) return;
+    this.initTimer = setTimeout(() => {
+      this.initTimer = null;
+      void this.broadcastAll("SCENE_INIT", true);
+    }, SCENE_INIT_DELAY_MS);
+  }
+
   private onPeers(ids: string[]) {
     this.peers = ids.length;
     for (const id of this.collaborators.keys()) {
       if (!ids.includes(id)) this.collaborators.delete(id);
+    }
+    for (const id of this.initSentAt.keys()) {
+      if (!ids.includes(id)) this.initSentAt.delete(id);
     }
     this.api.updateScene({ collaborators: new Map(this.collaborators) });
     this.status({ text: "на связи" });
@@ -231,20 +282,23 @@ class BoardSync {
 
   // Сцену сохраняет каждый, кто рисовал; api сливает сохранения поэлементно
   private async save(leaving: boolean) {
-    if (!this.dirty || this.saving) {
-      if (this.saving && this.dirty) this.scheduleSave(SAVE_DEBOUNCE_MS);
+    if (!this.dirty) return;
+    if (this.inFlight > 0 && !leaving) {
+      this.again = true;
       return;
     }
-    this.saving = true;
     this.dirty = false;
     const body = JSON.stringify({ elements: this.elements() });
+    // При уходе со страницы обычный запрос браузер оборвёт, а keepalive
+    // ограничен 64 КБ: сцена больше уходит обычным и может не дойти
+    const keepalive = leaving && new TextEncoder().encode(body).byteLength < KEEPALIVE_MAX_BYTES;
+    if (!keepalive) this.inFlight++;
     try {
       const res = await fetch(`/api/lessons/${this.lessonId}/whiteboard/scene`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body,
-        // При уходе со страницы обычный запрос браузер может оборвать
-        keepalive: leaving && new TextEncoder().encode(body).byteLength < KEEPALIVE_MAX_BYTES,
+        keepalive,
       });
       if (!res.ok) {
         const parsed = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -259,7 +313,13 @@ class BoardSync {
       this.retrySave();
       this.status({ text: "не сохранено: сеть недоступна, повторим", error: true });
     } finally {
-      this.saving = false;
+      if (!keepalive) {
+        this.inFlight--;
+        if (this.inFlight === 0 && this.again && !this.stopped) {
+          this.again = false;
+          void this.save(false);
+        }
+      }
     }
   }
 
