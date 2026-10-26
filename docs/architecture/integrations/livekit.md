@@ -9,7 +9,9 @@
   (`GET /lessons/{id}/room-token`, identity = user_id, права по роли).
 - **Egress** (запись): room composite → `s3://…/recordings/{id}/room.mp4`;
   S3 credentials передаются в конфиге egress-запроса. Экономный вариант —
-  **audio-only** (для транскрипта этого достаточно).
+  **audio-only** (для транскрипта этого достаточно). Запуск — по
+  `room_started`, страховка — по `participant_joined`; статус live
+  фиксируется только вместе с успешным запуском ([ADR-012](../decisions.md)).
 - Webhook `egress_ended` → `POST /webhooks/livekit` (проверка подписи по
   API key/secret) → `lessons.recording_s3_key`, `status=processing`.
 

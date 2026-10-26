@@ -28,7 +28,7 @@ type roomTokenResponse struct {
 // handleRoomToken — access token в комнату урока. Медиа идёт браузер ↔
 // LiveKit Cloud, минуя VPS: api только подписывает право на вход.
 func (a *API) handleRoomToken(w http.ResponseWriter, r *http.Request) {
-	if a.cfg.LiveKitAPIKey == "" || a.cfg.LiveKitAPISecret == "" || a.cfg.LiveKitURL == "" {
+	if !a.cfg.liveKitConfigured() {
 		// Стенд без ключей остаётся рабочим, комната просто недоступна
 		writeError(w, http.StatusServiceUnavailable, "livekit_not_configured",
 			"видеокомната не настроена")

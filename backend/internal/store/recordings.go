@@ -7,20 +7,40 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// StartLessonRecording помечает урок начавшимся. Условие status = 'scheduled'
-// делает вызов идемпотентным: LiveKit может доставить room_started повторно,
-// и вторая доставка не запустит второй Egress. ErrNotFound — урока нет либо
-// он уже не scheduled, то есть запускать нечего.
-func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64) error {
+// StartLessonRecording переводит урок scheduled → live и в той же транзакции
+// вызывает start — запуск Egress. Переход фиксируется только вместе
+// с успешным запуском: если start вернул ошибку, транзакция откатывается,
+// урок остаётся scheduled и следующая доставка вебхука повторит запуск
+// (ADR-012). Иначе сорванный старт навсегда оставлял бы урок без записи.
+//
+// SKIP LOCKED делает вызов идемпотентным и неблокирующим: пока один запуск
+// держит строку урока, параллельная доставка room_started не ждёт его
+// и не запускает второй Egress. ErrNotFound — урока нет, он уже не
+// scheduled или запуск идёт прямо сейчас, то есть запускать нечего.
+func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, start func(context.Context) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var id int64
-	err := s.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`UPDATE lessons SET status = 'live'
-		 WHERE id = $1 AND status = 'scheduled'
+		 WHERE id = (SELECT id FROM lessons
+		             WHERE id = $1 AND status = 'scheduled'
+		             FOR UPDATE SKIP LOCKED)
 		 RETURNING id`, lessonID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err := start(ctx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // FinishLessonRecording — запись готова: путь в бакете и статус.
