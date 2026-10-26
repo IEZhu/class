@@ -44,7 +44,8 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
 - Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
   to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`
-  queue tests; they create isolated schemas and apply the real migrations. CI requires this
+  queue tests; they create isolated schemas and apply the real migrations through the one
+  shared harness `internal/testdb` (advisory lock, `pgcrypto` in `public`). CI requires this
   database and does not skip those tests. `.github/workflows/ci.yml` also verifies modules,
   runs vet, builds every `cmd`, checks web types and builds Next.js.
   `.github/workflows/security.yml` blocks all known dependency

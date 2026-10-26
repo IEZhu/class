@@ -312,9 +312,18 @@ teacher — только студенты своих групп (состав г
 - CI: `ci.yml` собирает все `cmd`; `security.yml` сканирует образ worker
   (матрица, `smoke_runtime.sh worker` — uid 10001 и отказ без
   `DATABASE_URL`, `check_scan_inventory.py`).
+- Сбой транзакции `egress_ended` — ответ 503, LiveKit повторяет доставку;
+  200 остаётся для чужой комнаты, `EGRESS_FAILED`, пустого результата
+  и уже принятой записи (ADR-013).
 - Порядок выката: `make migrate` до api — без таблицы `jobs` вебхук
-  `egress_ended` откатывает транзакцию и путь записи теряется.
+  `egress_ended` откатывает транзакцию, а повторы LiveKit ограничены:
+  исчерпав их, путь записи теряется.
+- Тесты на базе — общий harness `backend/internal/testdb` (httpapi и jobs):
+  миграции под `pg_advisory_lock`, `pgcrypto` один раз в `public`, иначе
+  параллельные пакеты `go test ./...` падали на `CREATE EXTENSION` (23505).
 - calendar_sync не сделан — долг D-7, закрывает S1-1 (вне MVP).
+- Глобальная уборка протухших сессий (ADR-006) не сделана — нет
+  периодических джоб, долг D-15.
 
 ## Риски этапа
 
