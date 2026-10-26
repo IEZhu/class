@@ -156,6 +156,53 @@ LLM с контекстом предложения — **закрывает до
   решение владельца — бэкфилл каналов TED/TED-Ed тем же сборщиком
   или другой источник.
 
+### S5-4 Импорт Tatoeba (2026-10-26) — ◐, закрывает D-1
+
+- Миграция `backend/migrations/0016_tatoeba.up.sql` (откат — `.down.sql`):
+  `tatoeba_sentences` (id — id Tatoeba, `lang` en|ru, `text`, `author`,
+  `lemmas text[]` только у en — `CHECK tatoeba_sentences_lemmas_en`,
+  `import_id`; GIN `tatoeba_sentences_lemmas_idx` `WHERE lang = 'en'`),
+  `tatoeba_links` (PK `(en_id, ru_id)`, `import_id`, индекс
+  `tatoeba_links_ru_idx`), `tatoeba_imports` (`source_version`, `phase`
+  ru|en, `lines_done`, `finished_at`; один незавершённый —
+  `tatoeba_imports_running_key`). Отступления от модели данных
+  (`owner_skill` нет, есть `author` и `lemmas`) — ADR-028.
+- Импорт — пакет `backend/internal/tatoeba` (`Import`, `Lemmas`,
+  `License`, `LicenseURL`, `SentenceURL`) и команда
+  `backend/cmd/tatoebaimport` (в образе worker'а,
+  `/usr/local/bin/tatoebaimport`; флаги `-links`, `-english`, `-russian`,
+  `-restart`, `-max-runes` 150, `-max-translations` 1), make-цель
+  `tatoeba-import` (`TATOEBA_DIR` — локальные файлы). Источник по
+  умолчанию — поязыковые выгрузки tatoeba.org `eng-rus_links.tsv.bz2`,
+  `eng_sentences_detailed.tsv.bz2`, `rus_sentences_detailed.tsv.bz2`
+  (формат сверен с выгрузкой 2026-10-24). Загрузка и чтение дампов —
+  общий с dictimport пакет `backend/internal/dumpfile` (`Open`,
+  `Decompress` — gzip и bzip2, `ReadLine`), вынесен из S3-4.
+- `POST /terms/click` наполняет `examples`: до 2 предложений с леммой
+  термина и русским переводом — `{text, translation, source: "tatoeba",
+  attribution: {author, url, translation_author, translation_url,
+  license: "CC BY 2.0 FR", license_url}}`; store —
+  `Examples` (`backend/internal/store/tatoeba.go`). Без корпуса или при
+  сбое запроса — `examples: []`, клик 200. Новых ключей `.env`, джоб
+  и путей S3 нет; smoke worker-образа проверяет и `tatoebaimport`
+  (`scripts/security/smoke_runtime.sh`).
+- Тесты: `backend/internal/tatoeba/tatoeba_test.go` (разбор строк,
+  леммы), `backend/internal/dumpfile/dumpfile_test.go`,
+  `backend/internal/httpapi/tatoeba_test.go` на фикстуре
+  `backend/internal/tatoeba/testdata/` (повтор — тот же корпус,
+  испорченные строки, продолжение после обрыва в каждой фазе, смена
+  версии и потолков, `-restart`, пустая и недокачанная выгрузка, уборка
+  устаревшего, один импорт за раз, обратимость 0016; клик: 2 кратчайших
+  примера в любой форме слова, подпись, пустой список без корпуса и без
+  таблиц, ни одного HTTP-запроса).
+- Ожидаемый объём на стенде (оценка на синтетической выгрузке полного
+  размера, ADR-028): ~544 тыс. английских, ~474 тыс. русских, ~544 тыс.
+  пар, ~250 MB в PG; запрос примеров 1–8 мс. **Осталось для ☑:**
+  `make migrate` и `make tatoeba-import` на стенде по
+  [deploy/README.md](../../deploy/README.md#примеры-tatoeba-импорт-корпуса-s5-4)
+  и проверка DoD на частотных словах; примеры с подписью рисует попап
+  S3-1.
+
 ## Риски этапа
 
 Блокировка IP YouTube (рейт/cookies/backoff, fallback — домашняя машина,
