@@ -13,7 +13,7 @@
 | api | Go | 50–150 MB | 0 | REST/JSON API, auth (sessions/JWT), FSRS (go-fsrs), выдача presigned URL, LiveKit tokens |
 | postgres | postgres:16 | 300–500 MB | 0 | всё состояние + full-text search субтитров/текстов |
 | worker | Go | 100–300 MB | 1 | очереди: календарь, ASR-джобы, сборщик субтитров, импорт Tatoeba, LLM-генерация, VTT-рендер |
-| libretranslate | libretranslate | 1–1.5 GB | 3 | перевод en↔ru; **обязательно** `--load-only en,ru`, ограничить threads |
+| libretranslate | libretranslate:v1.9.6 (digest) | 1–1.5 GB (замер ~380 MB) | 3 | перевод en↔ru; `LT_LOAD_ONLY=en,ru`, `LT_THREADS=1`; профиль `translate`, сеть `translate` (internal) — ADR-018 |
 | excalidraw | PatWie/excalidraw-complete | 50–100 MB | 3 | доска: фронт + storage + realtime в одном Go-бинаре; сцены привязаны к lesson_id |
 | redis | redis:7 | 50 MB | опц. | кэш переводов, rate-limit; очереди держим в PG (SKIP LOCKED) — redis не зависимость |
 
@@ -30,6 +30,10 @@
   решение — [decisions.md](decisions.md)).
 - **libretranslate** без `--load-only en,ru` тянет все языковые модели и
   съедает RAM — флаг обязателен; ограничить threads, чтобы не душить api.
+  В compose (S3-3): `LT_THREADS` — это число процессов gunicorn, каждый
+  со своей копией моделей, поэтому 1; потолки `cpus: 1.5`, `mem_limit: 2g`.
+  Образ вне блокирующего скана — сервис в профиле `translate`, модели
+  ставит разовый `libretranslate-models` (ADR-018, долг D-10).
 - **excalidraw-complete** держит realtime-сессии сам; наша интеграция —
   URL `?room=lesson-{id}` + бэкап JSON-сцены в S3 (этап 3).
 - Тома: данные postgres; конфиг caddy. Healthcheck'и — минимум на postgres

@@ -31,10 +31,18 @@ jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by
      failed_at /*попытки исчерпаны — «мёртвая»*/, created_at)
 
 -- словарь
-terms(id, lang, lemma, surface, translation_cache jsonb)
+terms(id, lang /*en*/, lemma /*ключ, ADR-017*/, surface /*форма первого клика*/,
+      translation_cache jsonb /*{"ru": {text, source, at}}*/, created_at,
+      UNIQUE(lang, lemma))
 user_terms(user_id, term_id, status /*1..5: new..known*/, source_lesson_id, added_at)
 lesson_term_candidates(lesson_id, term_id, source /*click|whiteboard|manual*/, added_by)
 lesson_terms(lesson_id, term_id)          -- подтверждённый «словарь урока»
+-- словарный датасет из Wiktextract (S3-4, ADR-019); с terms связан по lemma
+definitions(id, word, lemma /*lemma.Normalize(word), индекс*/, pos, etymology,
+            glosses text[], translations_ru text[], source_line, import_id,
+            UNIQUE(word, pos, etymology))
+definition_imports(id, source, source_version, lines_done /*контрольная точка*/,
+                   entries, finished_at, created_at)
 
 -- SRS (FSRS)
 srs_cards(user_id, term_id, due_at, stability, difficulty,
@@ -76,7 +84,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | колонки lessons.title, guest_token_hash; роль guest; CHECK правил события (0006) | 1 | S1-11 |
 | jobs (миграция `0007_jobs`); колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
 | transcripts, utterances | 2 | S2-2 |
-| terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |
+| terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
+| user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
 | videos, subtitle_segments, subtitle_sources, tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-1…S5-6 |
 
@@ -93,7 +102,10 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   `title` (непустой) и `guest_token_hash`; у урока с группой оба `NULL`,
   подпись берётся из группы. Держат `CHECK` `lessons_named`,
   `lessons_title_event_only`, `lessons_guest_link_event_only` (0006).
-- `terms` — общий словарь (лемма + кэш переводов); персональное состояние —
+- `terms` — общий словарь (лемма + кэш переводов), один термин на лемму:
+  формы run, ran, running делят перевод; лемма — из `internal/lemma`
+  (ADR-017). Дефиниции не копируются в terms, а ищутся в `definitions`
+  по лемме при клике. Персональное состояние —
   только в `user_terms`; словарь конкретного урока — `lesson_terms` (после
   подтверждения преподавателем из `lesson_term_candidates`).
 - `srs_cards` — по одной карточке на пару (user, term); cloze-результаты
