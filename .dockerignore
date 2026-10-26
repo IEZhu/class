@@ -1,0 +1,12 @@
+# Shared Caddy/Postgres build context contains no application data or secrets.
+**
+!deploy/
+deploy/**
+!deploy/caddy.Dockerfile
+!deploy/postgres.Dockerfile
+!deploy/gosu/
+deploy/gosu/**
+!deploy/gosu/go.mod
+!deploy/gosu/go.sum
+**/.env
+**/.env.*
