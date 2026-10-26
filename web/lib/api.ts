@@ -90,6 +90,9 @@ export interface LessonDetail extends Lesson {
   teacher_name: string;
   materials: Material[];
   participants: { user_id: number; email: string; name: string; role: string }[];
+  // Только организатору события: выпущена ли гостевая ссылка (сама она
+  // не восстанавливается — в БД лишь хэш). Остальным поле не приходит.
+  has_guest_link?: boolean;
 }
 
 // Google Calendar преподавателя (S1-1, ADR-023): available — ключи Google

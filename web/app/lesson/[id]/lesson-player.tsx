@@ -59,6 +59,12 @@ export default function LessonPlayer({ lessonId }: { lessonId: number }) {
           controls: ["play-large", "play", "progress", "current-time", "mute", "volume", "settings", "fullscreen"],
           speed: { selected: 1, options: [0.75, 1, 1.25, 1.5, 2] },
           i18n: { restart: "Сначала", play: "Смотреть", pause: "Пауза", mute: "Без звука", speed: "Скорость" },
+          // Ничего с cdn.plyr.io (ADR-032): спрайт — своя копия из пакета
+          // (scripts/plyr-assets.mjs), а пустышку blank.mp4 Plyr ставит в src
+          // только в destroy(), чтобы оборвать загрузку, — у нас destroy()
+          // бывает лишь при снятии плеера со страницы, и пустого src хватает.
+          iconUrl: "/plyr/plyr.svg",
+          blankVideo: "",
         });
       })
       // Чанк не догрузился (сеть, выкатка новой сборки) или Plyr упал при
