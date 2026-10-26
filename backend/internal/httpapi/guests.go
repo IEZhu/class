@@ -138,13 +138,15 @@ func guestEmail(sessionTokenHash string) string {
 }
 
 // lessonForOwner — гостевой ссылкой распоряжается преподаватель события
-// или админ. Возвращает id урока; ответ уже записан, если доступа нет.
+// или админ, и только у открытого события: ссылка на урок с группой
+// впустила бы в него посторонних (ADR-010; в БД — CHECK из 0006).
+// Возвращает id урока; ответ уже записан, если доступа нет.
 func (a *API) lessonForOwner(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	lessonID, ok := pathID(w, r)
 	if !ok {
 		return 0, false
 	}
-	teacherID, err := a.store.LessonTeacherID(r.Context(), lessonID)
+	teacherID, groupID, err := a.store.LessonTeacherAndGroup(r.Context(), lessonID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "урок не найден")
 		return 0, false
@@ -156,6 +158,10 @@ func (a *API) lessonForOwner(w http.ResponseWriter, r *http.Request) (int64, boo
 	u := userFrom(r.Context())
 	if u.Role != store.RoleAdmin && u.ID != teacherID {
 		writeError(w, http.StatusForbidden, "forbidden", "это не ваше событие")
+		return 0, false
+	}
+	if groupID != nil {
+		writeError(w, http.StatusConflict, "conflict", "гостевая ссылка есть только у открытого события")
 		return 0, false
 	}
 	return lessonID, true
