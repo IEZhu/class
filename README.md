@@ -47,7 +47,7 @@ hobby-MVP): календарь → видеоуроки (LiveKit) → запис
 ## Структура
 
 ```text
-backend/   Go: cmd/api, internal/, миграции     (cmd/worker появится в S1-2)
+backend/   Go: cmd/api, cmd/worker, internal/, миграции
 web/       Next.js
 deploy/    docker-compose, Caddyfile, .env.example
 docs/      архитектура, планы, индекс задач

@@ -262,6 +262,36 @@ teacher — только студенты своих групп (состав г
 - `web/lib/lesson-title.ts` — подпись урока в одном месте: событие берёт
   `title`, урок — имя группы.
 
+### S1-2 Worker и очередь jobs (2026-10-26)
+
+- Миграция `backend/migrations/0007_jobs.up.sql` — таблица `jobs` по модели
+  данных плюс `failed_at` (попытки исчерпаны) и `created_at`; частичный
+  индекс `jobs_ready_idx (run_at, id) WHERE failed_at IS NULL` под запрос
+  захвата. Номер 0006 занят параллельной веткой S1-11.
+- `backend/internal/jobs/` — `Enqueue(ctx, db, kind, payload)` в пуле или
+  транзакции вызывающего; `Runner` (`NewRunner`, `Handle`, `Run`,
+  `RunOnce`): захват `FOR UPDATE SKIP LOCKED`, ретраи 1 мин → удвоение →
+  1 ч, 8 попыток, подбор захватов старше 10 мин, паника хендлера —
+  обычная неудачная попытка. Семантика — [ADR-012](../architecture/decisions.md).
+- `backend/internal/worker/` — хендлеры по kind; `backend/cmd/worker` —
+  бинарь: `DATABASE_URL`, SIGTERM — новые джобы не берутся, текущей 20 с,
+  потом она возвращается в очередь.
+- Джоба `recording_ready` (`store.JobRecordingReady`, payload
+  `{"lesson_id": N}`) — **точка вставки ASR для S2-1**: `onEgressEnded`
+  через `store.FinishLessonRecording` пишет `recording_s3_key`,
+  `status=processing` и ставит джобу одной транзакцией (условие на статус
+  гасит повторную доставку вебхука); хендлер `FinishLessonProcessing`
+  переводит урок в `done`. Строка S1-5 «урок сразу done» больше не верна.
+- `backend/Dockerfile` — target `worker` (api остаётся последней стадией);
+  сервис `worker` в `deploy/docker-compose.yml` без портов и healthcheck,
+  `stop_grace_period: 30s`. Новых ключей `.env` нет.
+- CI: `ci.yml` собирает все `cmd`; `security.yml` сканирует образ worker
+  (матрица, `smoke_runtime.sh worker` — uid 10001 и отказ без
+  `DATABASE_URL`, `check_scan_inventory.py`).
+- Порядок выката: `make migrate` до api — без таблицы `jobs` вебхук
+  `egress_ended` откатывает транзакцию и путь записи теряется.
+- calendar_sync не сделан — долг D-7, закрывает S1-1 (вне MVP).
+
 ## Риски этапа
 
 GCP Testing mode (лечится сразу Production); free tier LiveKit ≈ 20 уроков/мес —
