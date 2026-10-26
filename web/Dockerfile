@@ -12,11 +12,13 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-# The distribution package makes the actual Node runtime visible to Trivy's
-# OS inventory; the upstream Node tarball has no APK package record.
+# Install the distribution's Node 22 package so its version and complete runtime
+# dependencies are inventoried by the OS vulnerability scanner.
 FROM alpine:3.22 AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
+# The standalone server needs Node, not npm/Yarn and their dependencies.
+# icu-data-full: ru-RU dates in the standalone runtime (Intl needs full ICU).
 RUN apk upgrade --no-cache \
     && apk add --no-cache 'nodejs~22' icu-data-full \
     && adduser -D -u 10001 app

@@ -1,11 +1,9 @@
 name: security
 
-# Blocks fixed HIGH/CRITICAL vulnerabilities. Scheduled runs start when this
-# workflow reaches the default branch; email depends on Actions notifications.
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
   schedule:
     - cron: '23 5 * * *'
   workflow_dispatch:
@@ -13,91 +11,122 @@ on:
 permissions:
   contents: read
 
-env:
-  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
-
 jobs:
   dependencies:
+    name: Dependencies and secrets
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Test scanner failure and inventory controls
-        run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - name: Scan every locked dependency, including development packages
-        run: bash scripts/security_scan.sh source "$RUNNER_TEMP/security-evidence"
-      - name: Retain inventory, findings and scanner diagnostics
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
+        with:
+          version: v0.76.1
+          cache: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Require actual affected source and binary package controls to fail
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          scripts/security/go_positive_control.sh "$RUNNER_TEMP/openpgp-positive-control"
+      - name: Scan all locked dependencies and source secrets
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          for variable in ${!TRIVY_@}; do unset "$variable"; done
+          mkdir -p "$RUNNER_TEMP/class-source" "$RUNNER_TEMP/source-evidence"
+          git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$RUNNER_TEMP/class-source"
+          python3 scripts/check_secret_scanner.py "$RUNNER_TEMP/source-evidence/trivy-secret.yaml"
+          trivy fs --config '' --ignorefile '' --ignore-policy '' --secret-config "$RUNNER_TEMP/source-evidence/trivy-secret.yaml" \
+            --scanners vuln,secret --pkg-types os,library --detection-priority comprehensive \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+            --include-dev-deps --list-all-pkgs --format json --output "$RUNNER_TEMP/source-evidence/raw.json" --exit-code 0 "$RUNNER_TEMP/class-source" 2> "$RUNNER_TEMP/source-evidence/scanner.stderr" || { cat "$RUNNER_TEMP/source-evidence/scanner.stderr" >&2; exit 1; }
+          cat "$RUNNER_TEMP/source-evidence/scanner.stderr" >&2
+          python3 scripts/security/check_scanner_errors.py "$RUNNER_TEMP/source-evidence/scanner.stderr"
+          python3 scripts/security/source_package_proof.py "$RUNNER_TEMP/class-source/backend" "$RUNNER_TEMP/source-evidence/raw.json" "$RUNNER_TEMP/source-evidence/proof"
+      - name: Redact secret values while retaining every blocking finding
+        if: always()
+        run: python3 scripts/security/redact_report.py "$RUNNER_TEMP/source-evidence/raw.json"
+      - name: Retain the complete source inventory and findings
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: dependency-security-evidence
+          name: source-security-evidence
           path: |
-            ${{ runner.temp }}/security-evidence/*.json
-            ${{ runner.temp }}/security-evidence/*.stderr
+            ${{ runner.temp }}/source-evidence/
+            ${{ runner.temp }}/openpgp-positive-control/*text.txt
+            ${{ runner.temp }}/openpgp-positive-control/*vex.json
           if-no-files-found: error
           retention-days: 7
 
   images:
+    name: Runtime image (${{ matrix.image }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { dockerfile: web/Dockerfile, context: web }
-          - { dockerfile: backend/Dockerfile, context: backend }
+        image: [api, web, caddy, postgres]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
+        with:
+          version: v0.76.1
+          cache: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.27.3'
           cache: false
-      - name: Build ${{ matrix.dockerfile }}
+      - name: Install the pinned package analyzer
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Build the actual Compose runtime image
         env:
-          DOCKERFILE: ${{ matrix.dockerfile }}
-          CONTEXT: ${{ matrix.context }}
-        run: docker build --pull -f "$DOCKERFILE" -t security-scan:ci "$CONTEXT"
-      - name: Scan the complete built runtime inventory
-        env:
-          SERVICE: ${{ matrix.context }}
-        run: bash scripts/security_scan.sh "$SERVICE" "$RUNNER_TEMP/security-evidence"
-      - name: Smoke test the standalone web runtime without network access
-        if: matrix.context == 'web'
+          IMAGE: ${{ matrix.image }}
         run: |
-          docker run --rm --network none --entrypoint node security-scan:ci --check server.js
-          docker run --rm --network none --entrypoint node security-scan:ci -e 'require("sharp"); console.log("Native image module loaded")'
-          docker run --rm -i --network none --entrypoint node security-scan:ci <<'NODE'
-          const assert = require("node:assert/strict");
-          assert.deepEqual(Intl.DateTimeFormat.supportedLocalesOf("ru-RU"), ["ru-RU"]);
-          const formatter = new Intl.DateTimeFormat("ru-RU", {
-            timeZone: "UTC", day: "numeric", month: "long", year: "numeric"
-          });
-          const date = new Date("2026-01-15T00:30:00Z");
-          const parts = Object.fromEntries(formatter.formatToParts(date).map(({ type, value }) => [type, value]));
-          assert.equal(parts.day, "15");
-          assert.equal(parts.month, "января");
-          assert.equal(parts.year, "2026");
-          console.log(`Russian locale supported: ${formatter.format(date)}`);
-          NODE
-          container=$(docker run -d --network none security-scan:ci)
-          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
-          for attempt in $(seq 1 20); do
-            if docker exec "$container" node -e 'fetch("http://127.0.0.1:3000/login").then(async r => process.exit(r.ok && (await r.text()).includes("Lingua Class") ? 0 : 1)).catch(() => process.exit(1))'; then exit 0; fi
-            sleep 1
-          done
-          exit 1
-      - name: Retain inventory, findings and scanner diagnostics
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          service = os.environ['IMAGE']
+          assert service in ('api', 'web', 'caddy', 'postgres')
+          config = json.loads(subprocess.check_output(['docker', 'compose', '-f', 'deploy/docker-compose.yml', 'config', '--format', 'json', '--no-interpolate']))
+          build = config['services'][service]['build']
+          assert set(build) <= {'context', 'dockerfile', 'target'}, 'New Compose build options must be scanned explicitly'
+          command = ['docker', 'build', '--pull', '--no-cache', '-t', 'security-scan:ci', '-f', str(pathlib.Path(build['context']) / build['dockerfile'])]
+          if build.get('target'): command += ['--target', build['target']]
+          subprocess.run(command + [build['context']], check=True)
+          PY
+      - name: Verify runtime contracts without production access
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: scripts/security/smoke_runtime.sh "$IMAGE" security-scan:ci
+      - name: Bind the built image to a real OCI digest in an isolated local registry
+        run: |
+          docker run -d --name class-ci-registry -p 127.0.0.1:5000:5000 registry:3
+          # Docker can accept the connection before the registry is ready and
+          # reset it. Retry that startup race, with strict bounded failure.
+          curl --fail --retry 10 --retry-all-errors --retry-delay 1 --retry-max-time 30 --connect-timeout 2 --max-time 5 http://127.0.0.1:5000/v2/ || { docker logs class-ci-registry; exit 1; }
+          docker tag security-scan:ci localhost:5000/class-runtime:ci
+          docker push localhost:5000/class-runtime:ci
+          docker pull localhost:5000/class-runtime:ci
+      - name: Block every runtime vulnerability, including unfixed findings
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          scripts/security/scan_runtime.sh "$IMAGE" localhost:5000/class-runtime:ci "$RUNNER_TEMP/runtime-evidence"
+      - name: Redact secret values while retaining every blocking finding
+        if: always()
+        run: python3 scripts/security/redact_report.py "$RUNNER_TEMP/runtime-evidence/raw.json" "$RUNNER_TEMP/runtime-evidence/final.json"
+      - name: Retain the complete runtime inventory and findings
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: image-security-evidence-${{ matrix.context }}
-          path: |
-            ${{ runner.temp }}/security-evidence/*.json
-            ${{ runner.temp }}/security-evidence/*.stderr
-            ${{ runner.temp }}/security-evidence/go-build-info.txt
+          name: runtime-security-evidence-${{ matrix.image }}
+          path: ${{ runner.temp }}/runtime-evidence/
           if-no-files-found: error
           retention-days: 7
+      - name: Remove the isolated local registry
+        if: always()
+        run: docker rm -f -v class-ci-registry

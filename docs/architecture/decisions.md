@@ -1,5 +1,11 @@
 # Журнал решений (ADR-lite)
 
+## ADR-011 · 2026-10-24 · proposed: security validation in CI
+
+Run real HTTP/SQL security tests against disposable Postgres, retain the LiveKit signing contract tests, and build/typecheck the web application. Audit complete Go/npm dependency inventories and the actual Compose runtime images, including every severity and unfixed findings. Source secrets, missing inventories, and scanner errors block. Pin actions and scanner versions. PR checks do not access production services or credentials. Package-scoped Go advisories require artifact-specific applicability evidence; a blanket ignore or reduced severity threshold is unacceptable.
+
+Bind fresh package-level source analysis to exact source and lockfile contents, and binary analysis to all Go executables in the exact scanned OCI image. Require actual affected-code controls, retain complete raw inventories and proof artifacts, and reject stale, incomplete or mismatched evidence. Rebuild the complete standard Caddy distribution and PostgreSQL 16's gosu with patched dependencies while preserving upstream module-version metadata, the existing entrypoints, API nonroot user and health checks. Keep Node 22 with Alpine 3.22's versioned `nodejs~22` runtime package; keep npm/Yarn in build stages only. Keep all built-in secret rules active, disable the Markdown allow rule, and require a generated README token control to fail; redact secret values in retained artifacts without dropping findings.
+
 > Формат: `ADR-NNN · дата · статус (accepted/superseded)` → Контекст →
 > Решение → Последствия. Новая запись — при любом выборе, которого нет
 > в доках, и при любом отступлении от них.

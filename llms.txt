@@ -1,0 +1,21 @@
+# Lingua Class
+
+> Self-hosted web platform for a small English-language class: accounts, groups, lessons and LiveKit video lessons today; recordings, transcripts, vocabulary and spaced repetition planned.
+
+Lingua Class is an early MVP for 5 teachers and 50 students on one VPS. The core is a Docker Compose monolith: a Go REST API (`backend/`), a Next.js web app (`web/`) and Postgres, behind Caddy. Heavy subsystems are managed or OSS services, most of them still planned: LiveKit Cloud for video, AWS S3 for files and recordings, AssemblyAI for speaker-labelled transcripts, LibreTranslate and an Excalidraw whiteboard. Work proceeds in stages 0 to 5, tracked in a single task index. Documentation is in Russian.
+
+## Docs
+
+- [README](https://github.com/IEZhu/class/blob/main/README.md): overview, navigation, running the stack, status
+- [AGENTS.md](https://github.com/IEZhu/class/blob/main/AGENTS.md): commands, conventions, invariants and the stage protocol for coding agents
+- [docs/README.md](https://github.com/IEZhu/class/blob/main/docs/README.md): documentation overview, roles, core principle
+- [docs/tasks/README.md](https://github.com/IEZhu/class/blob/main/docs/tasks/README.md): task index, statuses and debts
+- [docs/architecture/03-data-model.md](https://github.com/IEZhu/class/blob/main/docs/architecture/03-data-model.md): Postgres data model by stage
+- [docs/architecture/04-api.md](https://github.com/IEZhu/class/blob/main/docs/architecture/04-api.md): API contracts
+- [docs/architecture/decisions.md](https://github.com/IEZhu/class/blob/main/docs/architecture/decisions.md): architecture decision records
+
+## Optional
+
+- [docs/plans/00-flow.md](https://github.com/IEZhu/class/blob/main/docs/plans/00-flow.md): stage pipeline and working rules
+- [deploy/docker-compose.yml](https://github.com/IEZhu/class/blob/main/deploy/docker-compose.yml): services of the stack
+- [Makefile](https://github.com/IEZhu/class/blob/main/Makefile): operations (up, migrate, seed, psql)
