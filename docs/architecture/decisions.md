@@ -362,3 +362,98 @@ api — без таблицы `egress_ended` откатывает транзак
 запросом `failed_at IS NOT NULL`; оживить — обнулить `failed_at` и
 `attempts`. Healthcheck у worker'а не заведён: HTTP у него нет, упавший
 процесс поднимает `restart`.
+
+## ADR-020 · 2026-10-26 · accepted — Доска: Excalidraw в web, ретранслятор excalidraw-room, сцена в Postgres
+
+**Контекст.** [ADR-001](#adr-001--2026-07-31--accepted--вариант-c-гибрид) и
+[02-services.md](02-services.md) закладывали для S3-6 excalidraw-complete
+(PatWie): один Go-бинарь с фронтом Excalidraw, хранилищем сцен и realtime,
+интеграция — `?room=lesson-{id}` плюс бэкап JSON-сцены в S3. Проверено
+по GitHub 2026-10-26: автор закрыл проект (объявление о retirement
+2025-12-03, последний код — 2024-06-10), репозиторий
+`PatWie/excalidraw-complete` переименован в `PatWie/drafft-ink` — это уже
+другая доска на Rust/WebGPU под AGPL-3.0, релизов и образов
+excalidraw-complete нет. Сопровождаемой замены «всё в одном» тоже нет:
+excalidraw-full (BetterAndBetterII) требует GitHub OAuth и не указывает
+лицензию; стек alswl/excalidraw-collaboration — три образа (фронт на
+nginx:1.27, storage-backend 2023 года), а его Go-ретранслятор
+excalidraw-room-go без лицензии. Совместная работа Excalidraw устроена
+одинаково везде: сервер комнаты только пересылает сообщения клиентов,
+содержимое шифруют сами клиенты ключом комнаты.
+
+**Решение.** Доска собирается из трёх частей, каждая — из сопровождаемого
+MIT-кода Excalidraw или нашего:
+- **Редактор** — npm-пакет `@excalidraw/excalidraw` **0.18.1** (MIT,
+  2026-04-20, peer React 19) во вкладке «Доска» страницы `/lesson/{id}`
+  живого урока; грузится только в браузере. Версия закреплена точно:
+  от неё зависит формат JSON-сцены, который разбирает S3-7. Шрифты — со
+  своего домена (`/excalidraw/fonts/`, копия из пакета при сборке web;
+  иероглифический Xiaolai не копируем — понадобится, Excalidraw возьмёт
+  его с esm.sh). Картинки выключены (`UIOptions.tools.image = false`):
+  их файлы не синхронизируются. Обмен — `socket.io-client` 4.8 (MIT).
+  Уязвимые транзитивные зависимости редактора подняты `overrides`
+  (nanoid 3.3.20 и 5.1.16, lodash-es 4.18.1, katex 0.19.1): `npm audit`
+  и trivy по `web/package-lock.json` — ноль находок.
+- **Realtime** — официальный ретранслятор `excalidraw/excalidraw-room`
+  (MIT), сервис `whiteboard`, образ
+  `excalidraw/excalidraw-room:sha-03ff435@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70`
+  (сборка 2023-12-15 из коммита 03ff435). Протокол из его исходника:
+  `join-room` → `first-in-room` / `new-user`, `server-broadcast` и
+  `server-volatile-broadcast` → `client-broadcast` остальным в комнате,
+  `room-user-change`. Состояния не хранит. Комната — `lesson-{id}`,
+  сообщения — `{type: SCENE_INIT | SCENE_UPDATE | MOUSE_LOCATION, payload}`,
+  как у excalidraw.com, зашифрованы AES-GCM-128 ключом комнаты.
+- **URL** — `/whiteboard/lesson-{id}/socket.io/` на том же домене: cookie
+  сессии, TLS и проброс WebSocket уже даёт host-nginx (ADR-004), поддомен
+  с отдельными сертификатом и cookie не нужен. caddy пропускает запрос
+  только после `forward_auth` в api `GET /whiteboard/auth`: пользователь —
+  из cookie `sid`, урок — из исходного пути в `X-Forwarded-Uri`; участник
+  незавершённого урока — 204, аноним — 401, не участник — 403, урок
+  в processing/done — 409. Затем путь урока срезается до `/socket.io/`.
+- **Доступ к содержимому.** Ретранслятор не знает, кто в какую комнату
+  вошёл: участник одного урока может войти сокетом в комнату другого.
+  Поэтому ключ комнаты (16 случайных байт, base64url — формат JWK для
+  WebCrypto) выдаёт только `GET /lessons/{id}/whiteboard` участникам:
+  без ключа чужие сообщения не прочесть, а подделку отбросит тег GCM.
+- **Сцена — в Postgres** (`whiteboards`, миграция 0010): каждый, кто
+  рисовал, через 2 с тишины сохраняет свою сцену `PUT
+  /lessons/{id}/whiteboard/scene`, а api под блокировкой строки сливает её
+  с сохранённой поэлементно по правилу `reconcileElements` Excalidraw:
+  бо́льшая `version`, при равных — меньший `versionNonce`, удаление — тоже
+  версия; порядок — по дробному `index`. Чтение `GET
+  /lessons/{id}/whiteboard/scene` — файл `.excalidraw`, участникам, в том
+  числе после урока. Ретранслятор перезапускается без потерь: вошедший
+  заново берёт сцену из api, остальные досылают свежее при `new-user`.
+- **Снимок в хранилище** — джоба worker'а `whiteboard_snapshot`:
+  `whiteboards/{lesson_id}.json` (тот же файл `.excalidraw`, элементы как
+  есть, с удалёнными), путь — в `whiteboards.scene_s3_key`. Ставится
+  сохранением сцены не чаще раза в минуту — `jobs.EnqueueOnce` держит одну
+  ждущую джобу на доску — и сразу вебхуком LiveKit `room_finished`.
+  Планировщика не нужно. Идемпотентна: снимок, уже унёсший текущую
+  `scene_version`, ничего не пишет.
+- **Скан образа (ADR-011).** Образ ретранслятора — Node 12.22.12 на
+  Alpine 3.15, express 4.17.1, socket.io 4.6.1, ws 8.11.0, процесс от root:
+  блокирующий скан он не пройдёт. Сервис поэтому в профиле compose
+  `whiteboard`, вне матрицы `security.yml`, и включается владельцем стенда
+  явно (`COMPOSE_PROFILES=whiteboard`, `WHITEBOARD_ENABLED=1`). Риск
+  сужен: процесс от `node`, `read_only`, `cap_drop: ALL`,
+  `no-new-privileges`, портов нет, а через caddy до него доходят только
+  запросы socket.io, прошедшие forward_auth. Пересборка ретранслятора
+  из исходника с актуальными зависимостями (как caddy и gosu) или его
+  замена и перенос в матрицу — долг D-11.
+
+**Последствия.** Отступление от доков: вместо одного контейнера и
+`?room=` — редактор в web, ретранслятор и хранение в api;
+[02-services.md](02-services.md), [01-topology.md](01-topology.md),
+[03-data-model.md](03-data-model.md), [05-storage-s3.md](05-storage-s3.md)
+и [поток урока](flows/lesson-lifecycle.md) обновлены. Колонки сверх модели
+данных: `room_key`, `scene`, `scene_version`, `snapshot_version`,
+`created_at` (ADR-005). Предел сцены — 1 MiB: столько по умолчанию
+пропускают `client_max_body_size` host-nginx и `maxHttpBufferSize`
+socket.io ретранслятора; больше — сохранение получает 413, а рассылку
+всей сцены клиент пропускает с предупреждением (новички всё равно берут
+сцену из api). Поднять предел — оба параметра и `maxSceneBytes` в api.
+Без хранилища worker не регистрирует `whiteboard_snapshot`: джобы ждут
+в очереди по одной на доску, сцена остаётся в БД. Без профиля доска
+отвечает 503, остальной стенд работает. Курсоры участников —
+`MOUSE_LOCATION` по volatile-каналу; картинок на доске нет.
