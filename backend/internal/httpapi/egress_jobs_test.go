@@ -1,0 +1,138 @@
+package httpapi
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
+	"google.golang.org/protobuf/encoding/protojson"
+
+	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/storage"
+	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/worker"
+)
+
+// signedWebhook подписывает событие так же, как LiveKit: JWT ключами api
+// с sha256 тела.
+func signedWebhook(t *testing.T, a *API, event *livekit.WebhookEvent) *http.Request {
+	t.Helper()
+	body, err := protojson.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	token, err := auth.NewAccessToken(a.cfg.LiveKitAPIKey, a.cfg.LiveKitAPISecret).
+		SetValidFor(time.Minute).
+		SetSha256(base64.StdEncoding.EncodeToString(sum[:])).
+		ToJWT()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/webhooks/livekit", bytes.NewReader(body))
+	r.Header.Set("Authorization", token)
+	r.Header.Set("Content-Type", "application/webhook+json")
+	return r
+}
+
+// egress_ended — точка вставки ASR (S1-5, S1-2): путь записи, processing
+// и джоба recording_ready атомарно; worker доводит урок до done. Повторная
+// доставка и вебхука, и джобы ничего не ломает.
+func TestEgressEndedQueuesRecordingJob(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	teacherID, _ := securityUser(t, a, conn, store.RoleTeacher, "teacher")
+	var groupID int64
+	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('recorded','B1') RETURNING id`).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	lesson, err := a.store.CreateLesson(ctx, &groupID, "", teacherID, time.Now(), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE lessons SET status = 'live' WHERE id = $1`, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	key := storage.RecordingKey(lesson.ID, "mp4")
+	event := &livekit.WebhookEvent{Event: eventEgressEnded, EgressInfo: &livekit.EgressInfo{
+		RoomName:    roomName(lesson.ID),
+		Status:      livekit.EgressStatus_EGRESS_COMPLETE,
+		FileResults: []*livekit.FileInfo{{Filename: key, Size: 1 << 20}},
+	}}
+	h := a.Router()
+	deliver := func() {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, signedWebhook(t, a, event))
+		expectStatus(t, w, http.StatusOK)
+	}
+	expect := func(status, recording string, queued int) {
+		t.Helper()
+		var gotStatus string
+		var gotRecording *string
+		if err := conn.QueryRow(ctx, `SELECT status, recording_s3_key FROM lessons WHERE id = $1`,
+			lesson.ID).Scan(&gotStatus, &gotRecording); err != nil {
+			t.Fatal(err)
+		}
+		var gotQueued int
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1 AND payload = $2`,
+			store.JobRecordingReady, map[string]int64{"lesson_id": lesson.ID}).Scan(&gotQueued); err != nil {
+			t.Fatal(err)
+		}
+		if gotStatus != status || (gotRecording == nil) != (recording == "") ||
+			(gotRecording != nil && *gotRecording != recording) || gotQueued != queued {
+			t.Fatalf("lesson %s/%v with %d jobs, want %s/%q with %d", gotStatus, gotRecording, gotQueued,
+				status, recording, queued)
+		}
+	}
+
+	// Без очереди транзакция откатывается целиком: урок не уходит
+	// в processing без джобы, которая его оттуда выведет
+	if _, err := conn.Exec(ctx, `ALTER TABLE jobs RENAME TO jobs_offline`); err != nil {
+		t.Fatal(err)
+	}
+	deliver()
+	if _, err := conn.Exec(ctx, `ALTER TABLE jobs_offline RENAME TO jobs`); err != nil {
+		t.Fatal(err)
+	}
+	expect("live", "", 0)
+
+	deliver()
+	deliver() // повторная доставка
+	expect("processing", key, 1)
+
+	runner := jobs.NewRunner(a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
+	worker.Register(runner, a.store)
+	runJob := func() {
+		t.Helper()
+		worked, err := runner.RunOnce(ctx)
+		if err != nil || !worked {
+			t.Fatalf("RunOnce = %v, %v", worked, err)
+		}
+	}
+	runJob()
+	expect("done", key, 0)
+
+	deliver() // запоздалая доставка не возвращает урок в processing
+	expect("done", key, 0)
+
+	// at-least-once: та же джоба ещё раз выполняется без ошибки и без перемен
+	if _, err := jobs.Enqueue(ctx, a.store.Pool(), store.JobRecordingReady,
+		store.RecordingReady{LessonID: lesson.ID}); err != nil {
+		t.Fatal(err)
+	}
+	runJob()
+	expect("done", key, 0)
+	var left int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM jobs`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("jobs left: %d, %v", left, err)
+	}
+}

@@ -37,6 +37,9 @@ func New(ctx context.Context, databaseURL string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// Pool — для очереди jobs в worker: она делит пул со store.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 type User struct {
 	ID           int64
 	Email        string
