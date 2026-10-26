@@ -22,7 +22,8 @@ Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socke
                           GOOGLE_TOKEN_KEY (S1-1), LIVEKIT_*, S3_*,
                           BACKUP_S3_* (ADR-014)
                        2: ASSEMBLYAI_*
-                       5: HARVESTER_COOKIES_FILE (ADR-022), LLM_PROVIDER, LLM_API_KEY
+                       5: HARVESTER_COOKIES_FILE (ADR-022), LLM_PROVIDER, LLM_API_KEY,
+                          LLM_MODEL, LLM_DAILY_LIMIT (S5-6, ADR-029)
 backup-pg.sh         ночной pg_dump | zstd → S3, retention 7/30 (S1-7)
 restore-pg.sh        восстановление из копии в S3 (S1-7)
 backup-lib.sh        общая часть двух скриптов выше
