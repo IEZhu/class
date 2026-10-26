@@ -370,29 +370,43 @@ teacher — только студенты своих групп (состав г
 - `backend/internal/gcal/` — `gcal.New` (nil без любого ключа, ошибка
   на битый ключ), `AuthCodeURL` (state, PKCE S256, `access_type=offline`,
   `prompt=consent`), `Exchange` (проверка выданного scope), `Seal`/`Open`
-  (AES-256-GCM, id пользователя в associated data), `Revoke`, `Calendar` →
+  (AES-256-GCM, id пользователя в associated data), `SealFlow`/`OpenFlow`
+  (cookie подключения: state, verifier и срок, тот же AES-GCM с
+  `google_oauth:<id>` в associated data), `Revoke`, `Calendar` →
   `Insert`/`Update`/`Delete` (Calendar API v3, календарь `primary`,
-  `sendUpdates=all`). Зависимость — `golang.org/x/oauth2` v0.37.0
+  `sendUpdates=all`, у каждого вызова свой таймаут 15 с; у клиента API
+  нет `http.Client.Timeout`). Зависимость — `golang.org/x/oauth2` v0.37.0
   ([ADR-023](../architecture/decisions.md)).
-- Эндпоинты (`httpapi/google.go`, все — teacher; в
-  [04-api.md](../architecture/04-api.md)): `GET /auth/google`,
-  `POST /auth/google/start`, `GET /auth/google/callback` (вместо
-  `POST` из плана: Google возвращает браузер GET-ом), `DELETE /auth/google`.
-  Cookie `google_oauth` (state + verifier, 10 мин, Path `/api/auth/google`).
-  Redirect URI — `https://<DOMAIN>/api/auth/google/callback`.
-- Джоба `calendar_sync` (`store.JobCalendarSync`, payload
-  `{"lesson_id": N}`, у отмены ещё `"teacher_id"` и `"event_id"`) —
-  в транзакциях `CreateLesson`, `RescheduleLesson`, `CancelLesson` при
-  подключённом календаре организатора и в `SetGoogleToken` для его будущих
-  уроков. `lessons.gcal_event_id` назначается там же (32 hex из
-  `gen_random_uuid()`); хендлер — `worker.RegisterCalendar`
+- Эндпоинты (`httpapi/google.go`; в [04-api.md](../architecture/04-api.md)):
+  `GET /auth/google`, `POST /auth/google/start`, `DELETE /auth/google` —
+  под teacher; `GET /auth/google/callback` (вместо `POST` из плана: Google
+  возвращает браузер GET-ом) — без middleware: сессию проверяет сам
+  (`sessionUser` в `httpapi/middleware.go`) и всегда отвечает 303, без
+  сессии — на `/login`. Cookie `__Host-google_oauth` (запечатанный
+  `SealFlow`, 10 мин, Path `/`, Secure, HttpOnly, SameSite=Lax).
+  `DELETE /auth/google` отвечает `200 {"revoked": bool}`, отзыв — на
+  `context.WithoutCancel`. Redirect URI —
+  `https://<DOMAIN>/api/auth/google/callback`.
+- Джоба `calendar_sync` (`backend/internal/store/calendar.go`:
+  `store.JobCalendarSync`, payload `{"lesson_id": N}`, у отмены ещё
+  `"teacher_id"` и `"event_id"`) — в транзакциях `CreateLesson`,
+  `RescheduleLesson` при подключённом календаре организатора,
+  в `CancelLesson` всегда, когда у урока есть `gcal_event_id`, и
+  в `SetGoogleToken` для его будущих уроков; там же `SetGoogleToken`
+  возвращает в работу ждавшие удаления этого преподавателя (`attempts = 0`,
+  `failed_at = NULL`). `lessons.gcal_event_id` назначается там же (32 hex
+  из `gen_random_uuid()`); хендлер — `worker.RegisterCalendar`
   (`internal/worker/calendar.go`): insert, при 409 — update, удаление —
-  404/410 тоже успех; не подключён, токен не расшифровался или отозван
-  (`invalid_grant`, подключение снимается) — пропуск со строкой в журнале.
+  404/410 тоже успех. Без рабочего токена (нет ключей, не подключён, токен
+  не расшифровался или отозван — `invalid_grant` снимает подключение)
+  создание и перенос пропускаются со строкой в журнале, а удаление
+  возвращает ошибку «ждёт повторного подключения календаря» и остаётся
+  в очереди.
 - Web: `web/app/account/google-calendar.tsx` — раздел «Google Календарь»
   на `/account` только у преподавателя: подключить/отключить, итог
-  возврата из `?google=`, без ключей — «недоступно». Тип
-  `GoogleCalendarStatus` в `web/lib/api.ts`.
+  возврата из `?google=` (и `not_revoked`, если отключение не отозвало
+  токен в Google), без ключей — «недоступно». Типы `GoogleCalendarStatus`
+  и `GoogleDisconnectResult` в `web/lib/api.ts`.
 - Ключи `.env` (опциональны, только все три вместе): `GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (`openssl rand -base64 32`);
   проброс в api и worker, worker получает ещё `DOMAIN` (ссылка на урок
@@ -400,10 +414,18 @@ teacher — только студенты своих групп (состав г
   [deploy/README.md](../../deploy/README.md#google-calendar-s1-1).
 - Тесты на httptest-фейке Google и схеме `security_test`:
   `httpapi/google_test.go` (роли, state/PKCE/отказ/снятый scope, в колонке
-  нет открытого токена, отключение с отзывом, без ключей, откат 0012),
-  `httpapi/calendar_sync_test.go` (insert/update/delete, повторы,
-  сбой Google, отмена до синхронизации, отключённый и отозванный
-  календарь), `gcal/gcal_test.go`.
+  нет открытого токена, отключение с отзывом и `revoked:false` при сбое,
+  смене ключа и отменённом запросе, подложенный, чужой и истёкший cookie
+  без обмена кода, callback без сессии и не преподавателем, без ключей,
+  откат 0012), `httpapi/calendar_sync_test.go` (insert/update/delete,
+  повторы, сбой Google, отмена до синхронизации, отключённый и отозванный
+  календарь, отмена после отключения, `invalid_grant` и смены ключа
+  удаляет событие после переподключения, отмена посреди insert,
+  CAS `ClearGoogleToken`), `gcal/gcal_test.go` (в том числе cookie
+  подключения и таймаут вызова API).
+- Порядок выката: `make migrate` до api — `CreateLesson`/`RescheduleLesson`
+  читают `users.google_refresh_token` и без ключей Google; без `0012`
+  создание и перенос урока отвечают 500.
 - Долг D-7 закрыт. С настоящим Google не проверено — OAuth-клиента нет,
   долг D-13; DoD «токен переживает неделю» и «отражается в календарях
   студентов» — после его создания.

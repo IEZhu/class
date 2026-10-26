@@ -40,7 +40,8 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `POSTGRES_USER`, `POSTGRES_PASSWORD`. Optional: `HTTP_PORT` (default 8090), `SEED_PASSWORD`,
   `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (without them the lesson room returns
   503), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (all three or the
-  Google Calendar connection is unavailable and `calendar_sync` skips lessons, ADR-023).
+  Google Calendar connection is unavailable and `calendar_sync` skips lesson creates and
+  reschedules while event deletes wait in the queue, ADR-023).
   The api also reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads
   `DATABASE_URL`, plus `DOMAIN` and `GOOGLE_*` for `calendar_sync`; web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
