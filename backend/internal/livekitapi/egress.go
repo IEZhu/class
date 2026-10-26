@@ -1,8 +1,9 @@
 // Package livekitapi — тонкий клиент серверного API LiveKit.
 //
-// Пишем свой вместо server-sdk-go намеренно: оттуда нужен ровно один вызов
-// (запуск Egress), а тянет он полный стек pion/webrtc. Протокол у LiveKit —
-// Twirp поверх HTTP с protojson-телом, то есть это один POST.
+// Пишем свой вместо server-sdk-go намеренно: оттуда нужны два вызова
+// (запуск Egress и RemoveParticipant при архивации), а тянет он полный стек
+// pion/webrtc. Протокол у LiveKit — Twirp поверх HTTP с protojson-телом,
+// то есть это один POST.
 package livekitapi
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // adminTokenTTL — токен живёт только на время запроса.
@@ -50,46 +52,55 @@ func New(url, apiKey, apiSecret string) *Client {
 // StartRoomCompositeEgress запускает запись комнаты в объектное хранилище.
 // Возвращает EgressInfo с egress_id — по нему потом приходит webhook.
 func (c *Client) StartRoomCompositeEgress(ctx context.Context, req *livekit.RoomCompositeEgressRequest) (*livekit.EgressInfo, error) {
-	token, err := c.token(&auth.VideoGrant{RoomRecord: true, Room: req.RoomName})
+	info := &livekit.EgressInfo{}
+	if _, err := c.call(ctx, "livekit.Egress/StartRoomCompositeEgress",
+		&auth.VideoGrant{RoomRecord: true, Room: req.RoomName}, req, info); err != nil {
+		return nil, fmt.Errorf("start egress: %w", err)
+	}
+	return info, nil
+}
+
+// call — один вызов Twirp: POST protojson-тела на /twirp/<метод> с токеном
+// на время запроса. Возвращает и HTTP-статус ответа, чтобы вызывающий
+// отличил «нет такого» от сбоя.
+func (c *Client) call(ctx context.Context, method string, grant *auth.VideoGrant, req, resp proto.Message) (int, error) {
+	token, err := c.token(grant)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	body, err := protojson.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal egress request: %w", err)
+		return 0, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/twirp/livekit.Egress/StartRoomCompositeEgress", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/twirp/"+method, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("start egress: %w", err)
+		return 0, err
 	}
 	defer res.Body.Close() //nolint:errcheck // тело только читаем
 
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read egress response: %w", err)
+		return res.StatusCode, fmt.Errorf("read response: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
 		// Twirp кладёт причину в тело — пробрасываем её как есть, иначе
 		// в логе останется голый код и разбираться будет не с чем.
-		return nil, fmt.Errorf("start egress: %s: %s", res.Status, strings.TrimSpace(string(raw)))
+		return res.StatusCode, fmt.Errorf("%s: %s", res.Status, strings.TrimSpace(string(raw)))
 	}
-
-	info := &livekit.EgressInfo{}
-	// DiscardUnknown: LiveKit добавляет поля в EgressInfo быстрее, чем мы
-	// обновляем protocol, и незнакомое поле не должно ронять запись урока.
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, info); err != nil {
-		return nil, fmt.Errorf("unmarshal egress info: %w", err)
+	// DiscardUnknown: LiveKit добавляет поля в ответы быстрее, чем мы
+	// обновляем protocol, и незнакомое поле не должно ронять вызов.
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, resp); err != nil {
+		return res.StatusCode, fmt.Errorf("unmarshal response: %w", err)
 	}
-	return info, nil
+	return res.StatusCode, nil
 }
 
 func (c *Client) token(grant *auth.VideoGrant) (string, error) {

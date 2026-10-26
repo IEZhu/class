@@ -225,6 +225,24 @@ func (s *Store) DeactivateUser(ctx context.Context, userID int64) error {
 	return tx.Commit(ctx)
 }
 
+// LiveLessonsOf — уроки, где человек преподаватель или участник и чья
+// комната может быть открыта прямо сейчас: live или scheduled в своём
+// окне времени — без записи урок идёт, оставаясь scheduled (ADR-012), это
+// же окно web показывает как «идёт». По ним архивация выставляет человека
+// из комнат LiveKit (ADR-024).
+func (s *Store) LiveLessonsOf(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT l.id FROM lessons l
+		 WHERE (l.teacher_id = $1 OR EXISTS (
+		           SELECT 1 FROM lesson_participants lp WHERE lp.lesson_id = l.id AND lp.user_id = $1))
+		   AND (l.status = 'live' OR (l.status = 'scheduled' AND now() BETWEEN l.starts_at AND l.ends_at))
+		 ORDER BY l.id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[int64])
+}
+
 // ReactivateUser — вернуть учётку из архива: вход по прежнему паролю снова
 // работает, сессии человек получает обычным логином.
 func (s *Store) ReactivateUser(ctx context.Context, userID int64) error {
