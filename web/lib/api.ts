@@ -85,6 +85,12 @@ export interface GoogleCalendarStatus {
   connected: boolean;
 }
 
+// Ответ DELETE /auth/google: revoked=false — токен у нас стёрт, но в Google
+// не отозван, доступ преподаватель снимает в аккаунте Google сам.
+export interface GoogleDisconnectResult {
+  revoked: boolean;
+}
+
 const API_TIMEOUT_MS = 5000;
 
 export async function apiFetch<T>(path: string): Promise<T> {

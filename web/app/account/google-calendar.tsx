@@ -2,8 +2,8 @@
 
 import { useRouter } from "next/navigation";
 
-import type { GoogleCalendarStatus } from "../../lib/api";
-import { FormStatus, request, requestJson, useSubmit } from "../forms";
+import type { GoogleCalendarStatus, GoogleDisconnectResult } from "../../lib/api";
+import { FormStatus, requestJson, useSubmit } from "../forms";
 
 const sectionStyle = {
   border: "1px solid #ddd",
@@ -15,6 +15,7 @@ const sectionStyle = {
 } as const;
 
 // Итоги возврата с экрана согласия Google (?google= от api, ADR-023)
+// и отключения (not_revoked ставит сама страница)
 const results: Record<string, { text: string; ok: boolean }> = {
   connected: { text: "Календарь подключён: уроки появятся в нём в течение минуты.", ok: true },
   denied: { text: "Доступ не выдан — календарь не подключён.", ok: false },
@@ -24,6 +25,12 @@ const results: Record<string, { text: string; ok: boolean }> = {
   },
   failed: { text: "Не удалось подключить календарь, попробуйте ещё раз.", ok: false },
   unavailable: { text: "Подключение календаря на стенде пока не настроено.", ok: false },
+  not_revoked: {
+    text:
+      "Календарь отключён, но отозвать доступ в Google не удалось. Снимите его вручную: аккаунт Google → " +
+      "Безопасность → Сторонние приложения с доступом к аккаунту.",
+    ok: false,
+  },
 };
 
 // Google Calendar преподавателя (S1-1): уроки уходят событиями в его
@@ -42,8 +49,8 @@ export default function GoogleCalendar({
     window.location.assign(url);
   });
   const disconnect = useSubmit(async () => {
-    await request("/api/auth/google", "DELETE");
-    router.replace("/account");
+    const { revoked } = await requestJson<GoogleDisconnectResult>("/api/auth/google", "DELETE");
+    router.replace(revoked ? "/account" : "/account?google=not_revoked");
     router.refresh();
   });
   const shown = result ? results[result] : undefined;
@@ -62,6 +69,10 @@ export default function GoogleCalendar({
           <p style={{ margin: 0 }}>
             Подключён: созданные, перенесённые и отменённые уроки отражаются в вашем календаре,
             участники получают приглашения от Google.
+          </p>
+          <p style={{ margin: 0, color: "#666" }}>
+            Отключение не удаляет уже созданные события. Уроки, отменённые без подключения, исчезнут
+            из календаря, когда вы снова подключите тот же аккаунт Google.
           </p>
           <button type="submit" disabled={disconnect.busy} style={{ padding: "0.6rem" }}>
             {disconnect.busy ? "Отключаем…" : "Отключить"}
