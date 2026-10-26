@@ -18,6 +18,10 @@ ExecStart=/opt/Class/deploy/backup-pg.sh
 # приватный /tmp юниту не мешает
 UMask=0077
 PrivateTmp=yes
+# Манифест проверенных выгрузок (/var/lib/lingua-backup/manifest,
+# BACKUP_MANIFEST в deploy/backup-lib.sh) — каталог только для root
+StateDirectory=lingua-backup
+StateDirectoryMode=0700
 NoNewPrivileges=yes
 ProtectSystem=full
 Nice=10
