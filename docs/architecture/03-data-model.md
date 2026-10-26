@@ -27,7 +27,8 @@ lessons(id, group_id /*NULL у открытого события, ADR-010*/,
 lesson_participants(lesson_id, user_id, attended bool)
 materials(id, lesson_id, kind /*homework|material*/, title, body_md,
           s3_key /*materials/{lesson_id}/…, ADR-024*/, file_name, file_content_type,
-          file_size, file_uploaded_at /*загрузка подтверждена*/)
+          file_size, file_uploaded_at /*загрузка подтверждена*/,
+          file_etag /*ETag объекта при подтверждении*/)
 
 -- очередь фоновых задач (этап 1); выполненная джоба удаляется (ADR-013)
 jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by,
@@ -107,10 +108,12 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 - `users.google_refresh_token` хранится шифрованным (ключ в `.env`),
   есть только у teachers.
 - Файл материала (ADR-024): метаданные `file_*` заполнены целиком вместе
-  с `s3_key` или пусты (`CHECK materials_file_complete`), ключ — только под
-  `materials/{lesson_id}/` (`materials_file_key_layout`), один объект —
-  один материал (уникальный индекс). Пока `file_uploaded_at` пуст, файл
-  видит только преподаватель урока.
+  с `s3_key` или пусты (`CHECK materials_file_complete`, с явными
+  `IS NOT NULL`: сравнение NULL в CHECK проходит), `file_uploaded_at`
+  и `file_etag` ставятся вместе; ключ — только под `materials/{lesson_id}/`
+  (`materials_file_key_layout`), один объект — один материал (уникальный
+  индекс). Пока `file_uploaded_at` пуст, файл видит только преподаватель
+  урока.
 - Учётки не удаляются: `users.deactivated_at` закрывает вход, гасит сессии
   и скрывает из списков людей и снапшотов новых уроков (ADR-024).
 
