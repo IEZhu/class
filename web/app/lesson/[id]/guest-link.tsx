@@ -8,7 +8,8 @@ import { FormStatus, request, requestJson, useSubmit } from "../../forms";
 const rowStyle = { display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" } as const;
 
 // Гостевая ссылка на событие (ADR-010): многоразовая, по ней заходят все,
-// представившись именем. Показывается только организатору события.
+// представившись именем. Показывается только организатору и только
+// у события без группы — api выдаёт ссылку лишь ему.
 export default function GuestLink({ lessonId }: { lessonId: number }) {
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
