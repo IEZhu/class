@@ -29,6 +29,10 @@ type lessonDetailResponse struct {
 	TeacherName  string             `json:"teacher_name"`
 	Materials    []materialResponse `json:"materials"`
 	Participants []memberResponse   `json:"participants"`
+	// Только тому, кто распоряжается ссылкой (lessonForOwner): выпущена ли
+	// она. Показать её повторно нельзя, но перевыпуск без спроса сломал бы
+	// уже разосланную (ADR-032). Остальным поле не приходит.
+	HasGuestLink *bool `json:"has_guest_link,omitempty"`
 }
 
 type lessonTimesRequest struct {
@@ -119,6 +123,9 @@ func (a *API) handleGetLesson(w http.ResponseWriter, r *http.Request) {
 		TeacherName:    d.TeacherName,
 		Materials:      toMaterialResponses(visibleMaterials(d.Materials, u.ID == d.TeacherID)),
 		Participants:   toMemberResponses(d.Participants),
+	}
+	if d.GroupID == nil && (u.Role == store.RoleAdmin || u.ID == d.TeacherID) {
+		resp.HasGuestLink = &d.HasGuestLink
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

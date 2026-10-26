@@ -313,6 +313,12 @@ func (a *API) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "name обязателен")
 		return
 	}
+	// Гость задаёт имя сам, и оно уходит в комнату и в транскрипт: тот же
+	// предел, что при входе по ссылке (handleGuestJoin)
+	if actor.Role == store.RoleGuest && len([]rune(name)) > maxGuestNameLen {
+		writeError(w, http.StatusBadRequest, "bad_request", "имя слишком длинное")
+		return
+	}
 	u, err := a.store.UpdateUserProfile(r.Context(), actor.ID, name, "")
 	if err != nil {
 		internalError(w, "update me", err)
