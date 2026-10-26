@@ -5,6 +5,7 @@ import type { LessonDetail, Material, User } from "../../../lib/api";
 import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
+import ClickableText from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
 import LessonPlayer from "./lesson-player";
@@ -147,9 +148,13 @@ function MaterialsSection({ title, items, isTeacher }: { title: string; items: M
             <h3 style={{ marginTop: 0 }}>{m.title}</h3>
             {isTeacher && <DeleteMaterial materialId={m.id} title={m.title} />}
           </div>
-          {/* body_md рендерится как текст; настоящий markdown-рендер придёт
-              вместе с <ClickableText> (S3-1) — единственным рендером текста */}
-          {m.body_md && <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0 }}>{m.body_md}</pre>}
+          {/* body_md — текстом с переносами строк: разметка markdown пока
+              не рендерится (долг D-17) */}
+          {m.body_md && (
+            <div>
+              <ClickableText text={m.body_md} />
+            </div>
+          )}
           {m.file && <FileDownload materialId={m.id} file={m.file} />}
         </article>
       ))}
