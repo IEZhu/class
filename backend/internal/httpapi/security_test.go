@@ -143,7 +143,7 @@ func TestSecurityAuthorizationAndLessonIsolation(t *testing.T) {
 	if _, err := conn.Exec(ctx, `INSERT INTO group_members(group_id,user_id) VALUES($1,$2)`, groupID, studentID); err != nil {
 		t.Fatal(err)
 	}
-	lesson, err := a.store.CreateLesson(ctx, groupID, teacherID, time.Now(), time.Now().Add(time.Hour))
+	lesson, err := a.store.CreateLesson(ctx, &groupID, "", teacherID, time.Now(), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
