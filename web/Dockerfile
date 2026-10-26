@@ -18,8 +18,9 @@ FROM alpine:3.22 AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 # The standalone server needs Node, not npm/Yarn and their dependencies.
+# icu-data-full: ru-RU dates in the standalone runtime (Intl needs full ICU).
 RUN apk upgrade --no-cache \
-    && apk add --no-cache 'nodejs~22' \
+    && apk add --no-cache 'nodejs~22' icu-data-full \
     && adduser -D -u 10001 app
 USER app
 COPY --from=build --chown=app /app/.next/standalone ./

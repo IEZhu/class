@@ -196,7 +196,7 @@ func recordingAPI(t *testing.T, egressURL string) (http.Handler, *pgx.Conn, int6
 	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('rec','B1') RETURNING id`).Scan(&groupID); err != nil {
 		t.Fatal(err)
 	}
-	lesson, err := base.store.CreateLesson(ctx, groupID, teacherID, time.Now(), time.Now().Add(time.Hour))
+	lesson, err := base.store.CreateLesson(ctx, &groupID, "", teacherID, time.Now(), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

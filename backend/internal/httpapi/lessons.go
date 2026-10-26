@@ -4,14 +4,17 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IEZhu/class/backend/internal/store"
 )
 
 type lessonResponse struct {
-	ID        int64     `json:"id"`
-	GroupID   int64     `json:"group_id"`
+	ID int64 `json:"id"`
+	// null у открытого события: группы у него нет (ADR-010)
+	GroupID   *int64    `json:"group_id"`
+	Title     string    `json:"title"`
 	TeacherID int64     `json:"teacher_id"`
 	StartsAt  time.Time `json:"starts_at"`
 	EndsAt    time.Time `json:"ends_at"`
@@ -29,7 +32,10 @@ type lessonDetailResponse struct {
 }
 
 type lessonTimesRequest struct {
-	GroupID  int64     `json:"group_id,omitempty"`
+	// GroupID пуст → открытое событие, тогда обязателен Title; у урока
+	// с группой Title пуст — подпись даёт группа (ADR-010)
+	GroupID  *int64    `json:"group_id"`
+	Title    string    `json:"title"`
 	StartsAt time.Time `json:"starts_at"`
 	EndsAt   time.Time `json:"ends_at"`
 }
@@ -44,12 +50,27 @@ func (a *API) handleCreateLesson(w http.ResponseWriter, r *http.Request) {
 		badBody(w, err, "невалидный JSON")
 		return
 	}
-	if req.GroupID <= 0 || !req.validTimes() {
-		writeError(w, http.StatusBadRequest, "bad_request", "нужны group_id и starts_at < ends_at (RFC3339)")
+	if !req.validTimes() {
+		writeError(w, http.StatusBadRequest, "bad_request", "нужны starts_at < ends_at (RFC3339)")
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	switch {
+	case req.GroupID != nil && *req.GroupID <= 0:
+		writeError(w, http.StatusBadRequest, "bad_request", "некорректный group_id")
+		return
+	case req.GroupID == nil && title == "":
+		// Иначе событие нечем подписать: имени группы у него нет
+		writeError(w, http.StatusBadRequest, "bad_request", "для события без группы нужен title")
+		return
+	case req.GroupID != nil && title != "":
+		// Урок подписывается именем группы; title перебил бы его (ADR-010).
+		// Молча не выбрасываем: клиент, приславший название, ждёт его увидеть.
+		writeError(w, http.StatusBadRequest, "bad_request", "у урока с группой нет title: подпись берётся из группы")
 		return
 	}
 	u := userFrom(r.Context())
-	l, err := a.store.CreateLesson(r.Context(), req.GroupID, u.ID, req.StartsAt, req.EndsAt)
+	l, err := a.store.CreateLesson(r.Context(), req.GroupID, title, u.ID, req.StartsAt, req.EndsAt)
 	if err != nil {
 		if store.PgErrorCode(err) == pgForeignKeyViolation {
 			writeError(w, http.StatusNotFound, "not_found", "группа не найдена")
@@ -167,7 +188,7 @@ func canSeeLesson(u *store.User, d *store.LessonDetail) bool {
 
 func lessonToResponse(l *store.Lesson, groupName string) lessonResponse {
 	return lessonResponse{
-		ID: l.ID, GroupID: l.GroupID, TeacherID: l.TeacherID,
+		ID: l.ID, GroupID: l.GroupID, Title: l.Title, TeacherID: l.TeacherID,
 		StartsAt: l.StartsAt, EndsAt: l.EndsAt, Status: l.Status, GroupName: groupName,
 	}
 }

@@ -17,6 +17,19 @@ case "$service" in
       sleep 1
     done
     docker exec class-ci-web wget -q --spider http://127.0.0.1:3000/login
+    # Dates on the site are ru-RU: the runtime must ship full ICU data.
+    docker run --rm -i --network none --entrypoint node "$image" <<'NODE'
+const assert = require("node:assert/strict");
+assert.deepEqual(Intl.DateTimeFormat.supportedLocalesOf("ru-RU"), ["ru-RU"]);
+const formatter = new Intl.DateTimeFormat("ru-RU", {
+  timeZone: "UTC", day: "numeric", month: "long", year: "numeric"
+});
+const parts = Object.fromEntries(
+  formatter.formatToParts(new Date("2026-01-15T00:30:00Z")).map(({ type, value }) => [type, value]));
+assert.equal(parts.day, "15");
+assert.equal(parts.month, "января");
+assert.equal(parts.year, "2026");
+NODE
     ;;
   caddy)
     docker run --rm --network none -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" "$image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
