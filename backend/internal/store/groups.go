@@ -19,6 +19,9 @@ type GroupMember struct {
 	Email  string
 	Name   string
 	Role   string
+	// Archived — учётка в архиве (ADR-024): в группе и в истории уроков
+	// она остаётся, а в новые уроки не попадает
+	Archived bool
 }
 
 type GroupWithMembers struct {
@@ -68,7 +71,7 @@ func (s *Store) ListGroupsWithMembers(ctx context.Context) ([]GroupWithMembers, 
 	}
 
 	mrows, err := s.pool.Query(ctx,
-		`SELECT gm.group_id, u.id, u.email, u.name, u.role
+		`SELECT gm.group_id, u.id, u.email, u.name, u.role, u.deactivated_at IS NOT NULL
 		 FROM group_members gm
 		 JOIN users u ON u.id = gm.user_id
 		 ORDER BY gm.group_id, u.id`)
@@ -79,7 +82,7 @@ func (s *Store) ListGroupsWithMembers(ctx context.Context) ([]GroupWithMembers, 
 	for mrows.Next() {
 		var groupID int64
 		m := GroupMember{}
-		if err := mrows.Scan(&groupID, &m.UserID, &m.Email, &m.Name, &m.Role); err != nil {
+		if err := mrows.Scan(&groupID, &m.UserID, &m.Email, &m.Name, &m.Role, &m.Archived); err != nil {
 			return nil, err
 		}
 		if g, ok := byID[groupID]; ok {
@@ -102,8 +105,8 @@ func (s *Store) ListGroupsWithMembers(ctx context.Context) ([]GroupWithMembers, 
 func (s *Store) AddGroupMemberByEmail(ctx context.Context, groupID int64, email string) (*GroupMember, error) {
 	m := &GroupMember{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, email, name, role FROM users WHERE email = $1`,
-		email).Scan(&m.UserID, &m.Email, &m.Name, &m.Role)
+		`SELECT id, email, name, role, deactivated_at IS NOT NULL FROM users WHERE email = $1`,
+		email).Scan(&m.UserID, &m.Email, &m.Name, &m.Role, &m.Archived)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

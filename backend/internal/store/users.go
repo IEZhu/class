@@ -28,8 +28,8 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 	u := &User{}
 	var hash *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, email, role, name, password_hash FROM users WHERE id = $1`,
-		id).Scan(&u.ID, &u.Email, &u.Role, &u.Name, &hash)
+		`SELECT id, email, role, name, password_hash, deactivated_at FROM users WHERE id = $1`,
+		id).Scan(&u.ID, &u.Email, &u.Role, &u.Name, &hash, &u.DeactivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -58,26 +58,29 @@ func (s *Store) CreateUser(ctx context.Context, email, role, name, passwordHash 
 
 // ListUsers — учётки с их группами (для admin). Гости исключены: они живут
 // одно событие, и 50 студентов не должны тонуть в случайных посетителях
-// (ADR-010). Состав события видно в самом уроке.
-func (s *Store) ListUsers(ctx context.Context) ([]UserWithGroups, error) {
+// (ADR-010). Состав события видно в самом уроке. archived выбирает между
+// действующими учётками и архивом (ADR-024).
+func (s *Store) ListUsers(ctx context.Context, archived bool) ([]UserWithGroups, error) {
 	return s.listUsers(ctx,
-		`SELECT u.id, u.email, u.role, u.name FROM users u
-		 WHERE u.role <> '`+RoleGuest+`' ORDER BY u.id`)
+		`SELECT u.id, u.email, u.role, u.name, u.deactivated_at FROM users u
+		 WHERE u.role <> '`+RoleGuest+`' AND (u.deactivated_at IS NOT NULL) = $1
+		 ORDER BY u.id`, archived)
 }
 
 // ListUsersOfTeacherGroups — студенты групп преподавателя плюс он сам.
 // Фильтр по роли обязателен: попади staff-учётка в group_members — без него
 // преподаватель увидел бы её и смог править (ADR-007).
-func (s *Store) ListUsersOfTeacherGroups(ctx context.Context, teacherID int64) ([]UserWithGroups, error) {
+func (s *Store) ListUsersOfTeacherGroups(ctx context.Context, teacherID int64, archived bool) ([]UserWithGroups, error) {
 	return s.listUsers(ctx,
-		`SELECT u.id, u.email, u.role, u.name
+		`SELECT u.id, u.email, u.role, u.name, u.deactivated_at
 		 FROM users u
-		 WHERE u.id = $1
+		 WHERE (u.deactivated_at IS NOT NULL) = $3
+		   AND (u.id = $1
 		    OR (u.role = $2 AND u.id IN (
 		        SELECT gm.user_id FROM group_members gm
 		        WHERE gm.group_id IN (`+teacherGroupIDs+`)
-		    ))
-		 ORDER BY u.id`, teacherID, RoleStudent)
+		    )))
+		 ORDER BY u.id`, teacherID, RoleStudent, archived)
 }
 
 // teacherGroupIDs — группы преподавателя: где он участник или ведёт урок.
@@ -98,7 +101,7 @@ func (s *Store) listUsers(ctx context.Context, query string, args ...any) ([]Use
 	byID := map[int64]int{}
 	for rows.Next() {
 		u := UserWithGroups{Groups: []string{}}
-		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.Name); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.Name, &u.DeactivatedAt); err != nil {
 			return nil, err
 		}
 		byID[u.ID] = len(out)
@@ -196,6 +199,43 @@ func (s *Store) SetPassword(ctx context.Context, userID int64, passwordHash stri
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// DeactivateUser — архивация вместо удаления (ADR-024): отметка и гашение
+// всех сессий одной транзакцией, чтобы архивированный не остался в системе
+// ни на одном устройстве. Повтор не сдвигает момент первой архивации.
+func (s *Store) DeactivateUser(ctx context.Context, userID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // после Commit — no-op
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE users SET deactivated_at = COALESCE(deactivated_at, now()) WHERE id = $1`, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReactivateUser — вернуть учётку из архива: вход по прежнему паролю снова
+// работает, сессии человек получает обычным логином.
+func (s *Store) ReactivateUser(ctx context.Context, userID int64) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET deactivated_at = NULL WHERE id = $1`, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RemoveGroupMember — убрать человека из группы. Уже удалённый участник

@@ -13,15 +13,22 @@ s3://lingua/
   recordings/{lesson_id}/room.mp4        (или audio.ogg при audio-only egress)
   transcripts/{lesson_id}.vtt
   whiteboards/{lesson_id}.json
-  materials/{lesson_id}/…
+  materials/{lesson_id}/{random}.{ext}  (ключ выбирает api, ADR-024)
   backups/pg/{date}.dump.zst        (пока BACKUP_S3_* пусты; цель — свой бакет, ADR-014)
 ```
 
 ## Доступ
 
-- Bucket приватный; CORS — только GET для домена платформы.
+- Bucket приватный; CORS — только с домена платформы: GET/HEAD (плеер,
+  скачивание) и PUT с заголовками `Content-Type`, `Content-Disposition`
+  (загрузка файлов материалов).
 - Presigned GET (TTL ~30 мин) выдаёт api после проверки прав
-  (`GET /media/{lesson_id}/url`).
+  (`GET /media/{lesson_id}/url`, `GET /materials/{id}/url`).
+- Файлы материалов (ADR-024): преподаватель урока получает presigned PUT
+  на 10 мин — тип, длина и `Content-Disposition` с именем файла входят
+  в подпись; затем `POST /materials/{id}/confirm`, где api сверяет объект
+  (HEAD) с заявленным. Белый список типов и потолок 50 MiB — в
+  `backend/internal/httpapi/materials.go`.
 - S3 отдаёт HTTP Range → перемотка в плеере Plyr работает из коробки.
 - Egress LiveKit пишет в бакет сам (S3 credentials в конфиге egress-запроса);
   AssemblyAI читает запись по presigned GET.

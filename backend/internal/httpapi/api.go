@@ -3,12 +3,14 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
@@ -41,10 +43,19 @@ func (c Config) liveKitConfigured() bool {
 	return c.LiveKitURL != "" && c.LiveKitAPIKey != "" && c.LiveKitAPISecret != ""
 }
 
+// objectStore — то, что api нужно от хранилища (storage.Client). Через
+// интерфейс тесты подставляют фейк вместо R2.
+type objectStore interface {
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignPut(ctx context.Context, key, contentType, contentDisposition string, size int64, ttl time.Duration) (storage.PresignedPut, error)
+	Stat(ctx context.Context, key string) (storage.ObjectInfo, error)
+	Delete(ctx context.Context, key string) error
+}
+
 type API struct {
 	store   *store.Store
 	cfg     Config
-	storage *storage.Client // nil, если хранилище не настроено
+	storage objectStore // nil, если хранилище не настроено
 	livekit *livekitapi.Client
 	google  *gcal.Client // nil, если Google Calendar не настроен
 }
@@ -61,13 +72,18 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &API{
+	a := &API{
 		store:   s,
 		cfg:     cfg,
-		storage: st,
 		livekit: livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
 		google:  google,
-	}, nil
+	}
+	// Без ключей storage.New отдаёт nil-указатель; в интерфейс его класть
+	// нельзя — проверка a.storage == nil перестала бы его видеть
+	if st != nil {
+		a.storage = st
+	}
+	return a, nil
 }
 
 // GoogleConfigured — заданы ли ключи Google: cmd/api пишет в журнал,
@@ -143,6 +159,15 @@ func (a *API) Router() http.Handler {
 	mux.Handle("POST /auth/google/start", teacher(a.handleGoogleStart))
 	mux.Handle("GET /auth/google/callback", teacher(a.handleGoogleCallback))
 	mux.Handle("DELETE /auth/google", teacher(a.handleGoogleDisconnect))
+
+	// Долги D-4 и D-5 (ADR-024): файлы материалов в R2 и архивация учёток.
+	// Файл грузит браузер по presigned PUT, api только выдаёт ссылку,
+	// сверяет объект и подписывает скачивание.
+	mux.Handle("POST /materials/{id}/confirm", teacher(a.handleConfirmMaterialFile))
+	mux.Handle("GET /materials/{id}/url", user(a.handleMaterialFileURL))
+	mux.Handle("DELETE /materials/{id}", teacher(a.handleDeleteMaterial))
+	mux.Handle("POST /users/{id}/deactivate", staff(a.handleSetUserArchived(true)))
+	mux.Handle("POST /users/{id}/reactivate", staff(a.handleSetUserArchived(false)))
 	return mux
 }
 

@@ -68,6 +68,12 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль")
 		return
 	}
+	// Архив проверяется после пароля: без него отказ неотличим от неверного
+	// пароля, а знающему пароль честный ответ ничего нового не раскрывает
+	if u.DeactivatedAt != nil {
+		writeError(w, http.StatusForbidden, "account_deactivated", "учётная запись в архиве — обратитесь к администратору")
+		return
+	}
 	token, tokenHash, err := newToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка")
