@@ -5,6 +5,7 @@ import type { LessonDetail, Material, User } from "../../../lib/api";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
 import UserBar from "../../user-bar";
+import LessonPlayer from "./lesson-player";
 import LessonRoom from "./lesson-room";
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
@@ -83,8 +84,7 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       {phase === "done" && (
         <>
           <section style={placeholderSectionStyle}>
-            {/* Плеер по presigned GET оживёт в S1-6 */}
-            <p>🎬 Плеер записи появится на этапе 1 (S1-6).</p>
+            <LessonPlayer lessonId={lesson.id} />
           </section>
           <section style={placeholderSectionStyle}>
             {/* Транскрипт по спикерам оживёт в S2-4 */}
