@@ -29,6 +29,9 @@ type Config struct {
 	// для транскрипта этого достаточно (05-storage-s3.md).
 	EgressAudioOnly bool
 	Storage         storage.Config
+	// WhiteboardEnabled — в compose поднят ретранслятор доски (профиль
+	// whiteboard, S3-6). Без него доска отвечает 503, остальное работает.
+	WhiteboardEnabled bool
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -121,6 +124,13 @@ func (a *API) Router() http.Handler {
 
 	mux.Handle("POST /lessons/{id}/materials", teacher(a.handleCreateMaterial("material")))
 	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
+
+	// S3-6: доска урока (ADR-020). /whiteboard/auth зовёт caddy (forward_auth)
+	// перед каждым запросом к ретранслятору
+	mux.Handle("GET /lessons/{id}/whiteboard", user(a.handleWhiteboard))
+	mux.Handle("GET /lessons/{id}/whiteboard/scene", user(a.handleWhiteboardScene))
+	mux.Handle("PUT /lessons/{id}/whiteboard/scene", user(a.handleSaveWhiteboardScene))
+	mux.Handle("GET /whiteboard/auth", user(a.handleWhiteboardAuth))
 	return mux
 }
 

@@ -20,6 +20,8 @@ const (
 	eventRoomStarted       = "room_started"
 	eventParticipantJoined = "participant_joined"
 	eventEgressEnded       = "egress_ended"
+	// S3-6: комната закрылась — снять доску урока сразу
+	eventRoomFinished = "room_finished"
 )
 
 // handleLiveKitWebhook — единственная точка, куда LiveKit сообщает о комнате
@@ -54,6 +56,11 @@ func (a *API) handleLiveKitWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	case eventEgressEnded:
 		a.onEgressEnded(r.Context(), event)
+	case eventRoomFinished:
+		if err := a.onRoomFinished(r.Context(), event); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot_not_scheduled", "снимок доски не поставлен")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }

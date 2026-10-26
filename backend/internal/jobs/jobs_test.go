@@ -492,3 +492,65 @@ func TestShutdownFinishesOrReleasesCurrentJob(t *testing.T) {
 		}
 	})
 }
+
+// EnqueueOnce: частые события одной сущности — одна ждущая джоба, срок
+// которой только приближается. Взятая в работу джоба и ретрай не мешают:
+// после захвата ставится следующая, а ретрай не теряет свой backoff.
+func TestEnqueueOnceKeepsOneWaitingJob(t *testing.T) {
+	pool := testDB(t)
+	ctx := context.Background()
+	payload := map[string]int{"n": 1}
+	once := func(delay time.Duration) {
+		t.Helper()
+		if err := EnqueueOnce(ctx, pool, testKind, payload, delay); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var id int64
+	single := func() jobRow {
+		t.Helper()
+		if n := count(t, pool); n != 1 {
+			t.Fatalf("%d jobs, want one", n)
+		}
+		if err := pool.QueryRow(ctx, `SELECT id FROM jobs`).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return row(t, pool, id)
+	}
+
+	once(time.Minute)
+	if j := single(); j.delay < 50*time.Second || j.delay > time.Minute {
+		t.Fatalf("first job due in %s, want about a minute", j.delay)
+	}
+	once(time.Hour) // более поздний срок не отодвигает ждущую
+	if j := single(); j.delay > time.Minute {
+		t.Fatalf("waiting job pushed back to %s", j.delay)
+	}
+	once(0) // «сейчас» подтягивает её
+	if j := single(); j.delay > time.Second {
+		t.Fatalf("waiting job not pulled in: due in %s", j.delay)
+	}
+	// Другой payload — другая сущность, своя джоба
+	if err := EnqueueOnce(ctx, pool, testKind, map[string]int{"n": 2}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, pool); n != 2 {
+		t.Fatalf("%d jobs, want two payloads", n)
+	}
+	exec(t, pool, `DELETE FROM jobs WHERE payload = '{"n": 2}'`)
+
+	// Ретрай держит свой backoff, второй джобы рядом с ним не появляется
+	exec(t, pool, `UPDATE jobs SET attempts = 1, run_at = now() + interval '30 minutes' WHERE id = $1`, id)
+	once(0)
+	if j := single(); j.delay < 29*time.Minute {
+		t.Fatalf("retry pulled in to %s", j.delay)
+	}
+
+	// Захваченная джоба уже снимает старое состояние — событие после
+	// захвата ставит следующую
+	exec(t, pool, `UPDATE jobs SET attempts = 0, run_at = now(), locked_at = now(), locked_by = 'w' WHERE id = $1`, id)
+	once(time.Minute)
+	if n := count(t, pool); n != 2 {
+		t.Fatalf("%d jobs, want the claimed one and a new one", n)
+	}
+}

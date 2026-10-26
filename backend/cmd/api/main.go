@@ -43,6 +43,8 @@ func main() {
 		LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
 		LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
 		EgressAudioOnly:  os.Getenv("EGRESS_AUDIO_ONLY") == "1",
+		// S3-6: 1 — в compose поднят ретранслятор доски (профиль whiteboard)
+		WhiteboardEnabled: os.Getenv("WHITEBOARD_ENABLED") == "1",
 		Storage: storage.Config{
 			Bucket:    os.Getenv("S3_BUCKET"),
 			Region:    os.Getenv("S3_REGION"),

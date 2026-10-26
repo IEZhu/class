@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -51,4 +52,32 @@ func Enqueue(ctx context.Context, db DB, kind string, payload any) (int64, error
 		`INSERT INTO jobs (kind, payload) VALUES ($1, $2) RETURNING id`,
 		kind, body).Scan(&id)
 	return id, err
+}
+
+// EnqueueOnce ставит джобу не позже чем через delay, если такая же (kind
+// и payload) ещё ждёт очереди, — её и подтягивает к этому сроку, а вторую
+// не ставит. Так частые события (сохранения доски, S3-6) сводятся к одной
+// джобе на интервал. Взятая в работу джоба не в счёт: событие после её
+// захвата ставит следующую. Ретрай не подтягивается — его backoff держит
+// паузу для упавшего внешнего сервиса.
+//
+// Две параллельные вставки одной джобы не исключены; хендлеры и так
+// идемпотентны, а вызывающий может сериализовать их своей блокировкой.
+func EnqueueOnce(ctx context.Context, db DB, kind string, payload any, delay time.Duration) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("jobs: payload %s: %w", kind, err)
+	}
+	_, err = db.Exec(ctx,
+		`WITH waiting AS (
+		     UPDATE jobs SET run_at = CASE WHEN attempts = 0
+		                                  THEN least(run_at, now() + make_interval(secs => $3))
+		                                  ELSE run_at END
+		     WHERE kind = $1 AND payload = $2::jsonb AND locked_at IS NULL AND failed_at IS NULL
+		     RETURNING id)
+		 INSERT INTO jobs (kind, payload, run_at)
+		 SELECT $1, $2::jsonb, now() + make_interval(secs => $3)
+		 WHERE NOT EXISTS (SELECT 1 FROM waiting)`,
+		kind, body, delay.Seconds())
+	return err
 }

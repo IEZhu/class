@@ -3,6 +3,9 @@ package storage
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -110,5 +113,45 @@ func TestNewRegion(t *testing.T) {
 	}
 	if cred := u.Query().Get("X-Amz-Credential"); !strings.Contains(cred, "/auto/s3/") {
 		t.Errorf("R2 подписан не регионом auto: %q", cred)
+	}
+}
+
+func TestWhiteboardKey(t *testing.T) {
+	if got := WhiteboardKey(42); got != "whiteboards/42.json" {
+		t.Errorf("WhiteboardKey(42) = %q", got)
+	}
+}
+
+// Снимок доски уходит одним PUT в path-style адрес бакета с нужным
+// Content-Type; ответ хранилища с ошибкой возвращается вызывающему.
+func TestPutObject(t *testing.T) {
+	var method, path, contentType string
+	var body []byte
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, contentType = r.Method, r.URL.Path, r.Header.Get("Content-Type")
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+	c, err := New(Config{Bucket: "lingua-class", Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := c.PutObject(ctx, WhiteboardKey(7), "application/json", []byte(`{"elements":[]}`)); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	if method != http.MethodPut || path != "/lingua-class/whiteboards/7.json" ||
+		contentType != "application/json" || string(body) != `{"elements":[]}` {
+		t.Fatalf("request %s %s %q body %q", method, path, contentType, body)
+	}
+	status = http.StatusForbidden
+	if err := c.PutObject(ctx, WhiteboardKey(7), "application/json", []byte(`{}`)); err == nil {
+		t.Fatal("storage error was swallowed")
+	}
+	var none *Client
+	if err := none.PutObject(ctx, "k", "application/json", nil); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("PutObject without storage = %v", err)
 	}
 }

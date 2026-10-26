@@ -106,7 +106,12 @@ func (a *API) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 // JSON-значение (хвост после первого значения — ошибка, иначе он
 // обходил бы лимит MaxBytesReader).
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return decodeBodyLimit(w, r, v, maxBodyBytes)
+}
+
+// decodeBodyLimit — decodeBody со своим потолком тела (сцена доски, S3-6).
+func decodeBodyLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(v); err != nil {
 		return err
