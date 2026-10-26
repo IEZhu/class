@@ -20,6 +20,23 @@
 - Ограничить threads, чтобы не конкурировать с api за CPU.
 - Интерфейс — внутренний HTTP из api; наружу не публикуется.
 
+## Реализация (S3-2…S3-4)
+
+- Кэш — `terms.translation_cache` по целевому языку
+  (`{"ru": {"text", "source", "at"}}`), один термин на лемму
+  ([ADR-017](../decisions.md)): повторный клик по любой форме слова во
+  внешние сервисы не ходит. Переводится лемма, а не форма; неудача
+  перевода не кэшируется.
+- Датасет — таблица `definitions`, импорт `cmd/dictimport` из выгрузки
+  Wiktextract с kaikki.org ([ADR-019](../decisions.md)); клик ищет статьи
+  по лемме и по самой форме.
+- LibreTranslate — сервис `libretranslate` в профиле compose
+  `translate`: `LT_LOAD_ONLY=en,ru`, один процесс (`LT_THREADS=1`),
+  внутренняя сеть `translate` без выхода наружу, адрес для api —
+  `LIBRETRANSLATE_URL` ([ADR-018](../decisions.md), долг D-10).
+- DeepL и LLM-объяснение (шаги 4–5) не реализованы: «второе мнение» —
+  по мере надобности, «объясни» — S5-8 (долг D-2).
+
 Связано: [../02-services.md](../02-services.md) ·
 план [stage-3](../../plans/stage-3-dictionary-whiteboard.md) ·
 риск качества в [../07-risks.md](../07-risks.md)

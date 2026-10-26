@@ -17,6 +17,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/translate"
 )
 
 // Config — внешние параметры api, не выводимые из БД.
@@ -39,6 +40,9 @@ type Config struct {
 	// AssemblyAIWebhookSecret (S2-2) — секрет, который AssemblyAI
 	// возвращает в заголовке вебхука; пусто — вебхук отвечает 503.
 	AssemblyAIWebhookSecret string
+	// LibreTranslateURL — внутренний адрес LibreTranslate (S3-3, ADR-018).
+	// Пусто — клик по слову отвечает дефинициями без перевода.
+	LibreTranslateURL string
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -62,6 +66,8 @@ type API struct {
 	storage objectStore // nil, если хранилище не настроено
 	livekit *livekitapi.Client
 	google  *gcal.Client // nil, если Google Calendar не настроен
+	// translator — nil, если LibreTranslate не настроен
+	translator *translate.LibreTranslate
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -82,10 +88,11 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		return nil, err
 	}
 	a := &API{
-		store:   s,
-		cfg:     cfg,
-		livekit: livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
-		google:  google,
+		store:      s,
+		cfg:        cfg,
+		livekit:    livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
+		google:     google,
+		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
 	}
 	// Без ключей storage.New отдаёт nil-указатель; в интерфейс его класть
 	// нельзя — проверка a.storage == nil перестала бы его видеть
@@ -182,6 +189,10 @@ func (a *API) Router() http.Handler {
 	// он аутентифицируется секретным заголовком
 	mux.HandleFunc("POST /webhooks/assemblyai", a.handleAssemblyAIWebhook)
 	mux.Handle("GET /lessons/{id}/transcript", user(a.handleGetTranscript))
+
+	// S3-2: клик по слову — лемма, перевод, дефиниции (flows/word-click.md).
+	// Любой вошедший, включая гостя события: попап есть во всех текстах
+	mux.Handle("POST /terms/click", user(a.handleTermClick))
 	return mux
 }
 

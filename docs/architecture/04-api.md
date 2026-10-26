@@ -55,7 +55,7 @@
 | `GET /media/{lesson_id}/url` | presigned GET на запись, TTL 30 мин | участники | 1 |
 | `POST /webhooks/assemblyai` | `{transcript_id, status: completed\|error}` → транскрипт `fetching` + джоба `asr_result` (реплики, затем VTT — в worker, ADR-015); секрет в `X-Lingua-Webhook-Secret`, иначе 401; без секрета в api — 503; неизвестный транскрипт — 404; повтор — 200 без новой джобы | AssemblyAI | 2 |
 | `GET /lessons/{id}/transcript` | `{status, utterances[{idx, speaker_label, user_id, start_ms, end_ms, text}], vtt_url, vtt_expires_at}`; VTT — presigned на 30 мин, `null` до выкладки; нет транскрипта — 404 `no_transcript` | участники | 2 |
-| `POST /terms/click` | `{surface, context_sentence}` → перевод/дефиниция | все | 3 |
+| `POST /terms/click` | `{surface, context_sentence, lesson_id?}` → `{term_id, lemma, surface, translation: {text, source} \| null, definitions[{word, pos, glosses[], translations_ru[]}], examples: []}`; источники: кэш → датасет → LibreTranslate (без него `translation: null`, 200); 400 — не одно слово, контекст > 1000 символов; 403/404 — чужой/нет урока в `lesson_id` | все, включая гостя | 3 |
 | `POST /user-terms` | «в мой словарь» / смена статуса | student | 3 |
 | `POST /lessons/{id}/terms/confirm` | `{term_ids[], assign_to[]}` — словарь урока | teacher | 3 |
 | `GET /practice/queue` | due-карточки по FSRS | student | 4 |

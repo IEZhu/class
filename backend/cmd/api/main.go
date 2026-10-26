@@ -55,12 +55,16 @@ func main() {
 		Google: googleCfg,
 		// S2-2: без секрета вебхук AssemblyAI отвечает 503
 		AssemblyAIWebhookSecret: os.Getenv("ASSEMBLYAI_WEBHOOK_SECRET"),
+		LibreTranslateURL:       os.Getenv("LIBRETRANSLATE_URL"),
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)
 	}
 	if !api.GoogleConfigured() {
 		log.Printf("api: Google Calendar выключен: не заданы %s", strings.Join(googleCfg.Missing(), ", "))
+	}
+	if os.Getenv("LIBRETRANSLATE_URL") == "" {
+		log.Printf("api: LIBRETRANSLATE_URL пуст — клик по слову отвечает без перевода")
 	}
 	apiHandler := api.Router()
 

@@ -215,3 +215,61 @@ worker больше нет строки «Google Calendar выключен»; п
 - Целевая VPS: 4 vCPU / 8 GB (минимум 2/4); суммарная оценка RAM сервисов
   ~2.5–3 GB.
 - RTO: «пересоздать compose за час» из бэкапов S3.
+
+## Перевод слов: LibreTranslate (S3-3)
+
+Решение — ADR-018 в [decisions.md](../docs/architecture/decisions.md).
+Сервис `libretranslate` (образ закреплён digest'ом) живёт в профиле
+`translate` и по умолчанию не стартует: его образ не проходит блокирующий
+скан ADR-011 (долг D-10), включение — решение владельца стенда. Сеть
+`translate` — `internal`: у контейнера нет выхода в интернет и портов
+наружу, к нему ходит только api. Без сервиса клик по слову отвечает
+дефинициями и `translation: null`.
+
+```bash
+make translate-models   # один раз: модели en↔ru в том lt_models (~370 MB, нужен интернет)
+# в deploy/.env:
+#   COMPOSE_PROFILES=translate
+#   LIBRETRANSLATE_URL=http://libretranslate:5000
+make up                 # api перечитает LIBRETRANSLATE_URL, поднимется libretranslate
+docker compose -f deploy/docker-compose.yml ps libretranslate   # healthy через 1–2 мин
+```
+
+Ресурсы: `LT_THREADS=1` (один процесс gunicorn с одной копией моделей),
+`cpus: 1.5`, `mem_limit: 2g`; на этом VPS — ~380 MB RAM, перевод слова
+0.1–0.6 с. Обновить модели — снова `make translate-models` и
+`docker compose -f deploy/docker-compose.yml restart libretranslate`.
+
+## Словарь: импорт дефиниций (S3-4)
+
+Решение — ADR-019. Команда `dictimport` лежит в образе worker'а и пишет
+в таблицу `definitions` (миграция 0009 должна быть применена: `make
+migrate`). Источник — выгрузка Wiktextract английского Wiktionary
+с kaikki.org (CC BY-SA / GFDL): по умолчанию полный
+`raw-wiktextract-data.jsonl.gz` (≈2.9 GB gzip; читается потоком, на диск
+не сохраняется), из него берутся только английские статьи слов,
+известных лемматизатору, и служебные слова; на статью — до 3 значений
+и 5 русских переводов. Ожидаемый объём — 80–150 тыс. статей, 60–120 MB
+в PG; разбор — порядка 5–10 мин CPU плюс загрузка.
+
+```bash
+make up            # образ worker'а с dictimport
+make migrate
+make dict-import   # итог в последней строке: строк, статей, удалено устаревших
+```
+
+Оборвался (сеть, SIGTERM) — тот же `make dict-import` продолжит
+с последней зафиксированной пачки, если версия источника (ETag или
+Last-Modified) не сменилась; сменилась — команда откажется,
+тогда `docker compose -f deploy/docker-compose.yml run --rm --entrypoint
+dictimport worker -source <URL> -restart`. Повторный импорт свежего
+дампа обновляет статьи и удаляет пропавшие — только после успешного
+завершения. На медленном канале надёжнее скачать файл заранее
+(`curl -C - -O <URL>` докачивает) и импортировать локально:
+
+```bash
+make dict-import DICT_DIR=/var/tmp/wiktextract DICT_SOURCE=/data/raw-wiktextract-data.jsonl.gz
+```
+
+Каталог монтируется в контейнер только на чтение; файл должен быть
+читаем для пользователя контейнера (uid 10001): `chmod a+r`.
