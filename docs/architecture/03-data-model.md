@@ -26,6 +26,10 @@ lessons(id, group_id /*NULL у открытого события, ADR-010*/,
         livekit_room, recording_s3_key, transcript_id,
         guest_token_hash /*sha256 гостевой ссылки, только у события*/)
 lesson_participants(lesson_id, user_id, attended bool)
+-- сегменты записи урока (0018, ADR-031): свой файл на каждый запуск Egress
+lesson_recordings(id, lesson_id, egress_id /*UNIQUE*/, room_sid /*сессия комнаты*/,
+                  s3_key, status /*active|complete|failed*/, size_bytes, error,
+                  created_at, ended_at)
 materials(id, lesson_id, kind /*homework|material*/, title, body_md,
           s3_key /*materials/{lesson_id}/…, ADR-024*/, file_name, file_content_type,
           file_size, file_uploaded_at /*загрузка подтверждена*/)
@@ -96,6 +100,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | колонки lessons.title, guest_token_hash; роль guest; CHECK правил события (0006) | 1 | S1-11 |
 | jobs (миграция `0007_jobs`); колонка users.google_refresh_token (миграция `0012_google_calendar`, ADR-023) | 1 | S1-2 / S1-1 |
 | колонки файла materials.file_*, users.deactivated_at (`0013_material_files_archive`) | 1 | долги D-4, D-5 |
+| lesson_recordings (миграция `0018_lesson_recordings`, ADR-031) | 1 | ревью раунда 1, F1 |
 | transcripts, utterances (миграция `0008_transcripts`); FK lessons.transcript_id | 2 | S2-1…S2-3 |
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
 | user_terms, lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
@@ -111,7 +116,9 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   (1..5: new..known) и вешает клик-попап.
 - `lessons.status` — единственный источник состояния урока:
   `scheduled → live → processing → done` (см.
-  [flows/lesson-lifecycle.md](flows/lesson-lifecycle.md)).
+  [flows/lesson-lifecycle.md](flows/lesson-lifecycle.md)). Сегменты
+  `lesson_recordings` статус не заменяют: `recording_s3_key` — выбранная
+  из них запись (самый большой complete), её играет плеер и получает ASR.
 - Открытое событие — урок без группы (ADR-010): только у него есть
   `title` (непустой) и `guest_token_hash`; у урока с группой оба `NULL`,
   подпись берётся из группы. Держат `CHECK` `lessons_named`,

@@ -49,9 +49,9 @@
 | `POST /auth/google/start` | `{url}` экрана согласия Google; state и PKCE-verifier — в cookie `google_oauth`; 503 без ключей | teacher | 1 |
 | `GET /auth/google/callback` | возврат с Google (`code`, `state`): обмен кода, шифрованный refresh token, джобы calendar_sync будущих уроков; всегда 303 на `/account?google=connected\|denied\|scope\|failed\|unavailable` | teacher | 1 |
 | `DELETE /auth/google` | отключить календарь: токен стирается и отзывается в Google (идемпотентно) | teacher | 1 |
-| `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
+| `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}`; только в окне `starts_at` − 15 мин … `ends_at` + 15 мин, токен не дольше окна; 409 `room_not_open` — раньше, `lesson_finished` — позже или урок в processing/done (ADR-031) | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |
-| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing и джоба recording_ready (без ASR — сразу done), сбой БД → 503 и повтор (ADR-013); `room_finished` → снимок доски сразу (S3-6) | LiveKit | 1 |
+| `POST /webhooks/livekit` | тело ≤ 1 MiB (больше — 413), подпись обязательна (401); `room_started`/`participant_joined` в окне комнаты → сегмент записи (свой файл на запуск) и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → сегмент complete/failed, урок остаётся live до конца окна; после окна (или уборкой `recording_sweep`) → recording_s3_key = самый большой сегмент, status=processing и джоба recording_ready (без ASR — сразу done), без записи — done; сбой БД → 503 и повтор (ADR-013, ADR-031); `room_finished` → снимок доски сразу (S3-6) | LiveKit | 1 |
 | `GET /media/{lesson_id}/url` | presigned GET на запись, TTL 30 мин | участники | 1 |
 | `POST /webhooks/assemblyai` | `{transcript_id, status: completed\|error}` → транскрипт `fetching` + джоба `asr_result` (реплики, затем VTT — в worker, ADR-015); секрет в `X-Lingua-Webhook-Secret`, иначе 401; без секрета в api — 503; неизвестный транскрипт — 404; повтор — 200 без новой джобы | AssemblyAI | 2 |
 | `GET /lessons/{id}/transcript` | `{status, utterances[{idx, speaker_label, user_id, start_ms, end_ms, text}], vtt_url, vtt_expires_at}`; VTT — presigned на 30 мин, `null` до выкладки; нет транскрипта — 404 `no_transcript` | участники | 2 |
@@ -75,7 +75,8 @@
   AssemblyAI — секретный заголовок/токен в webhook_url. Обработчики
   идемпотентны (повторная доставка не дублирует utterances/джобы).
 - Webhook-обработчики только меняют состояние и ставят джобу в `jobs` —
-  тяжёлая работа в worker.
+  тяжёлая работа в worker. Исключение — запуск Egress по `room_started`/
+  `participant_joined`: синхронный вызов LiveKit под захватом урока (ADR-012).
 - Presigned URL выдаёт только api после проверки доступа (участник урока);
   TTL ~30 мин.
 - Ошибки — JSON `{error, code}`; коды HTTP честные (403 для чужого урока,

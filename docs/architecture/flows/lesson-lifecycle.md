@@ -8,11 +8,21 @@
 ```mermaid
 stateDiagram-v2
     [*] --> scheduled: POST /lessons
-    scheduled --> live: время урока
-    live --> processing: egress_ended (webhook)
+    scheduled --> live: room_started/participant_joined в окне + запуск Egress
+    live --> live: egress_ended до конца окна (закрыт сегмент)
+    live --> processing: окно закрылось, запись есть
+    live --> done: окно закрылось, записи нет
     processing --> done: транскрипт готов
     done --> [*]
 ```
+
+Окно комнаты — с `starts_at` − 15 мин до `ends_at` + 15 мин: только в нём
+выдаётся токен и запускается запись. live фиксируется только вместе
+с успешным запуском Egress (ADR-012); без хранилища или при сорванном
+запуске урок остаётся scheduled, а страница показывает фазу «идёт»
+по времени (`web/lib/lesson-phase.ts`). Каждый запуск Egress — свой
+сегмент записи; урок завершает `egress_ended` после окна или периодическая
+уборка `recording_sweep`, запись урока — самый большой сегмент (ADR-031).
 
 | Статус | Что показывает `/lesson/{id}` | Этап реализации |
 |---|---|---|
@@ -37,9 +47,13 @@ stateDiagram-v2
    участникам (ADR-020), — и панель «словарь урока»: клики по словам
    из материалов летят в `lesson_term_candidates`. *(этапы 1, 3)*
 5. При старте комнаты api запускает LiveKit Egress: room composite →
-   `s3://…/recordings/{id}/room.mp4`; экономный вариант — audio-only. *(этап 1)*
-6. Урок кончился → webhook `egress_ended` → `status=processing` + джоба
-   `recording_ready` → worker: строка `transcripts` и джоба `asr_submit` →
+   сегмент `s3://…/recordings/{id}/<время>-<случайное>.mp4`; экономный
+   вариант — audio-only. Комната опустела посреди урока — сегмент закрыт,
+   урок идёт дальше, следующий вход пишет новый сегмент. *(этап 1)*
+6. Окно урока закрылось (`egress_ended` после него или уборка
+   `recording_sweep`) → самый большой сегмент в `recording_s3_key`,
+   `status=processing` + джоба `recording_ready` (записи нет — сразу
+   `done`) → worker: строка `transcripts` и джоба `asr_submit` →
    presigned GET на запись → AssemblyAI (`speaker_labels: true`,
    `language_code: en`, webhook). *(этапы 1–2; без `ASSEMBLYAI_API_KEY`
    `recording_ready` сразу ставит `done`, ADR-013, ADR-015)*

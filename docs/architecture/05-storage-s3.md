@@ -10,7 +10,7 @@
 
 ```text
 s3://lingua/
-  recordings/{lesson_id}/room.mp4        (или audio.ogg при audio-only egress)
+  recordings/{lesson_id}/{время UTC}-{random}.mp4  (.ogg при audio-only; сегмент на запуск Egress, ADR-031)
   transcripts/{lesson_id}.vtt
   whiteboards/{lesson_id}.json
   materials/{lesson_id}/{random}.{ext}  (ключ выбирает api, ADR-024)
