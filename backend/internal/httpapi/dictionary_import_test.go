@@ -175,18 +175,38 @@ func TestDictionaryImportResumes(t *testing.T) {
 		t.Fatalf("продолженный импорт разошёлся с чистым:\n%s\nчистый:\n%s", got, want)
 	}
 
-	// -restart: оборванный прогон новой версии начинается с первой строки
+	// -restart с другой версией: v2 — v1 без первой строки, поэтому
+	// у run/verb первой статьёй становится дубль секции. Оборванный
+	// прогон v1 успел записать свою run/verb, но рестарт приходит
+	// к словарю чистого импорта v2
 	st, err = dictionary.Import(ctx, a.store.Pool(), &failingReader{r: bytes.NewReader(raw), n: cut}, opt)
 	if !errors.Is(err, errCut) {
 		t.Fatalf("второй обрыв: %v", err)
 	}
-	restarted, err := dictionary.Import(ctx, a.store.Pool(), bytes.NewReader(raw),
+	v2 := raw[bytes.IndexByte(raw, '\n')+1:]
+	fresh, freshConn := securityDB(t)
+	if _, err := dictionary.Import(ctx, fresh.store.Pool(), bytes.NewReader(v2), dictionary.Options{Source: "dump"}); err != nil {
+		t.Fatal(err)
+	}
+	wantV2 := definitionsSnapshot(t, freshConn)
+	if !strings.Contains(wantV2, "run run verb 1 [A duplicate section that must not win.]") || wantV2 == want {
+		t.Fatalf("v2 не меняет run/verb — тест ничего не проверит:\n%s", wantV2)
+	}
+	restarted, err := dictionary.Import(ctx, a.store.Pool(), bytes.NewReader(v2),
 		dictionary.Options{Source: "dump", SourceVersion: "v2", BatchLines: 4, Restart: true})
-	if err != nil || restarted.Resumed || restarted.Skipped != 0 || restarted.ImportID != st.ImportID {
+	if err != nil || restarted.Resumed || restarted.Skipped != 0 || restarted.ImportID == st.ImportID {
 		t.Fatalf("рестарт: %+v, %v", restarted, err)
 	}
-	if got := definitionsSnapshot(t, conn); got != want {
-		t.Fatalf("рестарт разошёлся с чистым импортом:\n%s", got)
+	if got := definitionsSnapshot(t, conn); got != wantV2 {
+		t.Fatalf("рестарт разошёлся с чистым импортом v2:\n%s\nчистый:\n%s", got, wantV2)
+	}
+	var abandoned, finished bool
+	if err := conn.QueryRow(ctx, `SELECT abandoned_at IS NOT NULL, finished_at IS NOT NULL FROM definition_imports WHERE id = $1`,
+		st.ImportID).Scan(&abandoned, &finished); err != nil || !abandoned || finished {
+		t.Fatalf("брошенный прогон: abandoned %v, finished %v (%v)", abandoned, finished, err)
+	}
+	if _, _, finished := importRun(t, conn, restarted.ImportID); !finished {
+		t.Fatal("прогон после рестарта не завершён")
 	}
 }
 
@@ -281,7 +301,7 @@ func TestDictionaryMigrationReverts(t *testing.T) {
 		}
 		return s + " " + idx
 	}
-	want := "definition_imports:created_at,entries,finished_at,id,lines_done,source,source_version " +
+	want := "definition_imports:abandoned_at,created_at,entries,finished_at,id,lines_done,source,source_version " +
 		"definitions:etymology,glosses,id,import_id,lemma,pos,source_line,translations_ru,word " +
 		"terms:created_at,id,lang,lemma,surface,translation_cache " +
 		"definitions_entry_key,definitions_lemma_idx,terms_lang_lemma_key"

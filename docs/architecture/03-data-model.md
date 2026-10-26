@@ -47,7 +47,7 @@ definitions(id, word, lemma /*lemma.Normalize(word), индекс*/, pos, etymol
             glosses text[], translations_ru text[], source_line, import_id,
             UNIQUE(word, pos, etymology))
 definition_imports(id, source, source_version, lines_done /*контрольная точка*/,
-                   entries, finished_at, created_at)
+                   entries, finished_at, abandoned_at /*брошен -restart*/, created_at)
 
 -- SRS (FSRS)
 srs_cards(user_id, term_id, due_at, stability, difficulty,

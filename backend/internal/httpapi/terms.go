@@ -46,7 +46,8 @@ type termDefinition struct {
 
 type termClickResponse struct {
 	// TermID — ссылка для следующих шагов попапа: «в мой словарь» (S3-5),
-	// «объясни» (S5-8)
+	// «объясни» (S5-8). 0 — слово незнакомо (нет ни в OEWN, ни в датасете):
+	// термин не заводится
 	TermID  int64  `json:"term_id"`
 	Lemma   string `json:"lemma"`
 	Surface string `json:"surface"`
@@ -62,7 +63,10 @@ type termClickResponse struct {
 // handleTermClick — POST /terms/click (S3-2, flows/word-click.md).
 // Источники по integrations/translation.md: кэш термина → словарный
 // датасет → LibreTranslate при кэш-миссе → запись в кэш. Повторный клик
-// по тому же слову (в любой форме) во внешние сервисы не ходит.
+// по тому же слову (в любой форме) во внешние сервисы не ходит. Термин
+// заводится и переводится, только если слово знакомо — его лемма есть
+// в OEWN или у него есть статьи датасета (ADR-017): иначе клики по
+// произвольным буквам засоряли бы общий словарь и занимали LibreTranslate.
 func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 	var req termClickRequest
 	if err := decodeBody(w, r, &req); err != nil {
@@ -86,11 +90,6 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	lem := lemma.Lemma(surface)
-	term, err := a.store.EnsureTerm(ctx, termLang, lem, surface)
-	if err != nil {
-		internalError(w, "ensure term", err)
-		return
-	}
 	keys := []string{lem}
 	if key != lem {
 		keys = append(keys, key)
@@ -102,7 +101,7 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := termClickResponse{
-		TermID: term.ID, Lemma: term.Lemma, Surface: surface,
+		Lemma: lem, Surface: surface,
 		Definitions: make([]termDefinition, 0, len(defs)), Examples: []struct{}{},
 	}
 	for _, d := range defs {
@@ -110,6 +109,17 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 			Word: d.Word, Pos: d.Pos, Glosses: d.Glosses, TranslationsRU: d.TranslationsRU,
 		})
 	}
+	if !lemma.Known(lem) && len(defs) == 0 {
+		// Незнакомое слово: ответ без термина и перевода, в базу ничего
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	term, err := a.store.EnsureTerm(ctx, termLang, lem, surface)
+	if err != nil {
+		internalError(w, "ensure term", err)
+		return
+	}
+	resp.TermID = term.ID
 	if tr, ok := term.Translations[translationLang]; ok {
 		resp.Translation = &termTranslation{Text: tr.Text, Source: tr.Source}
 	} else {

@@ -187,6 +187,50 @@ func TestTermClickWithoutLibreTranslate(t *testing.T) {
 	}
 }
 
+// Незнакомое слово (нет ни в OEWN, ни в датасете) отвечается без
+// термина: общий словарь не засоряется, LibreTranslate не занимается.
+// Знакомое — термин и перевод, как всегда; служебное слово знакомо
+// по статье датасета.
+func TestTermClickUnknownWordIsNotStored(t *testing.T) {
+	lt := newFakeLibreTranslate(t, map[string]string{"bank": "банк", "the": "тот"})
+	a, conn, student := termsAPI(t, lt.srv.URL)
+	h := a.Router()
+	terms := func() int {
+		t.Helper()
+		var n int
+		if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM terms`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for _, surface := range []string{"qzxvbn", "Qzxvbn", "zzyzxq"} {
+		resp := click(t, h, student, `{"surface":"`+surface+`"}`)
+		if resp.TermID != 0 || resp.Translation != nil || len(resp.Definitions) != 0 ||
+			resp.Lemma != strings.ToLower(surface) || resp.Surface != surface {
+			t.Fatalf("незнакомое слово %s: %+v", surface, resp)
+		}
+	}
+	if n := terms(); n != 0 || lt.calls.Load() != 0 {
+		t.Fatalf("незнакомые слова: терминов %d, вызовов LibreTranslate %d; ждали 0 и 0", n, lt.calls.Load())
+	}
+
+	if resp := click(t, h, student, `{"surface":"bank"}`); resp.TermID == 0 || resp.Translation == nil ||
+		resp.Translation.Text != "банк" {
+		t.Fatalf("знакомое слово: %+v", resp)
+	}
+	if resp := click(t, h, student, `{"surface":"The"}`); resp.TermID == 0 || resp.Translation == nil ||
+		len(resp.Definitions) != 1 {
+		t.Fatalf("служебное слово из датасета: %+v", resp)
+	}
+	if again := click(t, h, student, `{"surface":"banks"}`); again.Translation == nil || again.Translation.Text != "банк" {
+		t.Fatalf("повтор знакомого слова: %+v", again)
+	}
+	if n := terms(); n != 2 || lt.calls.Load() != 2 {
+		t.Fatalf("терминов %d, вызовов LibreTranslate %d; ждали 2 и 2 (повтор — из кэша)", n, lt.calls.Load())
+	}
+}
+
 // Выдача статей: сначала лемма термина, затем сама словоформа (building —
 // это и build, и building), внутри — точный регистр клика первым.
 func TestTermClickDefinitionsOrder(t *testing.T) {
