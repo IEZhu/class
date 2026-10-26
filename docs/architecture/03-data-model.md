@@ -26,8 +26,9 @@ lessons(id, group_id /*NULL у открытого события, ADR-010*/,
 lesson_participants(lesson_id, user_id, attended bool)
 materials(id, lesson_id, kind /*homework|material*/, title, body_md, s3_key)
 
--- очередь фоновых задач (этап 1)
-jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by)
+-- очередь фоновых задач (этап 1); выполненная джоба удаляется (ADR-013)
+jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by,
+     failed_at /*попытки исчерпаны — «мёртвая»*/, created_at)
 
 -- словарь
 terms(id, lang, lemma, surface, translation_cache jsonb)
@@ -73,7 +74,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | sessions; колонка users.password_hash | 0 | S0-3 |
 | invites | 1 | S1-10 |
 | колонки lessons.title, guest_token_hash; роль guest; CHECK правил события (0006) | 1 | S1-11 |
-| jobs; колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
+| jobs (миграция `0007_jobs`); колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
 | transcripts, utterances | 2 | S2-2 |
 | terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |

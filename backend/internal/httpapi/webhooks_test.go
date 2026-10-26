@@ -267,7 +267,8 @@ func TestRecordingRetriesAfterEgressFailure(t *testing.T) {
 		EgressId: "EG_fixture", RoomName: room.Name, Status: livekit.EgressStatus_EGRESS_COMPLETE,
 		FileResults: []*livekit.FileInfo{{Filename: storage.RecordingKey(lessonID, "mp4"), Size: 1}},
 	}}))
-	if w.Code != http.StatusOK || lessonStatus(t, conn, lessonID) != "done" {
+	// S1-2: egress_ended ставит processing и джобу recording_ready, done ставит worker
+	if w.Code != http.StatusOK || lessonStatus(t, conn, lessonID) != "processing" {
 		t.Errorf("egress_ended: ответ %d, статус %q", w.Code, lessonStatus(t, conn, lessonID))
 	}
 }
@@ -324,5 +325,48 @@ func TestRecordingStartsOnce(t *testing.T) {
 	}
 	if got := lessonStatus(t, conn, lessonID); got != "live" {
 		t.Errorf("статус %q, хотели live", got)
+	}
+}
+
+// egress_ended, повтор которого ничего не даст, отвечает 200 — иначе LiveKit
+// впустую повторял бы доставку; урок при этом не меняется и джоб нет.
+// 503 — только при сбое БД (TestEgressEndedQueuesRecordingJob).
+func TestEgressEndedWithoutRecordingAnswers200(t *testing.T) {
+	srv, _ := fakeEgress(t, egressStarted)
+	h, conn, lessonID := recordingAPI(t, srv.URL)
+	ctx := context.Background()
+	if _, err := conn.Exec(ctx, `UPDATE lessons SET status = 'live' WHERE id = $1`, lessonID); err != nil {
+		t.Fatal(err)
+	}
+	files := []*livekit.FileInfo{{Filename: storage.RecordingKey(lessonID, "mp4"), Size: 1}}
+	for _, c := range []struct {
+		name string
+		info *livekit.EgressInfo
+	}{
+		{"без EgressInfo", nil},
+		{"чужая комната", &livekit.EgressInfo{RoomName: "other-room",
+			Status: livekit.EgressStatus_EGRESS_COMPLETE, FileResults: files}},
+		{"запись не удалась", &livekit.EgressInfo{RoomName: roomName(lessonID),
+			Status: livekit.EgressStatus_EGRESS_FAILED, Error: "egress crashed"}},
+		{"файлов нет", &livekit.EgressInfo{RoomName: roomName(lessonID),
+			Status: livekit.EgressStatus_EGRESS_COMPLETE}},
+		{"урока нет", &livekit.EgressInfo{RoomName: roomName(lessonID + 1000),
+			Status: livekit.EgressStatus_EGRESS_COMPLETE, FileResults: files}},
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, signedWebhook(t, &livekit.WebhookEvent{Event: eventEgressEnded, EgressInfo: c.info}))
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: ответ %d, хотели 200", c.name, w.Code)
+		}
+		var recording *string
+		var queued int
+		if err := conn.QueryRow(ctx, `SELECT recording_s3_key, (SELECT count(*) FROM jobs)
+			FROM lessons WHERE id = $1`, lessonID).Scan(&recording, &queued); err != nil {
+			t.Fatal(err)
+		}
+		if status := lessonStatus(t, conn, lessonID); status != "live" || recording != nil || queued != 0 {
+			t.Errorf("%s: урок %s, запись %v, джоб %d — хотели live без записи и джоб",
+				c.name, status, recording, queued)
+		}
 	}
 }

@@ -43,7 +43,7 @@
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |
-| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=done (с S2-1 — processing и джоба ASR) | LiveKit | 1 |
+| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing и джоба recording_ready (без ASR — сразу done), сбой БД → 503 и повтор (ADR-013) | LiveKit | 1 |
 | `GET /media/{lesson_id}/url` | presigned GET на запись, TTL 30 мин | участники | 1 |
 | `POST /webhooks/assemblyai` | `completed` → utterances, VTT | AssemblyAI | 2 |
 | `POST /terms/click` | `{surface, context_sentence}` → перевод/дефиниция | все | 3 |

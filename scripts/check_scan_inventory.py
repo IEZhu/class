@@ -33,10 +33,10 @@ def check(report, target, package_absence=()):
         for manifest in ("backend/go.mod", "web/package-lock.json"):
             if not any(r.get("Target", "").endswith(manifest) and r.get("Packages") for r in results):
                 raise ValueError(f"manifest was not scanned: {manifest}")
-    elif target in ("api", "caddy", "postgres"):
+    elif target in ("api", "worker", "caddy", "postgres"):
         if not any(r.get("Class") == "os-pkgs" and r.get("Packages") for r in results):
             raise ValueError("runtime OS inventory missing")
-        if target in ("api", "caddy") and not any(
+        if target in ("api", "worker", "caddy") and not any(
             r.get("Type") == "gobinary" and any(
                 p["Name"] == "stdlib" for p in r.get("Packages", [])
             )
