@@ -50,9 +50,13 @@ func main() {
 			AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
 			SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
 		},
+		LibreTranslateURL: os.Getenv("LIBRETRANSLATE_URL"),
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)
+	}
+	if os.Getenv("LIBRETRANSLATE_URL") == "" {
+		log.Printf("api: LIBRETRANSLATE_URL пуст — клик по слову отвечает без перевода")
 	}
 	apiHandler := api.Router()
 

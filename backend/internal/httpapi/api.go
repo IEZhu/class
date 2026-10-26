@@ -13,6 +13,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/translate"
 )
 
 // Config — внешние параметры api, не выводимые из БД.
@@ -29,6 +30,9 @@ type Config struct {
 	// для транскрипта этого достаточно (05-storage-s3.md).
 	EgressAudioOnly bool
 	Storage         storage.Config
+	// LibreTranslateURL — внутренний адрес LibreTranslate (S3-3, ADR-018).
+	// Пусто — клик по слову отвечает дефинициями без перевода.
+	LibreTranslateURL string
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -42,6 +46,8 @@ type API struct {
 	cfg     Config
 	storage *storage.Client // nil, если хранилище не настроено
 	livekit *livekitapi.Client
+	// translator — nil, если LibreTranslate не настроен
+	translator *translate.LibreTranslate
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -56,6 +62,8 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		cfg:     cfg,
 		storage: st,
 		livekit: livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
+
+		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
 	}, nil
 }
 
@@ -121,6 +129,10 @@ func (a *API) Router() http.Handler {
 
 	mux.Handle("POST /lessons/{id}/materials", teacher(a.handleCreateMaterial("material")))
 	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
+
+	// S3-2: клик по слову — лемма, перевод, дефиниции (flows/word-click.md).
+	// Любой вошедший, включая гостя события: попап есть во всех текстах
+	mux.Handle("POST /terms/click", user(a.handleTermClick))
 	return mux
 }
 
