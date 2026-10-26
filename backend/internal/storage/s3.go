@@ -57,8 +57,26 @@ func (c Config) configured() bool {
 
 type Client struct {
 	cfg      Config
+	region   string
 	presign  *s3.PresignClient
 	s3client *s3.Client
+}
+
+// resolveRegion — регион подписи. auto понимает только R2 (задан endpoint),
+// там пустой регион и означает auto (ADR-009). Для AWS SDK подставил бы auto
+// в адрес и в подпись запроса, и ссылки молча не работали бы, поэтому без
+// endpoint нужен настоящий регион — пустой и auto отвергаются.
+func resolveRegion(cfg Config) (string, error) {
+	if cfg.Endpoint == "" {
+		if cfg.Region == "" || cfg.Region == "auto" {
+			return "", ErrNoRegion
+		}
+		return cfg.Region, nil
+	}
+	if cfg.Region == "" {
+		return "auto", nil
+	}
+	return cfg.Region, nil
 }
 
 // New возвращает nil без ошибки, если хранилище не настроено: стенд должен
@@ -67,14 +85,9 @@ func New(cfg Config) (*Client, error) {
 	if !cfg.configured() {
 		return nil, nil
 	}
-	region := cfg.Region
-	if region == "" {
-		// auto понимает только R2; для AWS SDK подставил бы его в адрес
-		// и в подпись запроса, и ссылки молча не работали бы
-		if cfg.Endpoint == "" {
-			return nil, ErrNoRegion
-		}
-		region = "auto" // у R2 регион всегда auto (ADR-009)
+	region, err := resolveRegion(cfg)
+	if err != nil {
+		return nil, err
 	}
 	opts := []func(*s3.Options){}
 	if cfg.Endpoint != "" {
@@ -89,8 +102,12 @@ func New(cfg Config) (*Client, error) {
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
 	}, opts...)
 
-	return &Client{cfg: cfg, presign: s3.NewPresignClient(client), s3client: client}, nil
+	return &Client{cfg: cfg, region: region, presign: s3.NewPresignClient(client), s3client: client}, nil
 }
+
+// Region — регион, которым подписаны запросы. Его же получает Egress:
+// запись пишется в тот же бакет тем же токеном.
+func (c *Client) Region() string { return c.region }
 
 // PresignGet — временная ссылка на скачивание. Хранилище отдаёт Range,
 // поэтому перемотка в плеере работает без дополнительной механики.
@@ -209,9 +226,17 @@ func (c *Client) Put(ctx context.Context, key, contentType string, body []byte) 
 	return nil
 }
 
-// RecordingKey — путь записи урока по раскладке из 05-storage-s3.md.
-func RecordingKey(lessonID int64, ext string) string {
-	return "recordings/" + strconv.FormatInt(lessonID, 10) + "/room." + ext
+// NewRecordingKey — ключ сегмента записи урока (05-storage-s3.md, ADR-031):
+// recordings/{lesson_id}/<время UTC>-<случайные 64 бита>.<ext>. У каждого
+// запуска Egress свой файл: повторный запуск или переподключение после
+// опустевшей комнаты не перезаписывают уже сделанную запись.
+func NewRecordingKey(lessonID int64, ext string) (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "recordings/" + strconv.FormatInt(lessonID, 10) + "/" +
+		time.Now().UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(b) + "." + ext, nil
 }
 
 // NewMaterialKey — ключ файла материала: materials/{lesson_id}/<случайные

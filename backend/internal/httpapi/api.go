@@ -101,6 +101,9 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	// нельзя — проверка a.storage == nil перестала бы его видеть
 	if st != nil {
 		a.storage = st
+		// Egress пишет в тот же бакет: регион тот же, каким подписаны
+		// ссылки, — пустой S3_REGION у R2 доходит до LiveKit как auto
+		a.cfg.Storage.Region = st.Region()
 	}
 	return a, nil
 }

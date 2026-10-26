@@ -71,15 +71,17 @@ func (s *Store) JoinAsGuest(ctx context.Context, tokenHash, name, syntheticEmail
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // после Commit — no-op
 
-	// FOR SHARE держит строку урока до конца транзакции: перевыпуск или
-	// отзыв (UPDATE guest_token_hash) ждёт, пока гость дозайдёт, а если
-	// успел раньше — выборка перепроверяет хэш на новой версии строки
-	// и старый токен не находит. Без блокировки гость мог пройти по уже
-	// отозванной ссылке. Параллельные гости друг друга не ждут.
+	// FOR KEY SHARE держит строку урока до конца транзакции: перевыпуск или
+	// отзыв (UPDATE уникальной guest_token_hash берёт FOR UPDATE) ждёт, пока
+	// гость дозайдёт, а если успел раньше — выборка перепроверяет хэш
+	// на новой версии строки и старый токен не находит. Без блокировки гость
+	// мог пройти по уже отозванной ссылке. Параллельные гости друг друга
+	// не ждут, запуск записи (FOR NO KEY UPDATE на время вызова LiveKit,
+	// ADR-031) — тоже.
 	var lessonID int64
 	var endsAt time.Time
 	err = tx.QueryRow(ctx,
-		`SELECT id, ends_at FROM lessons WHERE guest_token_hash = $1 FOR SHARE`, tokenHash).Scan(&lessonID, &endsAt)
+		`SELECT id, ends_at FROM lessons WHERE guest_token_hash = $1 FOR KEY SHARE`, tokenHash).Scan(&lessonID, &endsAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, 0, ErrNotFound
 	}
