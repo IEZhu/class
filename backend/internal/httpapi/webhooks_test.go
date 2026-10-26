@@ -304,6 +304,8 @@ func TestRecordingStartsOnce(t *testing.T) {
 	case <-entered:
 	case code := <-first:
 		t.Fatalf("первая доставка не дошла до Egress: ответ %d", code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("первая доставка не дошла до Egress и не ответила за 5 с")
 	}
 	select {
 	case code := <-deliver(eventParticipantJoined):
