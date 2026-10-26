@@ -154,6 +154,97 @@ func TestUtteranceEdit(t *testing.T) {
 	}
 }
 
+// S2-5: teacher урока сопоставляет метку спикера с собой или участником
+// урока — все реплики метки получают user_id, вьюер показывает имя.
+// Посторонний человек — 400, неизвестная метка — 404, повтор — 200.
+func TestSpeakerMapping(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.rendered(t)
+	speaker := func(label string) string {
+		return fmt.Sprintf("/lessons/%d/transcript/speakers/%s", s.lessonID, label)
+	}
+	body := func(id int64) string { return fmt.Sprintf(`{"user_id":%d}`, id) }
+
+	for _, c := range []struct {
+		name   string
+		cookie *http.Cookie
+		want   int
+	}{
+		{"участник", s.student, http.StatusForbidden},
+		{"чужой teacher", s.otherTeacher, http.StatusForbidden},
+		{"админ", s.admin, http.StatusForbidden},
+		{"чужой студент", s.outsider, http.StatusForbidden},
+		{"без входа", nil, http.StatusUnauthorized},
+	} {
+		if w := securityRequest(s.h, "PUT", speaker("A"), body(s.studentID), c.cookie); w.Code != c.want {
+			t.Errorf("%s: %d, хотели %d (%s)", c.name, w.Code, c.want, w.Body.String())
+		}
+	}
+	for _, c := range []struct {
+		name, path, body string
+		want             int
+	}{
+		{"чужой студент", speaker("A"), body(s.outsiderID), http.StatusBadRequest},
+		{"чужой teacher", speaker("A"), body(s.otherTeacherID), http.StatusBadRequest},
+		{"нет такого человека", speaker("A"), body(999999), http.StatusBadRequest},
+		{"нулевой id", speaker("A"), `{"user_id":0}`, http.StatusBadRequest},
+		{"строка", speaker("A"), `{"user_id":"1"}`, http.StatusBadRequest},
+		{"без user_id", speaker("A"), `{}`, http.StatusBadRequest},
+		{"невалидный JSON", speaker("A"), `{"user_id":`, http.StatusBadRequest},
+		{"нет такой метки", speaker("Z"), body(s.studentID), http.StatusNotFound},
+		{"нет урока", "/lessons/999999/transcript/speakers/A", body(s.studentID), http.StatusNotFound},
+	} {
+		if w := securityRequest(s.h, "PUT", c.path, c.body, s.teacher); w.Code != c.want {
+			t.Errorf("%s: %d, хотели %d (%s)", c.name, w.Code, c.want, w.Body.String())
+		}
+	}
+	for _, u := range s.viewer(t, s.teacher).Utterances {
+		if u.UserID != nil || u.SpeakerName != nil {
+			t.Fatalf("после отказов реплика сопоставлена: %+v", u)
+		}
+	}
+
+	// A — teacher урока, B — участник; повтор того же маппинга — 200
+	for _, m := range []struct {
+		label string
+		id    int64
+		name  string
+	}{{"A", s.teacherID, "asr-teacher"}, {"B", s.studentID, "asr-student"}, {"B", s.studentID, "asr-student"}} {
+		w := securityRequest(s.h, "PUT", speaker(m.label), body(m.id), s.teacher)
+		expectStatus(t, w, http.StatusOK)
+		if got, want := strings.TrimSpace(w.Body.String()),
+			fmt.Sprintf(`{"speaker_label":%q,"user_id":%d,"speaker_name":%q}`, m.label, m.id, m.name); got != want {
+			t.Errorf("ответ %s, хотели %s", got, want)
+		}
+	}
+	// Имена видит и участник: доступ к транскрипту — как к уроку
+	names := []string{}
+	for _, u := range s.viewer(t, s.student).Utterances {
+		if u.SpeakerName == nil || u.UserID == nil {
+			t.Fatalf("реплика без имени после маппинга: %+v", u)
+		}
+		names = append(names, u.SpeakerLabel+"="+*u.SpeakerName)
+	}
+	if got := strings.Join(names, ","); got != "A=asr-teacher,B=asr-student,A=asr-teacher" {
+		t.Errorf("спикеры во вьюере: %s", got)
+	}
+	for _, c := range []*http.Cookie{s.outsider, s.otherTeacher, s.admin} {
+		expectStatus(t, securityRequest(s.h, "GET", fmt.Sprintf("/lessons/%d/transcript", s.lessonID), "", c), http.StatusForbidden)
+	}
+
+	// null снимает маппинг; VTT несёт метки, поэтому перерендера нет
+	w := securityRequest(s.h, "PUT", speaker("B"), `{"user_id":null}`, s.teacher)
+	expectStatus(t, w, http.StatusOK)
+	if got := strings.TrimSpace(w.Body.String()); got != `{"speaker_label":"B","user_id":null,"speaker_name":null}` {
+		t.Errorf("снятие маппинга: %s", got)
+	}
+	if u := s.viewer(t, s.teacher).Utterances[1]; u.UserID != nil || u.SpeakerName != nil {
+		t.Errorf("маппинг B не снят: %+v", u)
+	}
+	expectStatus(t, securityRequest(s.h, "PUT", speaker("B"), `{"user_id":null}`, s.teacher), http.StatusOK)
+	s.expectQueue(t)
+}
+
 // 0014 добавляет к utterances отметки правки; откат их убирает, текст
 // правки остаётся, повторный накат возвращает колонки.
 func TestUtteranceEditsMigrationReverts(t *testing.T) {
