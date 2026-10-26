@@ -2,28 +2,74 @@
 
 > Этап 5 (S5-1…S5-3). Offline-процесс worker'а: собирает готовые английские
 > субтитры для видео-практики. Ничего не транскрибирует и не скачивает видео.
+> Решения — [ADR-021](../decisions.md) (расписание) и
+> [ADR-022](../decisions.md) (сборщик); код — `backend/internal/harvester`.
 
 ## Шаги
 
 1. **Seed.** Кураторский список каналов/плейлистов в `subtitle_sources`
-   (TED, TED-Ed, BBC Learning English, VOA Learning English, …).
-2. **Список видео** канала — бесплатный RSS-фид канала
-   (без квоты YouTube Data API).
-3. **Субтитры**:
+   (миграция `0011_subtitles`: TED, TED-Ed, BBC Learning English,
+   VOA Learning English). Выключить источник — `enabled = false`.
+2. **Список видео** — джоба `rss_poll` раз в час: бесплатный RSS-фид
+   канала (`https://www.youtube.com/feeds/videos.xml?channel_id=…`, без
+   квоты YouTube Data API, 15 последних видео) → новые строки `videos`
+   (повтор ничего не дублирует). Shorts пропускаются. Сбой фида — в
+   `subtitle_sources.last_error`.
+3. **Субтитры** — джоба `subtitles_fetch` раз в 5 минут собирает пакет:
    `yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs en`
-   с низким рейтом: 1 видео / 15–30 с, jitter, backoff.
-   Manual-субтитры приоритетнее auto.
+   (+ `--sub-format vtt --write-info-json`), одно видео в 15–30 с с jitter.
+   Manual-субтитры приоритетнее auto: для одного языка yt-dlp берёт ручные,
+   авто — только без них; что вышло, пишется в `videos.subtitles`.
+   Неудача по видео — `harvest_attempts`, повтор через 6 ч × попытки,
+   после трёх видео выпадает из очереди.
 4. **Парсинг VTT** → `subtitle_segments` (start_ms, end_ms, text);
-   tsvector-колонка генерируется автоматически.
-5. **TED** — разовый импорт готовых дампов транскриптов (S5-3).
+   у автосубтитров убираются повторы «катящихся» строк, tsvector-колонка
+   генерируется автоматически. Поиск для практики —
+   `store.SearchSubtitles` (FTS по `tsv`, GIN-индекс).
+5. **TED** — разовый импорт дампов (S5-3) не сделан: открытого дампа
+   с таймкодами нет (ADR-022); видео TED и TED-Ed идут тем же сборщиком.
+
+## Где и как запускается
+
+Сборщик — роль того же worker-бинаря: `WORKER_ROLE=harvester` берёт только
+джобы сборщика и ставит их по расписанию. Образ — target `harvester`
+в `backend/Dockerfile` (worker + закреплённый yt-dlp + Node.js для
+JS-задач YouTube).
+
+- **VPS**: сервис `harvester` под профилем compose, `make up` его
+  не поднимает. Включить:
+  `docker compose -f deploy/docker-compose.yml --profile harvester up -d --build harvester`;
+  выключить — `… stop harvester`.
+- **Другая машина** (тот же образ, та же база через VPN/Tailscale; порт
+  Postgres стенда наружу по умолчанию не опубликован — его открывают
+  только на адресе tailnet):
+
+  ```bash
+  docker build --target harvester -t lingua-harvester backend
+  docker run -d --name lingua-harvester --restart unless-stopped \
+    -e DATABASE_URL='postgres://lingua:…@<адрес в tailnet>:5432/lingua?sslmode=disable' \
+    lingua-harvester
+  ```
+
+  Без Docker: `go build ./cmd/worker` и yt-dlp с JS-движком в `PATH`
+  (по умолчанию yt-dlp ищет deno), `WORKER_ROLE=harvester`.
+  Сборщиков может быть несколько: расписание общее (ADR-021), джоба
+  достаётся одному.
 
 ## Митигация IP-блокировок YouTube
 
-- Низкий рейт + jitter + экспоненциальный backoff, ретраи.
-- Cookies при необходимости.
+- Низкий рейт + jitter: пауза 15–30 с от начала прошлого обращения.
+- Признаки блокировки (HTTP 429, «вы не бот», rate limit) — пауза процесса
+  30 мин с удвоением до суток; пока она идёт, к YouTube не обращаемся.
+  Пауза в памяти процесса: у каждого сборщика свой IP.
+- Cookies при необходимости: файл в формате Netscape, в compose —
+  `HARVESTER_COOKIES_FILE` (путь на хосте), с другой машины —
+  `-v <файл>:/run/secrets/youtube-cookies.txt:ro -e HARVESTER_COOKIES=/run/secrets/youtube-cookies.txt`.
 - Fallback: запуск сборщика с домашней машины — **тот же worker-бинарь**,
-  пишет в ту же PG через VPN/Tailscale (архитектурно предусмотрено:
-  сборщик не завязан на VPS-окружение).
+  пишет в ту же PG через VPN/Tailscale (сборщик не завязан на
+  VPS-окружение); на VPS сервис при этом останавливают.
+- Состояние видно в базе: `subtitle_sources.polled_at/last_error`,
+  `videos.subtitles/harvest_error`, `job_schedules`.
 
 Связано: [practice-engine.md](practice-engine.md) ·
 [../03-data-model.md](../03-data-model.md) ·

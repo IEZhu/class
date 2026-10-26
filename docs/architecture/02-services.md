@@ -12,7 +12,8 @@
 | web | Next.js | 300–500 MB | 0 | UI: страницы уроков, плеер, словарь, практика, доска-обёртка |
 | api | Go | 50–150 MB | 0 | REST/JSON API, auth (sessions/JWT), FSRS (go-fsrs), выдача presigned URL, LiveKit tokens |
 | postgres | postgres:16 | 300–500 MB | 0 | всё состояние + full-text search субтитров/текстов |
-| worker | Go | 100–300 MB | 1 | очереди: календарь, ASR-джобы, сборщик субтитров, импорт Tatoeba, LLM-генерация, VTT-рендер |
+| worker | Go | 100–300 MB | 1 | очереди: календарь, ASR-джобы, импорт Tatoeba, LLM-генерация, VTT-рендер |
+| harvester | Go + yt-dlp (target `harvester`) | 50–150 MB | 5 | сборщик субтитров: тот же worker с `WORKER_ROLE=harvester`, профиль compose `harvester` — включается явно ([ADR-022](decisions.md)) |
 | libretranslate | libretranslate | 1–1.5 GB | 3 | перевод en↔ru; **обязательно** `--load-only en,ru`, ограничить threads |
 | excalidraw | PatWie/excalidraw-complete | 50–100 MB | 3 | доска: фронт + storage + realtime в одном Go-бинаре; сцены привязаны к lesson_id |
 | redis | redis:7 | 50 MB | опц. | кэш переводов, rate-limit; очереди держим в PG (SKIP LOCKED) — redis не зависимость |
