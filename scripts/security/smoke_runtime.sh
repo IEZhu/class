@@ -7,6 +7,15 @@ case "$service" in
   api)
     test "$(docker run --rm --network none --entrypoint id "$image" -u)" = 10001
     ;;
+  worker)
+    test "$(docker run --rm --network none --entrypoint id "$image" -u)" = 10001
+    # The entrypoint must start and refuse to run without its database.
+    if output=$(docker run --rm --network none "$image" 2>&1); then
+      echo 'worker started without DATABASE_URL' >&2
+      exit 1
+    fi
+    grep -Fq 'worker: DATABASE_URL is required' <<<"$output"
+    ;;
   web)
     docker run --rm --network none --entrypoint sh "$image" -c 'test -x /usr/bin/node && ! command -v npm && ! command -v yarn'
     test "$(docker run --rm --network none --entrypoint node "$image" --version | cut -d. -f1)" = v22

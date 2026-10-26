@@ -1,4 +1,5 @@
-# Этап 0 (S0-1): caddy, web, api, postgres. Состав растёт по этапам —
+# Этап 0 (S0-1): caddy, web, api, postgres; этап 1 (S1-2): + worker.
+# Состав растёт по этапам —
 # docs/architecture/02-services.md. TLS-край — host-nginx (ADR-004),
 # caddy опубликован только на 127.0.0.1:${HTTP_PORT}.
 
@@ -80,6 +81,24 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # S1-2: фоновые джобы из таблицы jobs (ADR-003, ADR-012). Портов нет:
+  # worker только ходит в postgres. Healthcheck не заведён — HTTP у worker'а
+  # нет, а упавший процесс поднимет restart.
+  worker:
+    build:
+      context: ../backend
+      target: worker
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    # После SIGTERM текущей джобе даётся 20 с (jobs.Config.ShutdownGrace);
+    # docker по умолчанию ждёт 10 — берём с запасом до SIGKILL
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     build:

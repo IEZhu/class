@@ -46,22 +46,22 @@ class InventoryTests(unittest.TestCase):
     def test_go_runtimes_require_both_os_and_compiled_go_inventory(self):
         packages = [{"Name": "alpine-baselayout", "Version": "3.7"}]
         report = {"Results": [{"Class": "os-pkgs", "Packages": packages}]}
-        for target in ("api", "caddy"):
+        for target in ("api", "worker", "caddy"):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 check(report, target)
         report["Results"].append({"Type": "gobinary", "Packages": [
             {"Name": "stdlib", "Version": "v1.26.10"},
         ]})
-        for target in ("api", "caddy"):
+        for target in ("api", "worker", "caddy"):
             with self.subTest(target=target):
                 check(report, target)
         report["Results"][0].pop("Class")
-        for target in ("api", "caddy"):
+        for target in ("api", "worker", "caddy"):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 check(report, target)
 
     def test_go_runtimes_reject_stdlib_outside_compiled_go_inventory(self):
-        for target in ("api", "caddy"):
+        for target in ("api", "worker", "caddy"):
             for result_type in (None, "alpine", "gomod"):
                 with self.subTest(target=target, result_type=result_type):
                     report = {"Results": [{"Class": "os-pkgs", "Packages": [
