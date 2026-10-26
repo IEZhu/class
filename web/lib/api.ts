@@ -92,6 +92,29 @@ export interface LessonDetail extends Lesson {
   participants: { user_id: number; email: string; name: string; role: string }[];
 }
 
+// Реплика транскрипта (S2-2…S2-5); время — миллисекунды от начала записи.
+export interface Utterance {
+  idx: number;
+  // метка спикера от ASR: A, B, C…
+  speaker_label: string;
+  // null, пока преподаватель не сопоставил метку с человеком урока (S2-5)
+  user_id: number | null;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  // null — текст как его распознал ASR; иначе время правки (S2-4)
+  edited_at: string | null;
+}
+
+// GET /lessons/{id}/transcript. queued | submitted | fetching — готовится,
+// error — транскрипта не будет (ADR-016); vtt_url — presigned на 30 мин.
+export interface Transcript {
+  status: "queued" | "submitted" | "fetching" | "completed" | "error";
+  utterances: Utterance[];
+  vtt_url: string | null;
+  vtt_expires_at: string | null;
+}
+
 // Google Calendar преподавателя (S1-1, ADR-023): available — ключи Google
 // на стенде заданы, connected — токен сохранён и читается текущим ключом.
 export interface GoogleCalendarStatus {
