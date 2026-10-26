@@ -2,12 +2,7 @@ package jobs
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -15,68 +10,22 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/IEZhu/class/backend/internal/testdb"
 )
 
 const testKind = "test_kind"
 
-// testDB — пул на собственную схему одноразовой базы с настоящими миграциями,
-// как в httpapi/security_test.go. CI требует базу, а не пропускает тесты.
+// testDB — пул на собственную схему одноразовой базы с настоящими миграциями
+// (internal/testdb, общий с httpapi).
 func testDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL is required in CI")
-		}
-		t.Skip("set TEST_DATABASE_URL to a disposable Postgres database")
-	}
-	ctx := context.Background()
-	admin, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema := "jobs_" + strings.ToLower(rand.Text()[:16])
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
-			t.Errorf("clean test schema: %v", err)
-		}
-		_ = admin.Close(ctx)
-	})
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := u.Query()
-	q.Set("search_path", schema)
-	u.RawQuery = q.Encode()
-	pool, err := pgxpool.New(ctx, u.String())
+	pool, err := pgxpool.New(context.Background(), testdb.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	files, err := filepath.Glob("../../migrations/*.up.sql")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("migration inventory: %v (%d files)", err, len(files))
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		applySQL(t, pool, file)
-	}
 	return pool
-}
-
-func applySQL(t *testing.T, pool *pgxpool.Pool, file string) {
-	t.Helper()
-	sql, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(context.Background(), string(sql)); err != nil {
-		t.Fatalf("migration %s: %v", file, err)
-	}
 }
 
 // testConfig — быстрые таймауты; backoff настоящий, а «ожидание» тесты
@@ -165,11 +114,11 @@ func TestMigrationMatchesDataModelAndReverts(t *testing.T) {
 	if got := strings.Join(columns(), ","); got != want {
 		t.Fatalf("columns %s, want %s", got, want)
 	}
-	applySQL(t, pool, "../../migrations/0007_jobs.down.sql")
+	testdb.Apply(t, pool, "0007_jobs.down.sql")
 	if got := columns(); len(got) != 0 {
 		t.Fatalf("down left columns %v", got)
 	}
-	applySQL(t, pool, "../../migrations/0007_jobs.up.sql")
+	testdb.Apply(t, pool, "0007_jobs.up.sql")
 	if got := strings.Join(columns(), ","); got != want {
 		t.Fatalf("columns after re-up %s", got)
 	}
