@@ -1,46 +1,19 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/IEZhu/class/backend/internal/jobs"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/worker"
 )
-
-// signedWebhook подписывает событие так же, как LiveKit: JWT ключами api
-// с sha256 тела.
-func signedWebhook(t *testing.T, a *API, event *livekit.WebhookEvent) *http.Request {
-	t.Helper()
-	body, err := protojson.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(body)
-	token, err := auth.NewAccessToken(a.cfg.LiveKitAPIKey, a.cfg.LiveKitAPISecret).
-		SetValidFor(time.Minute).
-		SetSha256(base64.StdEncoding.EncodeToString(sum[:])).
-		ToJWT()
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := httptest.NewRequest(http.MethodPost, "/webhooks/livekit", bytes.NewReader(body))
-	r.Header.Set("Authorization", token)
-	r.Header.Set("Content-Type", "application/webhook+json")
-	return r
-}
 
 // egress_ended — точка вставки ASR (S1-5, S1-2): путь записи, processing
 // и джоба recording_ready атомарно; worker доводит урок до done. Повторная
@@ -71,7 +44,7 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	deliver := func() {
 		t.Helper()
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, signedWebhook(t, a, event))
+		h.ServeHTTP(w, signedWebhook(t, event))
 		expectStatus(t, w, http.StatusOK)
 	}
 	expect := func(status, recording string, queued int) {

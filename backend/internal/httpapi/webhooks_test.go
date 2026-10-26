@@ -267,7 +267,8 @@ func TestRecordingRetriesAfterEgressFailure(t *testing.T) {
 		EgressId: "EG_fixture", RoomName: room.Name, Status: livekit.EgressStatus_EGRESS_COMPLETE,
 		FileResults: []*livekit.FileInfo{{Filename: storage.RecordingKey(lessonID, "mp4"), Size: 1}},
 	}}))
-	if w.Code != http.StatusOK || lessonStatus(t, conn, lessonID) != "done" {
+	// S1-2: egress_ended ставит processing и джобу recording_ready, done ставит worker
+	if w.Code != http.StatusOK || lessonStatus(t, conn, lessonID) != "processing" {
 		t.Errorf("egress_ended: ответ %d, статус %q", w.Code, lessonStatus(t, conn, lessonID))
 	}
 }
