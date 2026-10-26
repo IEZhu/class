@@ -174,9 +174,15 @@ func lessonToResponse(l *store.Lesson, groupName string) lessonResponse {
 
 // pathID — {id} из пути; 0/мусор → 400 и false.
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	return pathIDNamed(w, r, "id")
+}
+
+// pathIDNamed — тот же разбор для маршрутов, где параметр назван иначе
+// (например {lesson_id} у медиа).
+func pathIDNamed(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue(name), 10, 64)
 	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "bad_request", "некорректный id в пути")
+		writeError(w, http.StatusBadRequest, "bad_request", "некорректный "+name+" в пути")
 		return 0, false
 	}
 	return id, true

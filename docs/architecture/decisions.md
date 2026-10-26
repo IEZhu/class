@@ -1,6 +1,6 @@
 # Журнал решений (ADR-lite)
 
-## ADR-009 · 2026-10-24 · proposed: security validation in CI
+## ADR-011 · 2026-10-24 · proposed: security validation in CI
 
 Run real HTTP/SQL security tests against disposable Postgres, retain the LiveKit signing contract tests, and build/typecheck the web application. Audit complete Go/npm dependency inventories and the actual Compose runtime images, including every severity and unfixed findings. Source secrets, missing inventories, and scanner errors block. Pin actions and scanner versions. PR checks do not access production services or credentials. Package-scoped Go advisories require artifact-specific applicability evidence; a blanket ignore or reduced severity threshold is unacceptable.
 
@@ -166,4 +166,75 @@ expires_at > now() RETURNING` первым шагом транзакции пр�
 `/signup/{token}` нет: токен — 256 бит случайности, перебор нереалистичен;
 при появлении общего троттлинга api эндпоинт попадёт под него.
 
+## ADR-009 · 2026-08-03 · accepted — Объектное хранилище: Cloudflare R2
+
+**Контекст.** [ADR-001](#adr-001--2026-07-31--accepted--вариант-c-гибрид) и
+[05-storage-s3.md](05-storage-s3.md) закладывали AWS S3. Записи уроков — это
+0.7–1.1 GB на час; их читают браузеры студентов (плеер) и AssemblyAI
+(транскрибация), то есть трафик наружу пропорционален не объёму хранения,
+а числу просмотров. У AWS бесплатны первые 100 GB egress в месяц, дальше
+он платный; у R2 исходящий трафик бесплатен всегда.
+**Решение.** Хранилище — **Cloudflare R2**, S3-совместимый API.
+Проверено по документации Cloudflare:
+- эндпоинт `https://<account_id>.r2.cloudflarestorage.com`, регион в SDK —
+  `auto` (пустое значение и `us-east-1` алиасятся в него);
+- presigned URL поддержаны для GET/HEAD/PUT/DELETE, максимальный TTL —
+  7 дней (наши 30 минут проходят с запасом); POST для multipart-форм нет —
+  нам он не нужен;
+- `PutBucketCors` и `PutBucketLifecycleConfiguration` доступны по S3 API,
+  то есть бакет настраивается тем же `aws cli` с `--endpoint-url`.
+
+Ключи — **два токена разного назначения**: временный `Admin Read & Write`
+для разовой настройки бакета и постоянный `Object Read & Write`, ограниченный
+одним бакетом, — он уходит в api и в конфиг LiveKit Egress. Бакетная
+конфигурация под вторым токеном недоступна, и это правильно: рабочий ключ
+не должен уметь менять политику хранения.
+**Последствия.** **Архивного класса у R2 нет** — только `Standard` и
+`Infrequent Access`. Ступень «Glacier IR через 90 дней» из
+[05-storage-s3.md](05-storage-s3.md) невыполнима; остаётся переход в IA
+через 30 дней, а роль холодного хранения играет удаление видео старше
+N месяцев с сохранением аудио и VTT (транскрипт ценнее сырого видео).
+Файл обновлён. Порог «поставить CloudFront перед бакетом» из
+[06-budget.md](06-budget.md) отпадает вместе с платным egress.
+Инвариант «медиа не проходит через VPS» не затронут: presigned-механика
+и запись Egress работают ровно так же.
+**Токен R2 не должен иметь ограничения по IP.** Записи пишет Egress
+с адресов LiveKit Cloud, а читают браузеры студентов и AssemblyAI —
+перечислить эти адреса нельзя. Проверено на стенде: presigned GET,
+подписанный токеном с условием `request_ip`, скачивается и с чужого
+адреса, то есть на подписанные ссылки условие не распространяется;
+поведение Egress-записи при таком условии не проверялось, и цена ошибки —
+молча потерянная запись урока. Ограничение по IP снимаем. Возврат на AWS — смена трёх ключей
+`.env` (`S3_ENDPOINT` пустеет, регион становится реальным) без правки кода:
+всё различие спрятано за `S3_ENDPOINT` и `ForcePathStyle`.
+
 <!-- Следующие ADR добавлять ниже по мере реализации. -->
+
+## ADR-012 · 2026-10-26 · accepted — Запуск записи: статус live только вместе с Egress
+
+**Контекст.** В S1-5 `room_started` сначала переводил урок scheduled → live
+(это же условие делало вызов идемпотентным), а потом запускал Egress.
+Ошибка запуска только логировалась, вебхук отвечал 200: урок оставался
+live без записи, а повторная доставка получала `ErrNotFound` — записи
+у такого урока не появилось бы уже никогда (ревью PR #9).
+**Решение.** Переход в live и запуск Egress — одна транзакция
+(`store.StartLessonRecording`): строка урока захватывается
+`FOR UPDATE SKIP LOCKED`, Egress запускается под захватом, переход
+фиксируется только после успешного ответа LiveKit. Ошибка — откат, урок
+остаётся scheduled, вебхук отвечает 503, и LiveKit повторяет доставку
+(livekit-server — ограниченное число раз, с паузами). Запуск записи
+вызывает и `participant_joined`: если повторы кончились или `room_started`
+не дошёл (api перезапускался), запись запустит следующий вошедший.
+Отдельную колонку под «захват записи» не заводим: live у нас и так значит
+«комната открыта и запись идёт» — без хранилища урок и раньше оставался
+scheduled при открытой комнате, страница урока выводит фазу «идёт»
+по времени (`web/lib/lesson-phase.ts`), а комната пускает и в scheduled.
+**Последствия.** Пока запись не запущена, урок в scheduled и его можно
+перенести или отменить — как и без хранилища. Строка урока занята на время
+вызова Egress (не дольше 15 с таймаута клиента); параллельные доставки
+её пропускают, не дожидаясь. Неопределённый исход — LiveKit запустил
+Egress, но ответ потерялся или транзакция не зафиксировалась — приведёт
+к повторному запуску: второй Egress пишет в тот же ключ и тратит лишние
+минуты Egress. На hobby-масштабе это дешевле сверки через `ListEgress`.
+Сбой уже идущей записи (`egress_ended` с `EGRESS_FAILED`) по-прежнему
+только логируется.
