@@ -72,6 +72,10 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # 1 — писать только звук (дешевле, для транскрипта достаточно)
       EGRESS_AUDIO_ONLY: ${EGRESS_AUDIO_ONLY:-}
+      # S3-3: перевод слова; пусто — клик отвечает без перевода (ADR-018)
+      LIBRETRANSLATE_URL: ${LIBRETRANSLATE_URL:-}
+    # S3-3: translate — внутренняя сеть до libretranslate
+    networks: [default, translate]
     depends_on:
       postgres:
         condition: service_healthy
@@ -121,6 +125,50 @@ services:
       retries: 5
       start_period: 10s
 
+  # S3-3: LibreTranslate (ADR-018) — только en↔ru, один процесс,
+  # во внутренней сети без выхода наружу и без опубликованных портов.
+  # Профиль translate: образ не входит в блокирующий скан ADR-011 (долг
+  # D-10), поэтому сервис включается явно — COMPOSE_PROFILES=translate.
+  # Модели ставит один раз libretranslate-models (deploy/README.md).
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6@sha256:1de2d7056bb8ad607a412f4563d9abe324ff632b43b5be9428bcc8e213aebb32
+    profiles: ["translate"]
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      LT_LOAD_ONLY: en,ru
+      # Число процессов gunicorn: каждый держит свою копию моделей в RAM
+      LT_THREADS: "1"
+      LT_DISABLE_WEB_UI: "true"
+      LT_DISABLE_FILES_TRANSLATION: "true"
+      # api шлёт по слову; длинный текст — не наш запрос
+      LT_CHAR_LIMIT: "500"
+      # Внутренняя сеть без интернета: обновлять модели при старте нечем
+      LT_UPDATE_MODELS: "false"
+    volumes:
+      - lt_models:/home/libretranslate/.local
+    networks: [translate]
+    # Потолки под оценку 02-services.md: не душить api и postgres
+    cpus: 1.5
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # S3-3: разовая установка моделей en↔ru в том lt_models — ей нужен
+  # интернет, поэтому она в сети по умолчанию, а сам сервис — нет:
+  # docker compose --profile translate-setup run --rm libretranslate-models
+  libretranslate-models:
+    image: libretranslate/libretranslate:v1.9.6@sha256:1de2d7056bb8ad607a412f4563d9abe324ff632b43b5be9428bcc8e213aebb32
+    profiles: ["translate-setup"]
+    <<: *logging
+    entrypoint: ["./venv/bin/python", "scripts/install_models.py", "--load_only_lang_codes", "en,ru"]
+    volumes:
+      - lt_models:/home/libretranslate/.local
+
   # Инструмент миграций (S0-2+): make migrate → docker compose run --rm migrate up
   migrate:
     image: migrate/migrate:v4.17.1
@@ -142,3 +190,11 @@ volumes:
   pg_data:
   caddy_data:
   caddy_config:
+  # S3-3: модели LibreTranslate en↔ru (ставит libretranslate-models)
+  lt_models:
+
+networks:
+  default:
+  # S3-3: api ↔ libretranslate; internal — без выхода в интернет
+  translate:
+    internal: true
