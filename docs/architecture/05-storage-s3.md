@@ -14,7 +14,7 @@ s3://lingua/
   transcripts/{lesson_id}.vtt
   whiteboards/{lesson_id}.json
   materials/{lesson_id}/…
-  backups/pg/{date}.dump.zst
+  backups/pg/{date}.dump.zst        (пока BACKUP_S3_* пусты; цель — свой бакет, ADR-014)
 ```
 
 ## Доступ
@@ -76,8 +76,16 @@ s3://lingua/
   retention 7 дневных / 30 дней: все копии за 7 суток, дальше по одной
   на неделю до 30 суток ([ADR-014](decisions.md)). Чистит скрипт
   `deploy/backup-pg.sh`, lifecycle на `backups/pg/` не ставится.
-- Бакет и токен для бэкапов — отдельные (`BACKUP_S3_*`): токен записей
+  Выгрузка идёт во временный `backups/pg/incoming/…` и переносится
+  в ночной ключ только после сверки sha256; ключ, sha256 и размер
+  проверенной копии пишутся в манифест на VPS
+  (`/var/lib/lingua-backup/manifest`, только root), по нему сверяет
+  `deploy/restore-pg.sh`.
+- Целевая схема — отдельные бакет и токен (`BACKUP_S3_*`): токен записей
   уходит в LiveKit Egress, а в дампе хэши паролей и email (ADR-014).
+  Пока `BACKUP_S3_*` пусты, скрипт пишет в этот бакет под `S3_*`
+  с предупреждением в журнале — долг D-8. Задан хоть один `BACKUP_S3_*`
+  без своего `BACKUP_S3_BUCKET` (или с бакетом записей) — скрипт падает.
 - Сцены досок (whiteboards) и VTT уже лежат в S3 — отдельно не бэкапим.
 - RTO для hobby: «пересоздать compose за час» из бэкапа.
 

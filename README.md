@@ -49,7 +49,7 @@ hobby-MVP): календарь → видеоуроки (LiveKit) → запис
 ```text
 backend/   Go: cmd/api, internal/, миграции     (cmd/worker появится в S1-2)
 web/       Next.js
-deploy/    docker-compose, Caddyfile, .env.example
+deploy/    docker-compose, Caddyfile, .env.example, бэкапы Postgres (S1-7)
 docs/      архитектура, планы, индекс задач
 ```
 
