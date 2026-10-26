@@ -57,9 +57,9 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
 
 ## Definition of Done этапа
 
-- [ ] S2-1…S2-5 закрыты в [INDEX](../tasks/README.md)
+- [x] S2-1…S2-5 закрыты в [INDEX](../tasks/README.md)
 - [ ] Сквозной сценарий: провести урок → дождаться транскрипта → кликнуть реплику → плеер прыгнул
-- [ ] «Факт» заполнен
+- [x] «Факт» заполнен
 
 ## Факт (заполняется по ходу реализации)
 
@@ -130,6 +130,48 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
   (или `completed` без VTT), урок всё равно `done`.
 - Тесты: `TestASRPipeline` (вся цепочка до VTT в fake S3 и `done`,
   повторы всех джоб), сбой выкладки VTT, `internal/webvtt`, `storage.Put`.
+
+### S2-4 Транскрипт-вьюер (2026-10-26)
+
+- Миграция `backend/migrations/0014_utterance_edits.up.sql` (+ `.down.sql`):
+  `utterances.edited_at`, `edited_by` (FK users, `SET NULL`), CHECK
+  `utterances_editor_has_time`. Откат убирает отметки, исправленный текст
+  остаётся; накат/откат/накат проверены golang-migrate v4.17.1 на
+  одноразовом Postgres 16.
+- `PATCH /lessons/{id}/transcript/utterances/{idx}` `{text}` — teacher
+  урока (`backend/internal/httpapi/transcripts.go`, `handleEditUtterance`):
+  пробелы схлопываются, пустой/NUL/> 20 000 символов — 400, нет реплики —
+  404 `no_utterance`, тот же текст — 200 без изменений. Store:
+  `EditUtterance` — текст, `edited_at`/`edited_by` и `vtt_render`
+  (`jobs.EnqueueOnce`, через минуту, одна джоба на пачку правок) одной
+  транзакцией. Новых kind и ключей `.env` нет; VTT перезаписывается в тот
+  же `transcripts/{lesson_id}.vtt`.
+- `GET /lessons/{id}/transcript`: у реплики добавились `speaker_name`
+  и `edited_at` (`store.Utterances` — одна выборка для вьюера и рендера).
+- Web: `web/app/lesson/[id]/lesson-replay.tsx` (плеер + транскрипт одной
+  секцией в фазе done), `transcript-panel.tsx` (блоки по спикерам, клик —
+  seek и play, подсветка по `currentTime`, прокрутка списка, правка
+  реплики и маппинг для teacher), `utterance-text.tsx` (`UtteranceText` —
+  единственный рендер текста реплики, место для `<ClickableText>` S3-1);
+  `lesson-player.tsx` отдаёт ref на `<video>` и позицию; типы `Utterance`,
+  `Transcript` в `web/lib/api.ts`. Решения — ADR-025.
+- Тесты: `TestUtteranceEdit` (доступ, валидация, отметка и автор,
+  одна джоба на две правки, повтор, VTT с правкой в fake S3),
+  `TestUtteranceEditsMigrationReverts`; браузерный смоук (Chromium,
+  Plyr, клик-seek, подсветка, прокрутка списка) — вне CI.
+
+### S2-5 Маппинг спикеров (2026-10-26)
+
+- `PUT /lessons/{id}/transcript/speakers/{label}` `{user_id: N | null}` —
+  teacher урока (`handleMapSpeaker`, store `MapSpeaker`): все реплики
+  метки получают `utterances.user_id`; человек — teacher урока или
+  участник снапшота, иначе 400 `not_participant`; нет метки — 404
+  `no_speaker`; `null` снимает маппинг; повтор — 200.
+- Вьюер показывает `speaker_name` вместо метки, селект «Кто говорит»
+  с первой репликой каждой метки — у преподавателя урока.
+- VTT несёт метки, маппинг его не перерендеривает — долг D-16.
+- Тест: `TestSpeakerMapping` (доступ, посторонние и несуществующие люди,
+  неизвестная метка, имена у участника, снятие маппинга, очередь пуста).
 
 ## Риски этапа
 

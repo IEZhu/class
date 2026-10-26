@@ -60,7 +60,8 @@ transcripts(id, lesson_id /*UNIQUE*/, provider /*assemblyai*/,
             status /*queued|submitted|fetching|completed|error*/,
             external_id, vtt_s3_key, error, created_at)
 utterances(transcript_id, idx, speaker_label, user_id nullable /*ручной маппинг A→Иван*/,
-           start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx))
+           start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx),
+           edited_at, edited_by /*правка текста преподавателем, 0014, ADR-025*/)
 
 -- индекс субтитров (практика-видео); состояние сборщика — ADR-022
 videos(id, source /*youtube|ted*/, external_id, title, channel, duration_s, lang, added_at,
@@ -97,6 +98,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | jobs (миграция `0007_jobs`); колонка users.google_refresh_token (миграция `0012_google_calendar`, ADR-023) | 1 | S1-2 / S1-1 |
 | колонки файла materials.file_*, users.deactivated_at (`0013_material_files_archive`) | 1 | долги D-4, D-5 |
 | transcripts, utterances (миграция `0008_transcripts`); FK lessons.transcript_id | 2 | S2-1…S2-3 |
+| колонки utterances.edited_at, edited_by (миграция `0014_utterance_edits`) | 2 | S2-4 |
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
 | user_terms, lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
@@ -142,5 +144,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   задваивает `utterances`. Статус транскрипта меняют только условные
   переходы `store` (ADR-015); `vtt_s3_key` есть только у `completed`
   (CHECK в 0008).
+- Текст реплики правит только teacher урока, правка ставит перерендер
+  VTT; `utterances.user_id` — teacher урока или участник его снапшота,
+  одна метка спикера — один человек (ADR-025).
 
 Связано: [04-api.md](04-api.md) · планы этапов [../plans/](../plans/)
