@@ -81,8 +81,12 @@ func securityDB(t *testing.T) (*API, *pgx.Conn) {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	return New(s, Config{PublicBaseURL: "https://class.example", LiveKitURL: "wss://rooms.example",
-		LiveKitAPIKey: "fixture-key", LiveKitAPISecret: "fixture-signing-key-at-least-32-bytes"}), conn
+	a, err := New(s, Config{PublicBaseURL: "https://class.example", LiveKitURL: "wss://rooms.example",
+		LiveKitAPIKey: "fixture-key", LiveKitAPISecret: "fixture-signing-key-at-least-32-bytes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, conn
 }
 
 func securityUser(t *testing.T, a *API, conn *pgx.Conn, role, name string) (int64, *http.Cookie) {
