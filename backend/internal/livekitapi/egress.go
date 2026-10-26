@@ -33,8 +33,12 @@ type Client struct {
 // API он же, но по https.
 func New(url, apiKey, apiSecret string) *Client {
 	base := strings.TrimSuffix(url, "/")
-	base = strings.Replace(base, "wss://", "https://", 1)
-	base = strings.Replace(base, "ws://", "http://", 1)
+	// Меняем только схему в начале: «ws://» в середине адреса не трогаем
+	if rest, ok := strings.CutPrefix(base, "wss://"); ok {
+		base = "https://" + rest
+	} else if rest, ok := strings.CutPrefix(base, "ws://"); ok {
+		base = "http://" + rest
+	}
 	return &Client{
 		baseURL:   base,
 		apiKey:    apiKey,

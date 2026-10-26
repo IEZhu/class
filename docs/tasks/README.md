@@ -46,7 +46,7 @@ S1-5 (Egress), S1-2 (worker), S2-1…S2-3 (ASR). S1-1 (календарь) не 
 | ID | Задача | Зависит от | Ключевой выход | Статус |
 |---|---|---|---|---|
 | S1-1 | Google OAuth2 (Production), шифрованный refresh token | S0-3 | подключение календаря | ☐ |
-| S1-2 | Worker + очередь `jobs` (SKIP LOCKED), джоба-плейсхолдер `recording_ready`; calendar_sync — долг D-7 (ADR-012) | S0-2 | worker, очередь с ретраями | ☑ |
+| S1-2 | Worker + очередь `jobs` (SKIP LOCKED), джоба-плейсхолдер `recording_ready`; calendar_sync — долг D-7 (ADR-013) | S0-2 | worker, очередь с ретраями | ☑ |
 | S1-3 | S3: bucket, presigned GET, `GET /media/{lesson_id}/url`, lifecycle | S0-4 | S3-механика | ☑ |
 | S1-4 | LiveKit Cloud: room-token, embed комнаты в live | S0-5 | видеокомната | ☑ |
 | S1-5 | Egress → S3, webhook `egress_ended` (подпись), точка вставки ASR | S1-3, S1-4 | recording_s3_key | ☑ |
@@ -116,5 +116,5 @@ S1-5 (Egress), S1-2 (worker), S2-1…S2-3 (ASR). S1-1 (календарь) не 
 | D-3 | srs_cards при назначении слов (хук no-op) | S3-8 | S4-1 | ☐ |
 | D-4 | Файлы материалов в S3 (пока только body_md) | S0-4 | S1-6+ | ☐ |
 | D-5 | Удаление/архивация учёток (пока только заведение и правка) | S1-8 | — | ☐ |
-| D-6 | Токен R2 истекает 2027-08-03 — запись сломается молча | S1-3 | — | ☐ |
-| D-7 | Джоба calendar_sync (события уроков в Google Calendar) — нет OAuth-токенов (ADR-012) | S1-2 | S1-1 | ☐ |
+| D-6 | Токен R2 истекает 2027-08-03 — запись сломается молча; ротирует владелец стенда до 2027-07-20 по [процедуре](../architecture/05-storage-s3.md#ротация-токена-r2-долг-d-6) | S1-3 | ротация токена | ☐ |
+| D-7 | Джоба calendar_sync (события уроков в Google Calendar) — нет OAuth-токенов (ADR-013) | S1-2 | S1-1 | ☐ |

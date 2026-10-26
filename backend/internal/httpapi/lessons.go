@@ -32,7 +32,8 @@ type lessonDetailResponse struct {
 }
 
 type lessonTimesRequest struct {
-	// GroupID пуст → открытое событие, тогда обязателен Title (ADR-010)
+	// GroupID пуст → открытое событие, тогда обязателен Title; у урока
+	// с группой Title пуст — подпись даёт группа (ADR-010)
 	GroupID  *int64    `json:"group_id"`
 	Title    string    `json:"title"`
 	StartsAt time.Time `json:"starts_at"`
@@ -61,6 +62,11 @@ func (a *API) handleCreateLesson(w http.ResponseWriter, r *http.Request) {
 	case req.GroupID == nil && title == "":
 		// Иначе событие нечем подписать: имени группы у него нет
 		writeError(w, http.StatusBadRequest, "bad_request", "для события без группы нужен title")
+		return
+	case req.GroupID != nil && title != "":
+		// Урок подписывается именем группы; title перебил бы его (ADR-010).
+		// Молча не выбрасываем: клиент, приславший название, ждёт его увидеть.
+		writeError(w, http.StatusBadRequest, "bad_request", "у урока с группой нет title: подпись берётся из группы")
 		return
 	}
 	u := userFrom(r.Context())

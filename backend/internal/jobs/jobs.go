@@ -1,4 +1,4 @@
-// Package jobs — очередь фоновых задач в Postgres (ADR-003, ADR-012):
+// Package jobs — очередь фоновых задач в Postgres (ADR-003, ADR-013):
 // таблица jobs, захват через SELECT … FOR UPDATE SKIP LOCKED, ретраи
 // с экспоненциальным backoff, «мёртвое» состояние после исчерпания попыток
 // и подбор джоб, брошенных упавшим worker'ом.

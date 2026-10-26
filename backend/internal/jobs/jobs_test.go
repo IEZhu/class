@@ -144,7 +144,7 @@ func row(t *testing.T, pool *pgxpool.Pool, id int64) jobRow {
 	return j
 }
 
-// Модель данных (03-data-model.md) плюс failed_at и created_at (ADR-012);
+// Модель данных (03-data-model.md) плюс failed_at и created_at (ADR-013);
 // откат миграции убирает таблицу, повторный накат возвращает.
 func TestMigrationMatchesDataModelAndReverts(t *testing.T) {
 	pool := testDB(t)

@@ -69,8 +69,9 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       <p>
         {dateFmt.format(new Date(lesson.starts_at))} (UTC) · преподаватель: {lesson.teacher_name}
       </p>
-      {/* Гостевой ссылкой распоряжается организатор события */}
-      {(me.role === "admin" || me.id === lesson.teacher_id) && phase !== "done" && (
+      {/* Гостевой ссылкой распоряжается организатор, и только у открытого
+          события: в урок с группой посторонних не зовут (ADR-010) */}
+      {lesson.group_id === null && (me.role === "admin" || me.id === lesson.teacher_id) && phase !== "done" && (
         <GuestLink lessonId={lesson.id} />
       )}
 

@@ -82,7 +82,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # S1-2: фоновые джобы из таблицы jobs (ADR-003, ADR-012). Портов нет:
+  # S1-2: фоновые джобы из таблицы jobs (ADR-003, ADR-013). Портов нет:
   # worker только ходит в postgres. Healthcheck не заведён — HTTP у worker'а
   # нет, а упавший процесс поднимет restart.
   worker:

@@ -17,7 +17,7 @@ func Register(r *jobs.Runner, st *store.Store) {
 	r.Handle(store.JobRecordingReady, recordingReady(st))
 }
 
-// recordingReady — плейсхолдер точки вставки ASR (S1-5, ADR-012): пока
+// recordingReady — плейсхолдер точки вставки ASR (S1-5, ADR-013): пока
 // транскрибации нет, урок с принятой записью сразу done. S2-1 заменит его
 // джобой asr_submit.
 func recordingReady(st *store.Store) jobs.Handler {

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -75,5 +76,39 @@ func TestPresignGetShape(t *testing.T) {
 	// Секрет участвует только в подписи и не должен попасть в ссылку
 	if strings.Contains(raw, "secret-value") {
 		t.Error("секрет утёк в presigned-ссылку")
+	}
+}
+
+// Регион по умолчанию auto годится только для R2. Без endpoint это AWS,
+// и пустой регион должен ронять старт api, а не выдавать нерабочие ссылки.
+func TestNewRegion(t *testing.T) {
+	keys := Config{Bucket: "b", AccessKey: "k", SecretKey: "s"}
+
+	if _, err := New(keys); !errors.Is(err, ErrNoRegion) {
+		t.Errorf("AWS без региона: err = %v, хотели ErrNoRegion", err)
+	}
+
+	aws := keys
+	aws.Region = "eu-central-1"
+	if c, err := New(aws); err != nil || c == nil {
+		t.Errorf("AWS с регионом: (%v, %v), хотели клиент", c, err)
+	}
+
+	r2 := keys
+	r2.Endpoint = "https://acc.r2.cloudflarestorage.com"
+	c, err := New(r2)
+	if err != nil || c == nil {
+		t.Fatalf("R2 без региона: (%v, %v), хотели клиент", c, err)
+	}
+	raw, err := c.PresignGet(context.Background(), "k", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGet: %v", err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("ссылка не парсится: %v", err)
+	}
+	if cred := u.Query().Get("X-Amz-Credential"); !strings.Contains(cred, "/auto/s3/") {
+		t.Errorf("R2 подписан не регионом auto: %q", cred)
 	}
 }

@@ -13,7 +13,7 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   `cmd/worker/main.go` (background jobs), `internal/httpapi/` (routes, auth, middleware, groups,
   lessons, invites, rooms, users, LiveKit webhook), `internal/store/` (Postgres via pgx),
   `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
-  retries, ADR-012), `internal/worker/` (job handlers by kind), `migrations/` (golang-migrate
+  retries, ADR-013), `internal/worker/` (job handlers by kind), `migrations/` (golang-migrate
   `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.

@@ -40,7 +40,7 @@ stateDiagram-v2
 6. Урок кончился → webhook `egress_ended` → `status=processing` → worker:
    presigned GET на запись → AssemblyAI (`speaker_labels: true`,
    `language_code: en`, webhook). *(этапы 1–2; на этапе 1, пока ASR нет,
-   джоба-плейсхолдер `recording_ready` сразу ставит `done`, ADR-012)*
+   джоба-плейсхолдер `recording_ready` сразу ставит `done`, ADR-013)*
 7. Webhook AssemblyAI → сохраняем `utterances` → рендерим WebVTT (`<v A>…`)
    в S3 → `status=done`. *(этап 2)*
 8. **Post-lesson flow (выбор слов).** Преподавателю — чеклист кандидатов:
