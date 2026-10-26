@@ -11,7 +11,7 @@
 
 | Метод и путь | Назначение | Роль | Этап |
 |---|---|---|---|
-| `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006) | все | 0 |
+| `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006); учётка в архиве — 403 `account_deactivated` после верного пароля (ADR-024) | все | 0 |
 | `POST /auth/logout` | выход (удаление сессии) | все | 0 |
 | `GET /auth/me` | текущий пользователь (для web-каркаса S0-5) | все | 0 |
 | `POST /groups` | создать группу (name, level) | admin | 0 |
@@ -22,8 +22,11 @@
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
 | `PATCH /lessons/{id}` | перенос (starts_at/ends_at), только `scheduled` | teacher урока | 0 |
 | `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
-| `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
-| `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
+| `POST /lessons/{id}/materials` | прикрепить материал; с `file: {name, content_type, size}` — заготовка файла и presigned PUT на 10 мин (тип по белому списку, до 50 MiB, ключ выбирает api, ADR-024) | teacher | 0 |
+| `POST /lessons/{id}/homework` | прикрепить домашку; `file` — как у материала | teacher | 0 |
+| `POST /materials/{id}/confirm` | подтвердить загрузку файла: объекта нет — 409, размер или тип не совпали — объект и материал удаляются, 422; повтор — 200 | teacher урока | 1 |
+| `GET /materials/{id}/url` | presigned GET на файл материала, TTL 30 мин; не подтверждён — 409, файла нет — 404 | участники | 1 |
+| `DELETE /materials/{id}` | удалить материал вместе с его файлом в хранилище | teacher урока | 1 |
 | `GET /join/{token}` | предпросмотр события по гостевой ссылке; 404 — нет/отозвана/перевыпущена, 410 — событие прошло | без входа | 1 |
 | `POST /join/{token}` | войти гостем: имя → участник события + сессия; 400 — имя пустое или длиннее 60, 404/410 — как у `GET` | без входа | 1 |
 | `POST /lessons/{id}/guest-link` | выпустить/перевыпустить гостевую ссылку; только у события без группы (409 у урока с группой) | admin, teacher события | 1 |
@@ -35,10 +38,12 @@
 | `DELETE /invites/{id}` | отозвать приглашение | admin, teacher | 1 |
 | `PATCH /auth/me` | своё имя (email и роль себе не меняют) | все | 1 |
 | `POST /auth/password` | смена своего пароля (current+new); прочие сессии гасятся | все | 1 |
-| `GET /users` | люди: admin — все, teacher — из своих групп | admin, teacher | 1 |
+| `GET /users` | люди: admin — все, teacher — из своих групп; без архива, `?archived=1` — только архив (ADR-024) | admin, teacher | 1 |
 | `POST /users` | завести учётку со стартовым паролем; teacher — только student | admin, teacher | 1 |
 | `PATCH /users/{id}` | имя; роль — только admin | admin, teacher | 1 |
 | `POST /users/{id}/password` | сброс пароля, все сессии владельца гасятся | admin, teacher | 1 |
+| `POST /users/{id}/deactivate` | в архив вместо удаления: вход закрыт, все сессии гасятся той же транзакцией; себя — 403 (ADR-024) | admin, teacher (только студенты своих групп) | 1 |
+| `POST /users/{id}/reactivate` | вернуть из архива, вход по прежнему паролю | admin, teacher (только студенты своих групп) | 1 |
 | `DELETE /groups/{id}/members/{user_id}` | убрать из группы (идемпотентно) | admin | 1 |
 | `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
