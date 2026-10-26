@@ -16,6 +16,7 @@ ALTER TABLE materials
     DROP COLUMN file_name,
     DROP COLUMN file_content_type,
     DROP COLUMN file_size,
-    DROP COLUMN file_uploaded_at;
+    DROP COLUMN file_uploaded_at,
+    DROP COLUMN file_etag;
 
 COMMIT;

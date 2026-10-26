@@ -160,8 +160,8 @@ func TestUserArchiveRevokesSessionsAndLogin(t *testing.T) {
 	expectStatus(t, securityRequest(h, "GET", "/auth/me", "", stranger), http.StatusOK)
 }
 
-// Миграция 0013 обратима: down поверх данных (архивная учётка, материал
-// с файлом) проходит, а повторный up снова применяется.
+// Миграция 0013 обратима: down поверх данных (архивная учётка,
+// подтверждённый материал с файлом) проходит, а повторный up снова применяется.
 func TestMigration0013Reversible(t *testing.T) {
 	a, conn := securityDB(t)
 	ctx := context.Background()
@@ -178,6 +178,9 @@ func TestMigration0013Reversible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := a.store.ConfirmMaterialFile(ctx, m.ID, `"etag"`); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.store.DeactivateUser(ctx, studentID); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +190,8 @@ func TestMigration0013Reversible(t *testing.T) {
 		if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
 			WHERE table_schema = current_schema()
 			  AND (table_name, column_name) IN (('users','deactivated_at'), ('materials','file_name'),
-			      ('materials','file_content_type'), ('materials','file_size'), ('materials','file_uploaded_at'))`).Scan(&n); err != nil {
+			      ('materials','file_content_type'), ('materials','file_size'), ('materials','file_uploaded_at'),
+			      ('materials','file_etag'))`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
@@ -202,7 +206,7 @@ func TestMigration0013Reversible(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
-	if n := columns(); n != 5 {
+	if n := columns(); n != 6 {
 		t.Fatalf("после up колонок 0013: %d", n)
 	}
 	apply("0013_material_files_archive.down.sql")
@@ -216,7 +220,7 @@ func TestMigration0013Reversible(t *testing.T) {
 		t.Fatalf("материал после down: %q %v (%v)", title, key, err)
 	}
 	apply("0013_material_files_archive.up.sql")
-	if n := columns(); n != 5 {
+	if n := columns(); n != 6 {
 		t.Fatalf("после повторного up колонок 0013: %d", n)
 	}
 }

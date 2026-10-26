@@ -12,14 +12,23 @@ ALTER TABLE materials
     ADD COLUMN file_size         bigint,
     -- Загрузка подтверждена: объект найден и совпал по размеру и типу.
     -- До этого файл видит только преподаватель урока.
-    ADD COLUMN file_uploaded_at  timestamptz;
+    ADD COLUMN file_uploaded_at  timestamptz,
+    -- ETag объекта на момент подтверждения: перед каждой ссылкой на
+    -- скачивание api сверяет с ним объект, подменённый в обход api
+    ADD COLUMN file_etag         text;
 
--- Метаданные файла — только целиком и только вместе с ключом
+-- Метаданные файла — только целиком и только вместе с ключом. IS NOT NULL
+-- обязателен: сравнение NULL с '' даёт NULL, а CHECK с NULL проходит
 ALTER TABLE materials ADD CONSTRAINT materials_file_complete CHECK (
     (s3_key IS NULL AND file_name IS NULL AND file_content_type IS NULL
-        AND file_size IS NULL AND file_uploaded_at IS NULL)
-    OR (s3_key IS NOT NULL AND file_name <> '' AND file_content_type <> ''
-        AND file_size > 0));
+        AND file_size IS NULL AND file_uploaded_at IS NULL AND file_etag IS NULL)
+    OR (s3_key IS NOT NULL
+        AND file_name IS NOT NULL AND file_name <> ''
+        AND file_content_type IS NOT NULL AND file_content_type <> ''
+        AND file_size IS NOT NULL AND file_size > 0
+        -- подтверждение и ETag ставятся вместе
+        AND (file_uploaded_at IS NULL) = (file_etag IS NULL)
+        AND (file_etag IS NULL OR file_etag <> '')));
 
 -- Раскладка 05-storage-s3.md: файл урока лежит под его префиксом, и ключ
 -- чужого урока (или записи) в материал не попадёт даже ошибкой api

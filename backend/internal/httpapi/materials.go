@@ -5,6 +5,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,10 @@ var materialFileTypes = map[string]string{
 	"audio/ogg":   "ogg",
 	"video/mp4":   "mp4",
 }
+
+// extensionAliases — другие расширения тех же типов: «фото.jpeg» остаётся
+// как есть, а не превращается в «фото.jpg».
+var extensionAliases = map[string]string{"jpeg": "jpg"}
 
 type materialResponse struct {
 	ID        int64     `json:"id"`
@@ -194,42 +199,67 @@ func (a *API) handleCreateMaterial(kind string) http.HandlerFunc {
 // validFile проверяет заявку на файл и возвращает его метаданные с ключом
 // ещё не выбранным; nil и текст ошибки — если заявка не проходит.
 func validFile(req fileRequest) (*store.MaterialFile, string) {
-	name, ok := cleanFileName(req.Name)
-	if !ok {
-		return nil, "file.name — имя файла до " + strconv.Itoa(maxFileNameRunes) + " символов"
+	name, msg := cleanFileName(req.Name)
+	if msg != "" {
+		return nil, msg
 	}
 	contentType, _, err := mime.ParseMediaType(req.ContentType)
-	if _, allowed := materialFileTypes[contentType]; err != nil || !allowed {
+	ext, allowed := materialFileTypes[contentType]
+	if err != nil || !allowed {
 		return nil, "тип файла не поддерживается: PDF, DOCX, PPTX, TXT, PNG, JPEG, WebP, MP3, M4A, OGG, MP4"
 	}
 	if req.Size <= 0 || req.Size > maxMaterialFileBytes {
 		return nil, "размер файла — от 1 байта до " + strconv.Itoa(maxMaterialFileBytes>>20) + " МБ"
 	}
+	name = downloadName(name, ext)
+	if utf8.RuneCountInString(name) > maxFileNameRunes {
+		return nil, "file.name — имя файла до " + strconv.Itoa(maxFileNameRunes) + " символов"
+	}
 	return &store.MaterialFile{Name: name, ContentType: contentType, Size: req.Size}, ""
 }
 
 // cleanFileName — имя файла от браузера без пути: в ключ оно не попадает,
-// но показывается людям и уходит в Content-Disposition.
-func cleanFileName(raw string) (string, bool) {
+// но показывается людям и уходит в Content-Disposition. Пустая строка
+// вторым значением — имя годится, иначе это текст ошибки.
+func cleanFileName(raw string) (string, string) {
 	name := strings.TrimSpace(raw)
 	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
 		name = strings.TrimSpace(name[i+1:])
 	}
-	if name == "" || name == "." || name == ".." || !utf8.ValidString(name) ||
-		utf8.RuneCountInString(name) > maxFileNameRunes {
-		return "", false
+	if name == "" || name == "." || name == ".." {
+		return "", "file.name — нужно имя файла"
+	}
+	if !utf8.ValidString(name) {
+		return "", "file.name — имя файла не в UTF-8"
 	}
 	for _, r := range name {
-		if unicode.IsControl(r) {
-			return "", false
+		// Cf — невидимые символы форматирования. Среди них U+202E: на
+		// экране «homework\u202efdp.exe» читается как «homeworkexe.pdf»
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return "", "file.name — в имени файла управляющие или невидимые символы"
 		}
 	}
-	return name, true
+	return name, ""
 }
 
-// presignUpload выбирает ключ под materials/{lesson_id}/ и подписывает
-// загрузку ровно заявленного файла: тип, длина и имя для скачивания входят
-// в подпись. Ключ записывается в file.
+// downloadName — имя, под которым файл сохранят участники: расширение
+// задаёт заявленный тип, а не имя от клиента. Иначе заявка
+// «application/pdf» с именем setup.exe сохранилась бы у студента как
+// программа. Совпадающее расширение (и jpeg у JPEG) остаётся как есть,
+// чужое заменяется, отсутствующее дописывается.
+func downloadName(name, ext string) string {
+	cur := path.Ext(name)
+	if e := strings.ToLower(strings.TrimPrefix(cur, ".")); e == ext || extensionAliases[e] == ext {
+		return name
+	}
+	return strings.TrimSuffix(name, cur) + "." + ext
+}
+
+// presignUpload выбирает постоянный ключ под materials/{lesson_id}/
+// и подписывает загрузку ровно заявленного файла на его копию под
+// materials-pending/: тип, длина и имя для скачивания входят в подпись.
+// На постоянный ключ файл переносит только confirm, поэтому ссылка на
+// загрузку подтверждённый файл не перезапишет. Ключ записывается в file.
 func (a *API) presignUpload(ctx context.Context, lessonID int64, file *store.MaterialFile) (*uploadResponse, error) {
 	key, err := storage.NewMaterialKey(lessonID, materialFileTypes[file.ContentType])
 	if err != nil {
@@ -241,7 +271,7 @@ func (a *API) presignUpload(ctx context.Context, lessonID int64, file *store.Mat
 	if disposition == "" {
 		return nil, errors.New("content-disposition для имени файла не собрался")
 	}
-	put, err := a.storage.PresignPut(ctx, key, file.ContentType, disposition, file.Size, uploadURLTTL)
+	put, err := a.storage.PresignPut(ctx, storage.PendingMaterialKey(key), file.ContentType, disposition, file.Size, uploadURLTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +311,9 @@ func (a *API) materialForTeacher(w http.ResponseWriter, r *http.Request) (*store
 
 // handleConfirmMaterialFile — браузер сообщил, что загрузил файл. api
 // проверяет объект сам: его нет — 409, загрузка не та (размер, тип) —
-// объект и материал удаляются, 422. Повтор после успеха — снова 200.
+// объект и материал удаляются, 422. Годный объект копируется внутри
+// бакета на постоянный ключ, ETag копии запоминается. Повтор после
+// успеха — снова 200.
 func (a *API) handleConfirmMaterialFile(w http.ResponseWriter, r *http.Request) {
 	if a.storage == nil {
 		writeError(w, http.StatusServiceUnavailable, "storage_not_configured", "хранилище не настроено")
@@ -299,32 +331,46 @@ func (a *API) handleConfirmMaterialFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, toMaterialResponse(*m))
 		return
 	}
-	info, err := a.storage.Stat(r.Context(), m.File.S3Key)
+	pending := storage.PendingMaterialKey(m.File.S3Key)
+	info, err := a.storage.Stat(r.Context(), pending)
 	if errors.Is(err, storage.ErrObjectNotFound) {
 		writeError(w, http.StatusConflict, "upload_missing", "файл ещё не загружен в хранилище")
 		return
 	}
 	if err != nil {
+		internalError(w, "stat material upload", err)
+		return
+	}
+	if !matchesDeclared(info, m.File) {
+		a.rejectUpload(w, r, m)
+		return
+	}
+	// Повтор после сбоя на любом шаге ниже безопасен: загрузка лежит,
+	// пока строка не подтверждена, и копируется заново
+	if err := a.storage.Copy(r.Context(), pending, m.File.S3Key); err != nil {
+		internalError(w, "promote material file", err)
+		return
+	}
+	final, err := a.storage.Stat(r.Context(), m.File.S3Key)
+	if err != nil {
 		internalError(w, "stat material file", err)
 		return
 	}
-	// Тип сверяется без параметров: charset к text/plain хранилище вправе
-	// дописать, подменить сам тип — нет
-	storedType, _, _ := mime.ParseMediaType(info.ContentType)
-	if info.Size != m.File.Size || info.Size > maxMaterialFileBytes || storedType != m.File.ContentType {
-		// Не тот объект, что заявлен: лежать ему незачем, а материал без
-		// годного файла — пустая строка в списке. Заливать заново.
-		if err := a.removeMaterial(r.Context(), m); err != nil {
-			internalError(w, "drop rejected upload", err)
-			return
-		}
-		writeError(w, http.StatusUnprocessableEntity, "upload_rejected",
-			"загруженный файл не совпал с заявленным — загрузите его заново")
+	if !matchesDeclared(final, m.File) {
+		a.rejectUpload(w, r, m)
 		return
 	}
-	confirmed, err := a.store.ConfirmMaterialFile(r.Context(), m.ID)
+	if final.ETag == "" {
+		internalError(w, "stat material file", errors.New("хранилище не вернуло ETag "+m.File.S3Key))
+		return
+	}
+	confirmed, err := a.store.ConfirmMaterialFile(r.Context(), m.ID, final.ETag)
 	if errors.Is(err, store.ErrNotFound) {
-		// Материал удалили, пока мы сверяли объект
+		// Материал удалили, пока мы сверяли объект: копия на постоянном
+		// ключе могла появиться уже после его уборки — её уберёт worker
+		if err := a.store.QueueMaterialFilesDelete(r.Context(), []string{m.File.S3Key}); err != nil {
+			logf("копия файла удалённого материала %s осталась в хранилище: %v", m.File.S3Key, err)
+		}
 		writeError(w, http.StatusNotFound, "not_found", "материал не найден")
 		return
 	}
@@ -332,7 +378,34 @@ func (a *API) handleConfirmMaterialFile(w http.ResponseWriter, r *http.Request) 
 		internalError(w, "confirm material file", err)
 		return
 	}
+	// Загрузку не удалось убрать — её сотрёт lifecycle бакета через сутки
+	if err := a.storage.Delete(r.Context(), pending); err != nil {
+		logf("загрузка %s осталась до lifecycle: %v", pending, err)
+	}
 	writeJSON(w, http.StatusOK, toMaterialResponse(*confirmed))
+}
+
+// matchesDeclared — объект тот, что заявлен: размер и тип. Тип сверяется
+// без параметров: charset к text/plain хранилище вправе дописать,
+// подменить сам тип — нет.
+func matchesDeclared(info storage.ObjectInfo, f *store.MaterialFile) bool {
+	storedType, _, _ := mime.ParseMediaType(info.ContentType)
+	return info.Size == f.Size && info.Size <= maxMaterialFileBytes && storedType == f.ContentType
+}
+
+// rejectUpload — загружен не тот объект, что заявлен: лежать ему незачем,
+// а материал без годного файла — пустая строка в списке. Заливать заново.
+func (a *API) rejectUpload(w http.ResponseWriter, r *http.Request, m *store.Material) {
+	switch err := a.removeMaterial(r.Context(), m); {
+	case errors.Is(err, store.ErrNotFound):
+		// Материал удалили параллельно — отвергать уже нечего
+		writeError(w, http.StatusNotFound, "not_found", "материал не найден")
+	case err != nil:
+		internalError(w, "drop rejected upload", err)
+	default:
+		writeError(w, http.StatusUnprocessableEntity, "upload_rejected",
+			"загруженный файл не совпал с заявленным — загрузите его заново")
+	}
 }
 
 // handleMaterialFileURL — presigned GET на файл материала. Граница та же,
@@ -375,6 +448,21 @@ func (a *API) handleMaterialFileURL(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "file_not_ready", "файл ещё загружается")
 		return
 	}
+	// Ключом хранилища владеет и LiveKit Egress (ADR-014): объект, который
+	// перезаписали в обход api после подтверждения, участникам не отдаётся
+	info, err := a.storage.Stat(r.Context(), m.File.S3Key)
+	switch {
+	case errors.Is(err, storage.ErrObjectNotFound):
+		writeError(w, http.StatusConflict, "file_missing", "файла нет в хранилище — его нужно загрузить заново")
+		return
+	case err != nil:
+		internalError(w, "stat material file", err)
+		return
+	case info.ETag != m.File.ETag || !matchesDeclared(info, m.File):
+		logf("файл материала %d изменён в хранилище в обход api: %s", m.ID, m.File.S3Key)
+		writeError(w, http.StatusConflict, "file_changed", "файл в хранилище изменён после загрузки — его нужно загрузить заново")
+		return
+	}
 	url, err := a.storage.PresignGet(r.Context(), m.File.S3Key, storage.PresignTTL)
 	if err != nil {
 		internalError(w, "presign", err)
@@ -403,30 +491,21 @@ func (a *API) handleDeleteMaterial(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// removeMaterial — сначала объект, потом строка: сорвалось удаление
-// строки — повтор снова удалит (уже отсутствующий) объект и дойдёт до неё;
-// в обратном порядке сбой оставил бы в бакете файл, на который никто
-// не ссылается.
+// removeMaterial — сначала объекты файла, потом строка: сорвалось
+// удаление строки — повтор снова удалит (уже отсутствующие) объекты
+// и дойдёт до неё. Хранилище не ответило — строка всё равно удаляется,
+// а ключ той же транзакцией уходит в джобу material_files_delete: её
+// worker повторяет, пока объекты не исчезнут (ADR-024).
 func (a *API) removeMaterial(ctx context.Context, m *store.Material) error {
+	var left []string
 	if m.File != nil {
-		if err := a.storage.Delete(ctx, m.File.S3Key); err != nil {
-			return err
+		for _, key := range storage.MaterialFileKeys(m.File.S3Key) {
+			if err := a.storage.Delete(ctx, key); err != nil {
+				logf("файл материала %d удалит worker: %v", m.ID, err)
+				left = []string{m.File.S3Key}
+				break
+			}
 		}
 	}
-	return a.store.DeleteMaterial(ctx, m.ID)
-}
-
-// deleteFiles — уборка объектов после отмены урока (каскад удалил строки
-// материалов). Сбой не отменяет отмену: объект остаётся сиротой под
-// materials/{lesson_id}/, и об этом остаётся строка в журнале.
-func (a *API) deleteFiles(ctx context.Context, keys []string) {
-	for _, key := range keys {
-		if a.storage == nil {
-			logf("файл %s отменённого урока не удалён: хранилище не настроено", key)
-			continue
-		}
-		if err := a.storage.Delete(ctx, key); err != nil {
-			logf("файл %s отменённого урока не удалён: %v", key, err)
-		}
-	}
+	return a.store.DeleteMaterial(ctx, m.ID, left)
 }

@@ -225,31 +225,35 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 	return l, tx.Commit(ctx)
 }
 
-// CancelLesson удаляет запланированный урок (материалы и участники — каскадом).
-// Отдельного статуса cancelled в статус-машине нет (03-data-model.md).
-// Возвращает ключи файлов удалённых материалов: объекты в хранилище
-// каскад не достаёт, их удаляет вызывающий (ADR-024).
-func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) ([]string, error) {
+// CancelLesson удаляет запланированный урок. Отдельного статуса cancelled
+// в статус-машине нет (03-data-model.md). Материалы с файлами удаляются
+// явным DELETE … RETURNING s3_key: их объекты в той же транзакции уходят
+// в джобу JobMaterialFilesDelete (ADR-024) — каскад до бакета не достаёт.
+// Остальные материалы и участники удаляются каскадом.
+func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := lessonForUpdate(ctx, tx, lessonID, teacherID); err != nil {
-		return nil, err
+		return err
 	}
 	rows, err := tx.Query(ctx,
 		`DELETE FROM materials WHERE lesson_id = $1 AND s3_key IS NOT NULL RETURNING s3_key`, lessonID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if err := queueMaterialFilesDelete(ctx, tx, keys); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM lessons WHERE id = $1`, lessonID); err != nil {
-		return nil, err
+		return err
 	}
-	return keys, tx.Commit(ctx)
+	return tx.Commit(ctx)
 }

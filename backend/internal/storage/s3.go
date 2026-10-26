@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -99,10 +100,13 @@ func (c *Client) PresignGet(ctx context.Context, key string, ttl time.Duration) 
 type ObjectInfo struct {
 	Size        int64
 	ContentType string
+	// ETag меняется с каждой перезаписью объекта: по нему api видит
+	// подмену подтверждённого файла (ADR-024)
+	ETag string
 }
 
-// Stat — размер и тип объекта; ErrObjectNotFound, если его нет. Им api
-// сверяет загруженный браузером файл с заявленным (ADR-024).
+// Stat — размер, тип и ETag объекта; ErrObjectNotFound, если его нет. Им
+// api сверяет загруженный браузером файл с заявленным (ADR-024).
 func (c *Client) Stat(ctx context.Context, key string) (ObjectInfo, error) {
 	if c == nil {
 		return ObjectInfo{}, ErrNotConfigured
@@ -127,7 +131,28 @@ func (c *Client) Stat(ctx context.Context, key string) (ObjectInfo, error) {
 		}
 		return ObjectInfo{}, fmt.Errorf("head %s: %w", key, err)
 	}
-	return ObjectInfo{Size: aws.ToInt64(out.ContentLength), ContentType: aws.ToString(out.ContentType)}, nil
+	return ObjectInfo{
+		Size: aws.ToInt64(out.ContentLength), ContentType: aws.ToString(out.ContentType),
+		ETag: aws.ToString(out.ETag),
+	}, nil
+}
+
+// Copy — серверное копирование объекта внутри бакета: байты не идут через
+// VPS, тип и Content-Disposition копия берёт у источника. Так api переносит
+// подтверждённый файл материала из materials-pending/ на постоянный ключ.
+func (c *Client) Copy(ctx context.Context, src, dst string) error {
+	if c == nil {
+		return ErrNotConfigured
+	}
+	if _, err := c.s3client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket: aws.String(c.cfg.Bucket),
+		// Ключи выбирает api из [0-9a-z/.-], экранировать в них нечего
+		CopySource: aws.String(c.cfg.Bucket + "/" + src),
+		Key:        aws.String(dst),
+	}); err != nil {
+		return fmt.Errorf("copy %s → %s: %w", src, dst, err)
+	}
+	return nil
 }
 
 // PresignedPut — ссылка на загрузку и заголовки, которые браузер обязан
@@ -190,5 +215,24 @@ func NewMaterialKey(lessonID int64, ext string) (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return "materials/" + strconv.FormatInt(lessonID, 10) + "/" + hex.EncodeToString(b) + "." + ext, nil
+	return materialPrefix + strconv.FormatInt(lessonID, 10) + "/" + hex.EncodeToString(b) + "." + ext, nil
 }
+
+// PendingMaterialKey — куда браузер грузит файл материала до подтверждения:
+// materials-pending/{lesson_id}/<имя ключа>. Lifecycle бакета стирает этот
+// префикс через сутки (deploy/s3-bootstrap.sh), поэтому загрузка, которая
+// пришла после удаления материала или отмены урока, сиротой не останется.
+func PendingMaterialKey(key string) string {
+	return materialPendingPrefix + strings.TrimPrefix(key, materialPrefix)
+}
+
+// MaterialFileKeys — все объекты файла материала: загрузка под
+// materials-pending/ и постоянный ключ. Удаляя файл, удаляют оба.
+func MaterialFileKeys(key string) []string {
+	return []string{PendingMaterialKey(key), key}
+}
+
+const (
+	materialPrefix        = "materials/"
+	materialPendingPrefix = "materials-pending/"
+)
