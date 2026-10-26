@@ -362,3 +362,94 @@ api — без таблицы `egress_ended` откатывает транзак
 запросом `failed_at IS NOT NULL`; оживить — обнулить `failed_at` и
 `attempts`. Healthcheck у worker'а не заведён: HTTP у него нет, упавший
 процесс поднимает `restart`.
+
+## ADR-015 · 2026-10-26 · accepted — Транскрибация AssemblyAI: свой клиент, цепочка из трёх джоб
+
+**Контекст.** S2-1…S2-3 по плану: `asr_submit` вместо плейсхолдера
+`recording_ready`, вебхук `completed` → `utterances`, VTT → S3, урок
+`done`. Доки не задают ни клиента, ни решающего «ASR включён», ни того,
+кто забирает результат, ни статусов `transcripts`. По документации
+AssemblyAI v2 (сверено 2026-10-26): вебхук несёт только `transcript_id`
+и `status` (`completed` | `error`), результат забирается
+`GET /v2/transcript/{id}`; ответ 2xx ждут не дольше 10 с, на прочее —
+до 10 попыток раз в 10 с, а 4xx повторы прекращает; модель советуют
+задавать явно — умолчание зависит от тарифа.
+**Решение.**
+- Клиент свой (`internal/assemblyai`, `net/http`): Go-SDK у AssemblyAI нет,
+  а вызовов два — `POST /v2/transcript` и `GET /v2/transcript/{id}`.
+  Новых зависимостей нет.
+- Запрос: `audio_url` — presigned GET записи на **24 ч** (AssemblyAI
+  качает файл в начале обработки, сутки — запас на его очередь; ссылка
+  уходит только ему), `speech_models: ["universal-2"]` ($0.15/ч, как
+  в бюджете; `universal-3-5-pro` — $0.21/ч, смена — одна константа),
+  `language_code: en`, `punctuate` и `speaker_labels: true`,
+  `webhook_url` = `https://<DOMAIN>/api/webhooks/assemblyai` с секретом
+  в заголовке `X-Lingua-Webhook-Secret` (`webhook_auth_header_*`).
+  `speakers_expected` не задаём: снапшот участников не говорит, сколько
+  человек реально говорило, а неверное число вредит сильнее
+  автоопределения.
+- Решает worker: api по-прежнему ставит `recording_ready`, хендлер без
+  `ASSEMBLYAI_API_KEY` сразу ставит `done` (плейсхолдер ADR-013 остаётся),
+  с ключом — заводит строку `transcripts` и ставит `asr_submit` одной
+  транзакцией. Ключ API есть только у worker'а; api знает лишь секрет
+  вебхука (`ASSEMBLYAI_WEBHOOK_SECRET`, ≥ 32 символов, сверка за
+  постоянное время). Ключ без секрета, хранилища или `DOMAIN` — ошибка
+  старта worker'а, как неполный конфиг хранилища у api.
+- Вебхук только двигает статус и ставит джобу (правило 04-api.md, лимит
+  10 с): результат забирает отдельная джоба `asr_result`. Цепочка:
+  `recording_ready` → `asr_submit` → вебхук → `asr_result` →
+  `vtt_render` → `done`. `vtt_render` отдельна, чтобы S2-4 перерендерил
+  VTT после правки реплик той же джобой.
+- Статусы `transcripts.status`: `queued` → `submitted` (есть
+  `external_id`) → `fetching` (вебхук принят) → `completed` (реплики
+  в базе; VTT — `vtt_s3_key`) | `error`. Каждый шаг — условный `UPDATE`
+  по ожидаемому статусу в одной транзакции с постановкой следующей джобы:
+  повторная доставка вебхука и повтор любой джобы ничего не задваивают.
+  Схема держит то же сама: транскрипт один на урок (`UNIQUE lesson_id`),
+  реплика одна на `(transcript_id, idx)` (PK), `external_id` уникален
+  у провайдера. `lessons.transcript_id` получает FK и заполняется вместе
+  с транскриптом — зеркало `transcripts.lesson_id` из модели данных.
+- Неизвестный `transcript_id` → 404 (AssemblyAI не повторяет), неверный
+  секрет → 401, сбой базы → 500 (повторит).
+- VTT: свой рендер (`internal/webvtt`), cue на реплику, `<v A>`, тайминг
+  `HH:MM:SS.mmm`, экранирование `& < >`, переводы строк — пробел;
+  `text/vtt; charset=utf-8` в `transcripts/{lesson_id}.vtt`
+  (`storage.Client.Put`). Чтение — `GET /lessons/{id}/transcript`
+  (участники и teacher урока, как `GET /lessons/{id}`): реплики
+  и presigned VTT на 30 мин; причину сбоя наружу не отдаём.
+**Последствия.** Без ключа стенд ведёт себя как в S1-5. Транскрипт
+застрянет в `submitted`, если вебхук потерян (api лежал дольше ~100 с
+повторов AssemblyAI или вебхук обогнал запись `external_id` и получил
+404): периодической сверки нет — долг D-9. Падение worker'а между отправкой
+и записью `external_id` отправит запись повторно — вторая оплата и
+вебхук на неизвестный id (404); на hobby-масштабе это дешевле сверки.
+
+## ADR-016 · 2026-10-26 · accepted — Сбой транскрибации: урок всё равно done
+
+**Контекст.** Урок без транскрипта ценнее урока, навсегда застрявшего
+в `processing`: страница показывает плеер только в `done`. Очередь
+(ADR-013) после исчерпания попыток оставляет джобу мёртвой, и урок
+никто не выводит из `processing`.
+**Решение.** Транскрибация сдаётся, но урок доходит до `done`:
+- ошибка шага (`asr_submit`, `asr_result`, `vtt_render`: сеть, 5xx/4xx
+  AssemblyAI, отказ хранилища) — обычный повтор очереди: 8 попыток
+  с backoff 1 мин → 1 ч, ≈ 2 ч. Очередь сообщает хендлеру последнюю
+  попытку (`jobs.Job.LastAttempt`, единственное изменение
+  `internal/jobs`); на ней хендлер вместо ошибки пишет итог
+  (`store.FailTranscript`) и завершает джобу;
+- `status=error` у AssemblyAI — итог сразу, без повторов: та же запись
+  упадёт так же. Повторная отправка — вручную;
+- итог: `transcripts.status=error`, причина в `transcripts.error`, урок
+  `done`. Если реплики уже сохранены (сорвался только VTT), статус
+  остаётся `completed`, реплики видны вьюеру, VTT нет, причина в `error`;
+  удачный перерендер её стирает;
+- ключ убрали при транскрипте в очереди — хендлеры зарегистрированы
+  и без ключа и сразу пишут итог «AssemblyAI не настроен».
+**Последствия.** Причину видно запросом
+`SELECT lesson_id, status, error FROM transcripts WHERE error IS NOT NULL`.
+Ручной повтор транскрибации: `UPDATE transcripts SET status='queued',
+external_id=NULL, error=NULL WHERE lesson_id=…`, `DELETE FROM utterances`
+этого транскрипта, `UPDATE lessons SET status='processing'` и джоба
+`asr_submit` с `{"transcript_id": …}` (`INSERT INTO jobs`). Брошенные
+захваты (worker падал на каждой попытке) очередь хоронит, не вызывая
+хендлер, — такой урок остаётся в `processing`, как и прежде.
