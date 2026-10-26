@@ -95,6 +95,12 @@ func (f *fakeASR) firstSubmit() map[string]any {
 	return f.submits[0]
 }
 
+// Результат AssemblyAI: три реплики двух спикеров, в одной — разметка.
+const asrCompleted = `{"id":"tr_fixture","status":"completed","text":"...","utterances":[
+	{"speaker":"A","start":250,"end":2100,"confidence":0.9,"text":"Good morning, class.","words":[]},
+	{"speaker":"B","start":2300,"end":3900,"confidence":0.8,"text":"Morning! Is it <b>today</b> & now?","words":[]},
+	{"speaker":"A","start":4000,"end":3725120,"confidence":0.9,"text":"Yes.","words":[]}]}`
+
 // asrStand — api и worker с fake AssemblyAI и fake хранилищем поверх
 // изолированной схемы securityDB; урок в live, в группе — студент.
 type asrStand struct {
@@ -105,6 +111,8 @@ type asrStand struct {
 	asr      *fakeASR
 	files    *storagetest.Server
 	lessonID int64
+	// Сессии: участник, teacher урока, админ, чужие студент и teacher
+	student, teacher, admin, outsider, otherTeacher *http.Cookie
 }
 
 func newASRStand(t *testing.T, maxAttempts int) *asrStand {
@@ -112,8 +120,12 @@ func newASRStand(t *testing.T, maxAttempts int) *asrStand {
 	base, conn := securityDB(t)
 	ctx := context.Background()
 	s := &asrStand{conn: conn, st: base.store, asr: newFakeASR(t), files: storagetest.New(t)}
-	teacherID, _ := securityUser(t, base, conn, store.RoleTeacher, "asr-teacher")
-	studentID, _ := securityUser(t, base, conn, store.RoleStudent, "asr-student")
+	teacherID, teacher := securityUser(t, base, conn, store.RoleTeacher, "asr-teacher")
+	studentID, student := securityUser(t, base, conn, store.RoleStudent, "asr-student")
+	_, s.admin = securityUser(t, base, conn, store.RoleAdmin, "asr-admin")
+	_, s.outsider = securityUser(t, base, conn, store.RoleStudent, "asr-outsider")
+	_, s.otherTeacher = securityUser(t, base, conn, store.RoleTeacher, "asr-other-teacher")
+	s.student, s.teacher = student, teacher
 	var groupID int64
 	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('asr','B1') RETURNING id`).Scan(&groupID); err != nil {
 		t.Fatal(err)
@@ -133,7 +145,8 @@ func newASRStand(t *testing.T, maxAttempts int) *asrStand {
 	a, err := New(base.store, Config{
 		PublicBaseURL: "https://class.example",
 		LiveKitURL:    "wss://rooms.example", LiveKitAPIKey: webhookKey, LiveKitAPISecret: webhookSecret,
-		Storage: s.files.Config(),
+		Storage:                 s.files.Config(),
+		AssemblyAIWebhookSecret: asrSecret,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +179,20 @@ func (s *asrStand) egressEnded(t *testing.T) {
 	}}))
 	expectStatus(t, w, http.StatusOK)
 }
+
+// webhook — доставка AssemblyAI с секретом secret ("" — без заголовка).
+func (s *asrStand) webhook(secret, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/webhooks/assemblyai", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	if secret != "" {
+		r.Header.Set(assemblyai.WebhookHeader, secret)
+	}
+	w := httptest.NewRecorder()
+	s.h.ServeHTTP(w, r)
+	return w
+}
+
+const asrCompletedHook = `{"transcript_id":"tr_fixture","status":"completed"}`
 
 // run выполняет одну джобу; want — kind живых джоб до запуска, по порядку.
 func (s *asrStand) run(t *testing.T, want ...string) {
@@ -211,6 +238,22 @@ func (s *asrStand) transcript(t *testing.T) transcriptRow {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// submitted — урок с принятой записью доходит до отправки в AssemblyAI.
+func (s *asrStand) submitted(t *testing.T) {
+	t.Helper()
+	s.egressEnded(t)
+	s.run(t, store.JobRecordingReady)
+	s.run(t, store.JobASRSubmit)
+}
+
+// fetched — после отправки AssemblyAI сообщает итог, worker забирает его.
+func (s *asrStand) fetched(t *testing.T) {
+	t.Helper()
+	s.submitted(t)
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK)
+	s.run(t, store.JobASRResult)
 }
 
 // requeue ставит джобу kind ещё раз — так выглядит at-least-once повтор.
@@ -288,6 +331,137 @@ func TestASRSubmit(t *testing.T) {
 	}
 }
 
+// S2-2: вебхук проверяет секрет и принимает итог один раз; реплики
+// сохраняются один раз, сколько бы ни повторялись доставка и джоба.
+func TestASRWebhookStoresUtterancesOnce(t *testing.T) {
+	s := newASRStand(t, 0)
+	ctx := context.Background()
+	s.asr.respond(asrCompleted, 0)
+	s.submitted(t)
+
+	expectStatus(t, s.webhook("", asrCompletedHook), http.StatusUnauthorized)
+	expectStatus(t, s.webhook(asrSecret+"x", asrCompletedHook), http.StatusUnauthorized)
+	expectStatus(t, s.webhook(strings.ToUpper(asrSecret), asrCompletedHook), http.StatusUnauthorized)
+	s.expectQueue(t)
+	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":"tr_other","status":"completed"}`), http.StatusNotFound)
+	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":"tr_fixture","status":"processing"}`), http.StatusBadRequest)
+	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":`), http.StatusBadRequest)
+	s.expectQueue(t)
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK)
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK) // повторная доставка
+	s.run(t, store.JobASRResult)                                           // джоба одна на две доставки
+	tr := s.transcript(t)
+	if tr.status != store.TranscriptCompleted || tr.utterances != 3 {
+		t.Fatalf("после asr_result %+v", tr)
+	}
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK) // запоздалая доставка
+	s.expectQueue(t, store.JobVTTRender)
+	if _, gets := s.asr.calls(); gets != 1 {
+		t.Fatalf("результат забран %d раз, хотели 1", gets)
+	}
+	if tr = s.transcript(t); tr.utterances != 3 {
+		t.Fatalf("после запоздалой доставки %+v", tr)
+	}
+	// Схема держит идемпотентность и сама: вторую реплику с тем же idx не вставить
+	_, err := s.conn.Exec(ctx, `INSERT INTO utterances (transcript_id, idx, speaker_label, start_ms, end_ms, text)
+		VALUES ($1, 0, 'A', 0, 1, 'dup')`, tr.id)
+	if store.PgErrorCode(err) != pgUniqueViolation {
+		t.Fatalf("дубль реплики: %v, хотели unique violation", err)
+	}
+
+	// Вьюер получает реплики по порядку, как их отдал AssemblyAI
+	w := securityRequest(s.h, "GET", fmt.Sprintf("/lessons/%d/transcript", s.lessonID), "", s.student)
+	expectStatus(t, w, http.StatusOK)
+	var resp transcriptResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != store.TranscriptCompleted || len(resp.Utterances) != 3 {
+		t.Fatalf("ответ %s", w.Body.String())
+	}
+	if u := resp.Utterances[1]; u.Idx != 1 || u.SpeakerLabel != "B" || u.StartMS != 2300 || u.EndMS != 3900 ||
+		u.Text != "Morning! Is it <b>today</b> & now?" || u.UserID != nil {
+		t.Errorf("реплика 1 = %+v", u)
+	}
+	if strings.Contains(w.Body.String(), "error") {
+		t.Errorf("в ответе вьюеру есть поле ошибки: %s", w.Body.String())
+	}
+}
+
+// GET /lessons/{id}/transcript пускает ровно тех же, кого GET /lessons/{id}.
+func TestTranscriptAccessMatchesLesson(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.asr.respond(asrCompleted, 0)
+	s.egressEnded(t)
+	s.run(t, store.JobRecordingReady)
+
+	lesson := fmt.Sprintf("/lessons/%d", s.lessonID)
+	cases := []struct {
+		name   string
+		cookie *http.Cookie
+		want   int
+	}{
+		{"участник", s.student, http.StatusOK},
+		{"teacher урока", s.teacher, http.StatusOK},
+		{"админ", s.admin, http.StatusForbidden},
+		{"чужой студент", s.outsider, http.StatusForbidden},
+		{"чужой teacher", s.otherTeacher, http.StatusForbidden},
+		{"без входа", nil, http.StatusUnauthorized},
+	}
+	for _, c := range cases {
+		page := securityRequest(s.h, "GET", lesson, "", c.cookie).Code
+		got := securityRequest(s.h, "GET", lesson+"/transcript", "", c.cookie)
+		if page != c.want || got.Code != c.want {
+			t.Errorf("%s: урок %d, транскрипт %d, хотели оба %d (%s)", c.name, page, got.Code, c.want, got.Body.String())
+		}
+	}
+	// Транскрипт ещё готовится: статус есть, реплик и ссылки нет
+	w := securityRequest(s.h, "GET", lesson+"/transcript", "", s.teacher)
+	if body := strings.TrimSpace(w.Body.String()); body != `{"status":"queued","utterances":[],"vtt_url":null,"vtt_expires_at":null}` {
+		t.Errorf("готовящийся транскрипт: %s", body)
+	}
+	for _, path := range []string{"/lessons/999999/transcript", "/lessons/999999"} {
+		expectStatus(t, securityRequest(s.h, "GET", path, "", s.teacher), http.StatusNotFound)
+	}
+	expectStatus(t, securityRequest(s.h, "GET", "/lessons/0/transcript", "", s.teacher), http.StatusBadRequest)
+
+	// Урок без транскрипта (ASR выключен или записи не было) — 404 своим кодом
+	if _, err := s.conn.Exec(context.Background(), `DELETE FROM transcripts`); err != nil {
+		t.Fatal(err)
+	}
+	w = securityRequest(s.h, "GET", lesson+"/transcript", "", s.student)
+	expectStatus(t, w, http.StatusNotFound)
+	if !strings.Contains(w.Body.String(), "no_transcript") {
+		t.Errorf("тело %s", w.Body.String())
+	}
+}
+
+// Ошибка у AssemblyAI — итог (ADR-016): транскрипт error с причиной,
+// урок done, реплик и VTT нет, повторов нет.
+func TestASRProviderErrorFinishesLesson(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.asr.respond(`{"id":"tr_fixture","status":"error","error":"Transcoding failed. File does not appear to contain audio.","utterances":null}`, 0)
+	s.egressEnded(t)
+	s.run(t, store.JobRecordingReady)
+	s.run(t, store.JobASRSubmit)
+	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":"tr_fixture","status":"error"}`), http.StatusOK)
+	s.run(t, store.JobASRResult)
+	s.expectQueue(t)
+	tr := s.transcript(t)
+	if tr.status != store.TranscriptError || tr.cause == nil ||
+		*tr.cause != "AssemblyAI: Transcoding failed. File does not appear to contain audio." || tr.utterances != 0 || tr.vtt != nil {
+		t.Fatalf("транскрипт %+v", tr)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "done" {
+		t.Fatalf("урок %s, хотели done без транскрипта", got)
+	}
+	w := securityRequest(s.h, "GET", fmt.Sprintf("/lessons/%d/transcript", s.lessonID), "", s.student)
+	if body := strings.TrimSpace(w.Body.String()); w.Code != http.StatusOK ||
+		body != `{"status":"error","utterances":[],"vtt_url":null,"vtt_expires_at":null}` {
+		t.Fatalf("%d %s", w.Code, body)
+	}
+}
+
 // Недоступный AssemblyAI: повтор с backoff очереди, а на последней попытке
 // транскрибация сдаётся — урок done, джоба не остаётся мёртвой (ADR-016).
 func TestASRSubmitRetriesThenGivesUp(t *testing.T) {
@@ -351,6 +525,24 @@ func TestASRJobWithoutKeyFinishesLesson(t *testing.T) {
 	}
 	if submits, _ := s.asr.calls(); submits != 0 {
 		t.Fatalf("без ключа ушло %d отправок", submits)
+	}
+}
+
+// Без секрета вебхук выключен, как комната без ключей LiveKit; короткий
+// секрет не даёт api стартовать.
+func TestAssemblyAIWebhookConfig(t *testing.T) {
+	a := &API{cfg: Config{}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/webhooks/assemblyai", strings.NewReader(asrCompletedHook))
+	r.Header.Set(assemblyai.WebhookHeader, "")
+	a.Router().ServeHTTP(w, r)
+	expectStatus(t, w, http.StatusServiceUnavailable)
+
+	if _, err := New(nil, Config{AssemblyAIWebhookSecret: "short-secret"}); err == nil {
+		t.Fatal("короткий секрет вебхука принят")
+	}
+	if _, err := New(nil, Config{AssemblyAIWebhookSecret: asrSecret}); err != nil {
+		t.Fatalf("годный секрет: %v", err)
 	}
 }
 

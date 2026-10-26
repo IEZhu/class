@@ -60,6 +60,33 @@ func asrSubmit(st *store.Store, asr ASR) jobs.Handler {
 	})
 }
 
+// asrResult — S2-2: вебхук сообщил итог, забираем реплики. Ошибка у
+// AssemblyAI — итог, а не повод повторять: та же запись упадёт так же
+// (ADR-016).
+func asrResult(st *store.Store, asr ASR) jobs.Handler {
+	return transcriptStep(st, func(ctx context.Context, t *store.Transcript) error {
+		if t.Status != store.TranscriptFetching {
+			return nil
+		}
+		if asr.Client == nil {
+			return st.FailTranscript(ctx, t.ID, errASRNotConfigured.Error())
+		}
+		res, err := asr.Client.Transcript(ctx, t.ExternalID)
+		if err != nil {
+			return err
+		}
+		switch res.Status {
+		case assemblyai.StatusCompleted:
+			return st.SaveUtterances(ctx, t.ID, utterancesFrom(res.Utterances))
+		case assemblyai.StatusError:
+			log.Printf("worker: AssemblyAI не распознал урок %d: %s", t.LessonID, res.Error)
+			return st.FailTranscript(ctx, t.ID, "AssemblyAI: "+clean(res.Error))
+		}
+		// Вебхук приходит только по итогу: промежуточный статус — повторим позже
+		return fmt.Errorf("AssemblyAI после вебхука вернул статус %q", res.Status)
+	})
+}
+
 // transcriptStep — общая часть джоб транскрибации: payload, строка
 // транскрипта и исход ошибки. Ошибка шага — повтор через очередь с её
 // backoff, а на последней попытке транскрибация сдаётся (ADR-016):
@@ -91,6 +118,23 @@ func transcriptStep(st *store.Store, step func(context.Context, *store.Transcrip
 			job.Kind, t.ID, t.LessonID, job.Attempt, err)
 		return nil
 	}
+}
+
+// utterancesFrom — реплики провайдера в наши. Данные внешние, а схема
+// требует 0 ≤ start ≤ end: одна кривая реплика не должна ронять весь
+// транскрипт.
+func utterancesFrom(in []assemblyai.Utterance) []store.Utterance {
+	out := make([]store.Utterance, len(in))
+	for i, u := range in {
+		start := max(u.Start, 0)
+		out[i] = store.Utterance{
+			SpeakerLabel: clean(u.Speaker),
+			StartMS:      start,
+			EndMS:        max(u.End, start),
+			Text:         clean(u.Text),
+		}
+	}
+	return out
 }
 
 // clean — NUL Postgres в text не принимает, а JSON его пропускает (\u0000).

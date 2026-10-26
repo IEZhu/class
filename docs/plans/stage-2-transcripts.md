@@ -98,6 +98,25 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
   (`TestASRSubmit`, отказы и повтор, джоба без ключа, откат 0008) с fake
   AssemblyAI и fake S3 `internal/storage/storagetest`.
 
+### S2-2 Webhook completed → utterances (2026-10-26)
+
+- `POST /webhooks/assemblyai` (`backend/internal/httpapi/transcripts.go`):
+  без секрета — 503 `assemblyai_not_configured`; неверный заголовок — 401;
+  тело `{transcript_id, status: completed|error}`, иначе 400; неизвестный
+  транскрипт — 404; принятый — `fetching` + джоба `asr_result`, повтор
+  доставки — 200 без новой джобы.
+- Джоба `asr_result`: `GET /v2/transcript/{id}` → `completed` —
+  `utterances` (idx по порядку, `speaker_label`, `start_ms`, `end_ms`,
+  `text`) + `completed` + джоба `vtt_render` одной транзакцией; `error` —
+  итог по ADR-016. Store: `TranscriptWebhook`, `SaveUtterances`,
+  `Utterances`, `LessonTranscript`.
+- `GET /lessons/{id}/transcript` — для вьюера S2-4: `{status,
+  utterances[{idx, speaker_label, user_id, start_ms, end_ms, text}],
+  vtt_url, vtt_expires_at}`; доступ как у `GET /lessons/{id}` (teacher
+  урока и участники; прочим 403), нет транскрипта — 404 `no_transcript`.
+- Тесты: вебхук и однократные реплики, доступ к транскрипту, ошибка
+  AssemblyAI, конфигурация секрета.
+
 ## Риски этапа
 
 RU/EN code-switching и перекрывающаяся речь портят текст — принято

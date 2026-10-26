@@ -42,8 +42,10 @@ stateDiagram-v2
    presigned GET на запись → AssemblyAI (`speaker_labels: true`,
    `language_code: en`, webhook). *(этапы 1–2; без `ASSEMBLYAI_API_KEY`
    `recording_ready` сразу ставит `done`, ADR-013, ADR-015)*
-7. Webhook AssemblyAI → сохраняем `utterances` → рендерим WebVTT (`<v A>…`)
-   в S3 → `status=done`. *(этап 2)*
+7. Webhook AssemblyAI → джоба `asr_result` сохраняет `utterances` → джоба
+   `vtt_render` рендерит WebVTT (`<v A>…`) в S3 → `status=done`. Сбой
+   транскрибации — урок всё равно `done`, транскрипт `error` (ADR-016).
+   *(этап 2)*
 8. **Post-lesson flow (выбор слов).** Преподавателю — чеклист кандидатов:
    клики за урок + текст-элементы из JSON-сцены Excalidraw (`type: "text"`) +
    ручной ввод. Отмеченные → `lesson_terms` → назначение всем/выборочно:

@@ -38,12 +38,14 @@ func main() {
 	api, err := httpapi.New(st, httpapi.Config{
 		PublicBaseURL: "https://" + domain,
 		// Ключи интеграций опциональны: без них работает всё, кроме
-		// комнаты и записи
+		// комнаты, записи и транскрипта
 		LiveKitURL:       os.Getenv("LIVEKIT_URL"),
 		LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
 		LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
 		EgressAudioOnly:  os.Getenv("EGRESS_AUDIO_ONLY") == "1",
 		Storage:          storage.ConfigFromEnv(),
+		// S2-2: без секрета вебхук AssemblyAI отвечает 503
+		AssemblyAIWebhookSecret: os.Getenv("ASSEMBLYAI_WEBHOOK_SECRET"),
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)

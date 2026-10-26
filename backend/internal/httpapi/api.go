@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/IEZhu/class/backend/internal/assemblyai"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
@@ -29,6 +30,9 @@ type Config struct {
 	// для транскрипта этого достаточно (05-storage-s3.md).
 	EgressAudioOnly bool
 	Storage         storage.Config
+	// AssemblyAIWebhookSecret (S2-2) — секрет, который AssemblyAI
+	// возвращает в заголовке вебхука; пусто — вебхук отвечает 503.
+	AssemblyAIWebhookSecret string
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -50,6 +54,11 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	st, err := storage.New(cfg.Storage)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.AssemblyAIWebhookSecret != "" {
+		if err := assemblyai.CheckWebhookSecret(cfg.AssemblyAIWebhookSecret); err != nil {
+			return nil, err
+		}
 	}
 	return &API{
 		store:   s,
@@ -121,6 +130,11 @@ func (a *API) Router() http.Handler {
 
 	mux.Handle("POST /lessons/{id}/materials", teacher(a.handleCreateMaterial("material")))
 	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
+
+	// S2-2/S2-3: транскрипт урока. Вебхук AssemblyAI без auth-middleware:
+	// он аутентифицируется секретным заголовком
+	mux.HandleFunc("POST /webhooks/assemblyai", a.handleAssemblyAIWebhook)
+	mux.Handle("GET /lessons/{id}/transcript", user(a.handleGetTranscript))
 	return mux
 }
 

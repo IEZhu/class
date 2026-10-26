@@ -16,8 +16,12 @@ import (
 // повтор джобы или доставки ничего не дублирует; тупик — FailTranscript
 // (ADR-016).
 
-// JobASRSubmit — отправка записи провайдеру; payload — TranscriptJob.
-const JobASRSubmit = "asr_submit"
+// Джобы транскрибации; payload у всех — TranscriptJob.
+const (
+	JobASRSubmit = "asr_submit"
+	JobASRResult = "asr_result"
+	JobVTTRender = "vtt_render"
+)
 
 // TranscriptJob — payload джоб транскрибации.
 type TranscriptJob struct {
@@ -45,6 +49,17 @@ type Transcript struct {
 	VTTKey     string
 	// RecordingKey — запись урока, которую получает провайдер
 	RecordingKey string
+}
+
+// Utterance — реплика спикера; время — миллисекунды от начала записи.
+type Utterance struct {
+	Idx          int
+	SpeakerLabel string
+	// UserID — ручной маппинг спикера на участника (S2-5), до него nil
+	UserID  *int64
+	StartMS int64
+	EndMS   int64
+	Text    string
 }
 
 // QueueTranscript заводит транскрипт урока и ставит asr_submit одной
@@ -103,6 +118,100 @@ func (s *Store) MarkTranscriptSubmitted(ctx context.Context, id int64, externalI
 	return err
 }
 
+// TranscriptWebhook — провайдер сообщил итог: транскрипт уходит в fetching
+// вместе с джобой asr_result, которая заберёт результат. Повторная
+// доставка (транскрипт уже не submitted) ничего не меняет и джобу не
+// ставит. ErrNotFound — такого транскрипта у нас нет.
+func (s *Store) TranscriptWebhook(ctx context.Context, provider, externalID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var id int64
+	err = tx.QueryRow(ctx,
+		`UPDATE transcripts SET status = 'fetching'
+		 WHERE provider = $1 AND external_id = $2 AND status = 'submitted'
+		 RETURNING id`, provider, externalID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var known bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM transcripts WHERE provider = $1 AND external_id = $2)`,
+			provider, externalID).Scan(&known); err != nil {
+			return err
+		}
+		if !known {
+			return ErrNotFound
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := jobs.Enqueue(ctx, tx, JobASRResult, TranscriptJob{TranscriptID: id}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// SaveUtterances сохраняет реплики, переводит транскрипт в completed
+// и ставит vtt_render — одной транзакцией. Условие на fetching делает
+// вызов идемпотентным: повтор asr_result реплики не задвоит, а первичный
+// ключ (transcript_id, idx) держит то же на уровне схемы. idx — порядок
+// реплик в utts.
+func (s *Store) SaveUtterances(ctx context.Context, id int64, utts []Utterance) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE transcripts SET status = 'completed' WHERE id = $1 AND status = 'fetching'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	speakers := make([]string, len(utts))
+	starts := make([]int64, len(utts))
+	ends := make([]int64, len(utts))
+	texts := make([]string, len(utts))
+	for i, u := range utts {
+		speakers[i], starts[i], ends[i], texts[i] = u.SpeakerLabel, u.StartMS, u.EndMS, u.Text
+	}
+	// Один запрос на весь транскрипт: часовой урок — сотни реплик
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO utterances (transcript_id, idx, speaker_label, start_ms, end_ms, text)
+		 SELECT $1, u.ord - 1, u.speaker, u.start_ms, u.end_ms, u.text
+		 FROM unnest($2::text[], $3::bigint[], $4::bigint[], $5::text[])
+		      WITH ORDINALITY AS u (speaker, start_ms, end_ms, text, ord)`,
+		id, speakers, starts, ends, texts); err != nil {
+		return err
+	}
+	if _, err := jobs.Enqueue(ctx, tx, JobVTTRender, TranscriptJob{TranscriptID: id}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// Utterances — реплики транскрипта по порядку.
+func (s *Store) Utterances(ctx context.Context, transcriptID int64) ([]Utterance, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT idx, speaker_label, user_id, start_ms, end_ms, text
+		 FROM utterances WHERE transcript_id = $1 ORDER BY idx`, transcriptID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Utterance, error) {
+		var u Utterance
+		err := row.Scan(&u.Idx, &u.SpeakerLabel, &u.UserID, &u.StartMS, &u.EndMS, &u.Text)
+		return u, err
+	})
+}
+
 // FailTranscript — транскрибация сдалась (ADR-016): причина в error, урок
 // done — запись смотрится и без транскрипта. Сохранённые реплики остаются:
 // completed не понижается, несостоявшийся VTT виден по error.
@@ -128,4 +237,25 @@ func (s *Store) FailTranscript(ctx context.Context, id int64, reason string) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// LessonTranscript — транскрипт урока с репликами для вьюера.
+// ErrNotFound — транскрипта нет (ASR не настроен или записи не было).
+func (s *Store) LessonTranscript(ctx context.Context, lessonID int64) (*Transcript, []Utterance, error) {
+	t := &Transcript{LessonID: lessonID}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, provider, status, COALESCE(external_id, ''), COALESCE(vtt_s3_key, '')
+		 FROM transcripts WHERE lesson_id = $1`, lessonID).
+		Scan(&t.ID, &t.Provider, &t.Status, &t.ExternalID, &t.VTTKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	utts, err := s.Utterances(ctx, t.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return t, utts, nil
 }

@@ -72,6 +72,9 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # 1 — писать только звук (дешевле, для транскрипта достаточно)
       EGRESS_AUDIO_ONLY: ${EGRESS_AUDIO_ONLY:-}
+      # S2-2: секрет вебхука AssemblyAI; пусто — POST /webhooks/assemblyai
+      # отвечает 503
+      ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -23,10 +23,18 @@
 
 ## Обработка результата
 
-Webhook `completed` → сохранить `utterances` (speaker_label, start_ms,
-end_ms, text) → отрендерить WebVTT (`<v A>…`) → S3
-`transcripts/{lesson_id}.vtt` → `lessons.status=done`.
-Обработчик идемпотентен (повторная доставка не дублирует utterances).
+Вебхук несёт только `transcript_id` и `status` (`completed` | `error`);
+ответ 2xx нужен за 10 с, на прочее AssemblyAI повторяет до 10 раз через
+10 с, на 4xx — перестаёт. Поэтому api лишь переводит транскрипт
+в `fetching` и ставит джобу `asr_result`; worker забирает
+`GET /v2/transcript/{id}` → сохраняет `utterances` (speaker_label,
+start_ms, end_ms, text) → джоба `vtt_render` рендерит WebVTT (`<v A>…`)
+→ S3 `transcripts/{lesson_id}.vtt` → `lessons.status=done`.
+Каждый шаг идемпотентен (повторная доставка не дублирует utterances).
+Сбои — ADR-016: урок доходит до `done` и без транскрипта.
+
+Статусы `transcripts`: `queued` → `submitted` → `fetching` →
+`completed` | `error`.
 
 ## Цена
 
