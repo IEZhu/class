@@ -62,8 +62,15 @@ func testDB(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("migration inventory: %v (%d files)", err, len(files))
 	}
 	sort.Strings(files)
+	// Накат сериализован с httpapi/security_test.go: pgcrypto одно на базу
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(20261026)"); err != nil {
+		t.Fatal(err)
+	}
 	for _, file := range files {
 		applySQL(t, pool, file)
+	}
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_unlock(20261026)"); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

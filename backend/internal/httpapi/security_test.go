@@ -67,6 +67,12 @@ func securityDB(t *testing.T) (*API, *pgx.Conn) {
 		t.Fatalf("migration inventory: %v (%d files)", err, len(files))
 	}
 	sort.Strings(files)
+	// pgcrypto из 0002 — одно на базу, а пакеты тестов идут параллельно:
+	// одновременный CREATE EXTENSION падает на уникальности имени. Накат
+	// сериализуется той же advisory-блокировкой, что в jobs_test.go.
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(20261026)"); err != nil {
+		t.Fatal(err)
+	}
 	for _, file := range files {
 		sql, err := os.ReadFile(file)
 		if err != nil {
@@ -75,6 +81,9 @@ func securityDB(t *testing.T) (*API, *pgx.Conn) {
 		if _, err := conn.Exec(ctx, string(sql)); err != nil {
 			t.Fatalf("migration %s: %v", file, err)
 		}
+	}
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_unlock(20261026)"); err != nil {
+		t.Fatal(err)
 	}
 	s, err := store.New(ctx, u.String())
 	if err != nil {
