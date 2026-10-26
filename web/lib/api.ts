@@ -78,6 +78,13 @@ export interface LessonDetail extends Lesson {
   participants: { user_id: number; email: string; name: string; role: string }[];
 }
 
+// Google Calendar преподавателя (S1-1, ADR-023): available — ключи Google
+// на стенде заданы, connected — токен сохранён и читается текущим ключом.
+export interface GoogleCalendarStatus {
+  available: boolean;
+  connected: boolean;
+}
+
 const API_TIMEOUT_MS = 5000;
 
 export async function apiFetch<T>(path: string): Promise<T> {
