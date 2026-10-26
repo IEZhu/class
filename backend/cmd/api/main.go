@@ -5,8 +5,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/httpapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
@@ -35,6 +37,11 @@ func main() {
 	}
 	defer st.Close()
 
+	googleCfg := gcal.Config{
+		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		TokenKey:     os.Getenv("GOOGLE_TOKEN_KEY"),
+	}
 	api, err := httpapi.New(st, httpapi.Config{
 		PublicBaseURL: "https://" + domain,
 		// Ключи интеграций опциональны: без них работает всё, кроме
@@ -50,9 +57,14 @@ func main() {
 			AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
 			SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
 		},
+		// S1-1: без ключей подключение календаря отвечает 503 (ADR-023)
+		Google: googleCfg,
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)
+	}
+	if !api.GoogleConfigured() {
+		log.Printf("api: Google Calendar выключен: не заданы %s", strings.Join(googleCfg.Missing(), ", "))
 	}
 	apiHandler := api.Router()
 

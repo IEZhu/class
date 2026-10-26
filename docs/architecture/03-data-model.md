@@ -11,7 +11,7 @@
 ```sql
 users(id, email, role /*admin|teacher|student|guest, ADR-007/010*/, name,
       password_hash /*bcrypt*/,
-      google_refresh_token /*только у teachers, шифруется*/)
+      google_refresh_token /*bytea, только у teachers, AES-256-GCM, ADR-023*/)
 sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
 invites(id, token_hash /*sha256*/, email, name, role, group_id, created_by,
         created_at, expires_at, accepted_at, accepted_user_id)        -- ADR-008
@@ -20,7 +20,8 @@ groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)
 lessons(id, group_id /*NULL у открытого события, ADR-010*/,
         title /*непустой у события, NULL у урока с группой*/,
         teacher_id, starts_at, ends_at, status
-        /*scheduled|live|processing|done*/, gcal_event_id,
+        /*scheduled|live|processing|done*/,
+        gcal_event_id /*id события назначаем сами до вызова Google, ADR-023*/,
         livekit_room, recording_s3_key, transcript_id,
         guest_token_hash /*sha256 гостевой ссылки, только у события*/)
 lesson_participants(lesson_id, user_id, attended bool)
@@ -74,7 +75,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | sessions; колонка users.password_hash | 0 | S0-3 |
 | invites | 1 | S1-10 |
 | колонки lessons.title, guest_token_hash; роль guest; CHECK правил события (0006) | 1 | S1-11 |
-| jobs (миграция `0007_jobs`); колонка users.google_refresh_token (шифрование) | 1 | S1-2 / S1-1 |
+| jobs (миграция `0007_jobs`); колонка users.google_refresh_token (миграция `0012_google_calendar`, ADR-023) | 1 | S1-2 / S1-1 |
 | transcripts, utterances | 2 | S2-2 |
 | terms, user_terms, lesson_term_candidates, lesson_terms, whiteboards | 3 | S3-2…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
@@ -100,7 +101,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS.
 - FTS: `subtitle_segments.tsv` — GENERATED tsvector + GIN-индекс; поиск
   для видео-практики только по нему.
-- `users.google_refresh_token` хранится шифрованным (ключ в `.env`),
-  есть только у teachers.
+- `users.google_refresh_token` хранится шифрованным (AES-256-GCM, ключ
+  `GOOGLE_TOKEN_KEY` в `.env`, id пользователя в associated data — ADR-023),
+  есть только у teachers; NULL — календарь не подключён.
 
 Связано: [04-api.md](04-api.md) · планы этапов [../plans/](../plans/)

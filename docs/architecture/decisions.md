@@ -1,11 +1,5 @@
 # Журнал решений (ADR-lite)
 
-## ADR-011 · 2026-10-24 · proposed: security validation in CI
-
-Run real HTTP/SQL security tests against disposable Postgres, retain the LiveKit signing contract tests, and build/typecheck the web application. Audit complete Go/npm dependency inventories and the actual Compose runtime images, including every severity and unfixed findings. Source secrets, missing inventories, and scanner errors block. Pin actions and scanner versions. PR checks do not access production services or credentials. Package-scoped Go advisories require artifact-specific applicability evidence; a blanket ignore or reduced severity threshold is unacceptable.
-
-Bind fresh package-level source analysis to exact source and lockfile contents, and binary analysis to all Go executables in the exact scanned OCI image. Require actual affected-code controls, retain complete raw inventories and proof artifacts, and reject stale, incomplete or mismatched evidence. Rebuild the complete standard Caddy distribution and PostgreSQL 16's gosu with patched dependencies while preserving upstream module-version metadata, the existing entrypoints, API nonroot user and health checks. Keep Node 22 with Alpine 3.22's versioned `nodejs~22` runtime package; keep npm/Yarn in build stages only. Keep all built-in secret rules active, disable the Markdown allow rule, and require a generated README token control to fail; redact secret values in retained artifacts without dropping findings.
-
 > Формат: `ADR-NNN · дата · статус (accepted/superseded)` → Контекст →
 > Решение → Последствия. Новая запись — при любом выборе, которого нет
 > в доках, и при любом отступлении от них.
@@ -250,74 +244,11 @@ Egress, запись в R2, плеер и будущий транскрипт �
 у урока без группы. Вход гостя читает урок `FOR SHARE`, поэтому отзыв
 и перевыпуск отключают старую ссылку строго, без окна гонки.
 
-## ADR-014 · 2026-10-26 · accepted — Бэкапы Postgres: retention 7/30 и свой токен хранилища
+## ADR-011 · 2026-10-24 · accepted — security validation in CI
 
-**Контекст.** S1-7 и [05-storage-s3.md](05-storage-s3.md) задают ночной
-`pg_dump | zstd` → `backups/pg/{date}.dump.zst` с «retention 7 дневных /
-30 дней», не говоря, что хранится между 7-м и 30-м днём. Второй вопрос —
-доступ. Токен R2 `S3_*` ([ADR-009](#adr-009--2026-08-03--accepted--объектное-хранилище-cloudflare-r2))
-api передаёт LiveKit в каждом egress-запросе, то есть копия лежит у третьей
-стороны и умеет читать и удалять всё в бакете. В дампе — bcrypt-хэши
-паролей и email всех учёток, sha256-дайджесты сессий и ссылок, позже —
-зашифрованные refresh-токены Google (S1-1).
-**Решение.** Retention: все копии последних 7 суток (дата в имени — UTC);
-от 7 до 30 суток — по одной на ISO-неделю, самая свежая в неделе (обычно
-воскресная, при пропуске — последняя из имеющихся); старше 30 суток —
-удаляются. В устоявшемся режиме это ~11 копий. Чистит сам
-`deploy/backup-pg.sh` после проверенной выгрузки; объекты с другими
-именами под `backups/pg/` (ручные копии) не трогает; если копии моложе
-7 суток нет, чистку не делает и падает. Lifecycle-правило для
-`backups/pg/` не ставим: «одну в неделю» им не выразить, а истечение
-по возрасту продолжает работать, когда бэкапы перестали делаться, —
-через 30 дней не осталось бы ни одной копии.
+Run real HTTP/SQL security tests against disposable Postgres, retain the LiveKit signing contract tests, and build/typecheck the web application. Audit complete Go/npm dependency inventories and the actual Compose runtime images, including every severity and unfixed findings. Source secrets, missing inventories, and scanner errors block. Pin actions and scanner versions. PR checks do not access production services or credentials. Package-scoped Go advisories require artifact-specific applicability evidence; a blanket ignore or reduced severity threshold is unacceptable.
 
-Доступ: ключи `BACKUP_S3_*` перекрывают `S3_*`, целевая схема — отдельный
-бакет и отдельный токен Object Read & Write только на него. Тогда копия
-токена у LiveKit не видит дампов, а скрипт бэкапа — записей. Пока все
-`BACKUP_S3_*` пусты, скрипт работает под `S3_*` и пишет предупреждение
-в журнал: бэкап под общим токеном лучше, чем никакого. Задан хоть один
-`BACKUP_S3_*` — обязателен свой `BACKUP_S3_BUCKET`, и общим местом
-считается тот же бакет на том же эндпоинте, а не только тот же ключ:
-иначе ключи без бакета молча писали бы дампы в бакет записей. Клиентское
-шифрование (age/gpg) отложено: оно закрывает чтение дампа держателем
-токена, но не удаление, а ключ расшифровки — ещё одна точка отказа
-для RTO «за час»: потерян ключ — потеряны все копии. Вернуться к нему,
-если отдельный токен невозможен или в БД появятся секреты в открытом виде.
-
-Инструменты: aws cli — одноразовый контейнер из закреплённого digest'ом
-`amazon/aws-cli:2.32.7` (им уже работали с R2 стенда), ключи — через
-окружение, не в командной строке; zstd — на хосте; pg_dump и pg_restore —
-внутри контейнера postgres по локальному сокету, пароль БД скриптам
-не нужен. Новых сервисов и runtime-образов в compose нет, сканирование
-ADR-011 не меняется. Скрипты в CI проверяет shellcheck
-(`koalaman/shellcheck:v0.10.0`, закреплён digest'ом, job `shell`
-в `ci.yml`), решение retention — `scripts/test_backup_retention.py`.
-
-Целостность: держатель токена хранилища может подложить объект вместе
-с метаданными, поэтому sha256 в метаданных — защита от порчи, не от
-подмены. Проверенные выгрузки записываются в манифест на VPS вне бакета
-(`/var/lib/lingua-backup/manifest`, только root: ключ, sha256, размер),
-и `deploy/restore-pg.sh` сверяет копию с ним; копию без записи
-в манифесте (или без sha256 вовсе, когда манифеста нет) разворачивает
-только с `--insecure-no-verify`. Без `--date`/`--key` берётся самая
-свежая ночная копия не позже сегодняшней даты, а в рабочую базу
-(`POSTGRES_DB`) — только явно названная.
-**Последствия.** Выгрузка идёт во временный `backups/pg/incoming/…`,
-скачивается обратно и сверяется по sha256 и только потом копируется
-внутри хранилища в ночной ключ; у R2 исходящий трафик бесплатен, на
-объёме дампа hobby-базы это копейки. Повторный прогон в тот же день
-заменяет копию дня только проверенной. Ночные копии с датой позже
-сегодняшней чистка не удаляет, но называет и завершается с ошибкой.
-Манифест живёт на VPS: при переезде на новую машину его копию нужно
-держать рядом с `deploy/.env`, иначе сверка — только по метаданным.
-Восстановление — одной транзакцией; непустую базу скрипт перезаписывает
-только с `--force`.
-Роли и гранты из дампа не переносятся — объекты получает учётка контейнера
-(`POSTGRES_USER`), других ролей у стенда нет. Расписание — systemd-таймер
-на VPS, 03:30 UTC; провал виден как `failed`-юнит, оповещения нет. Пока
-владелец не завёл бакет и токен для бэкапов — долг D-8.
-
-<!-- Следующие ADR добавлять ниже по мере реализации. -->
+Bind fresh package-level source analysis to exact source and lockfile contents, and binary analysis to all Go executables in the exact scanned OCI image. Require actual affected-code controls, retain complete raw inventories and proof artifacts, and reject stale, incomplete or mismatched evidence. Rebuild the complete standard Caddy distribution and PostgreSQL 16's gosu with patched dependencies while preserving upstream module-version metadata, the existing entrypoints, API nonroot user and health checks. Keep Node 22 with Alpine 3.22's versioned `nodejs~22` runtime package; keep npm/Yarn in build stages only. Keep all built-in secret rules active, disable the Markdown allow rule, and require a generated README token control to fail; redact secret values in retained artifacts without dropping findings.
 
 ## ADR-012 · 2026-10-26 · accepted — Запуск записи: статус live только вместе с Egress
 
@@ -387,3 +318,149 @@ worker в compose обязателен. Сбой транзакции `egress_en
 процесс поднимает `restart`. Глобальная уборка протухших сессий
 из ADR-006 не сделана: ей нужны периодические джобы, а их в S1-2 нет —
 долг D-15.
+
+## ADR-014 · 2026-10-26 · accepted — Бэкапы Postgres: retention 7/30 и свой токен хранилища
+
+**Контекст.** S1-7 и [05-storage-s3.md](05-storage-s3.md) задают ночной
+`pg_dump | zstd` → `backups/pg/{date}.dump.zst` с «retention 7 дневных /
+30 дней», не говоря, что хранится между 7-м и 30-м днём. Второй вопрос —
+доступ. Токен R2 `S3_*` ([ADR-009](#adr-009--2026-08-03--accepted--объектное-хранилище-cloudflare-r2))
+api передаёт LiveKit в каждом egress-запросе, то есть копия лежит у третьей
+стороны и умеет читать и удалять всё в бакете. В дампе — bcrypt-хэши
+паролей и email всех учёток, sha256-дайджесты сессий и ссылок, позже —
+зашифрованные refresh-токены Google (S1-1).
+**Решение.** Retention: все копии последних 7 суток (дата в имени — UTC);
+от 7 до 30 суток — по одной на ISO-неделю, самая свежая в неделе (обычно
+воскресная, при пропуске — последняя из имеющихся); старше 30 суток —
+удаляются. В устоявшемся режиме это ~11 копий. Чистит сам
+`deploy/backup-pg.sh` после проверенной выгрузки; объекты с другими
+именами под `backups/pg/` (ручные копии) не трогает; если копии моложе
+7 суток нет, чистку не делает и падает. Lifecycle-правило для
+`backups/pg/` не ставим: «одну в неделю» им не выразить, а истечение
+по возрасту продолжает работать, когда бэкапы перестали делаться, —
+через 30 дней не осталось бы ни одной копии.
+
+Доступ: ключи `BACKUP_S3_*` перекрывают `S3_*`, целевая схема — отдельный
+бакет и отдельный токен Object Read & Write только на него. Тогда копия
+токена у LiveKit не видит дампов, а скрипт бэкапа — записей. Пока все
+`BACKUP_S3_*` пусты, скрипт работает под `S3_*` и пишет предупреждение
+в журнал: бэкап под общим токеном лучше, чем никакого. Задан хоть один
+`BACKUP_S3_*` — обязателен свой `BACKUP_S3_BUCKET`, и общим местом
+считается тот же бакет на том же эндпоинте, а не только тот же ключ:
+иначе ключи без бакета молча писали бы дампы в бакет записей. Клиентское
+шифрование (age/gpg) отложено: оно закрывает чтение дампа держателем
+токена, но не удаление, а ключ расшифровки — ещё одна точка отказа
+для RTO «за час»: потерян ключ — потеряны все копии. Вернуться к нему,
+если отдельный токен невозможен или в БД появятся секреты в открытом виде.
+
+Инструменты: aws cli — одноразовый контейнер из закреплённого digest'ом
+`amazon/aws-cli:2.32.7` (им уже работали с R2 стенда), ключи — через
+окружение, не в командной строке; zstd — на хосте; pg_dump и pg_restore —
+внутри контейнера postgres по локальному сокету, пароль БД скриптам
+не нужен. Новых сервисов и runtime-образов в compose нет, сканирование
+ADR-011 не меняется. Скрипты в CI проверяет shellcheck
+(`koalaman/shellcheck:v0.10.0`, закреплён digest'ом, job `shell`
+в `ci.yml`), решение retention — `scripts/test_backup_retention.py`.
+
+Целостность: держатель токена хранилища может подложить объект вместе
+с метаданными, поэтому sha256 в метаданных — защита от порчи, не от
+подмены. Проверенные выгрузки записываются в манифест на VPS вне бакета
+(`/var/lib/lingua-backup/manifest`, только root: ключ, sha256, размер),
+и `deploy/restore-pg.sh` сверяет копию с ним; копию без записи
+в манифесте (или без sha256 вовсе, когда манифеста нет) разворачивает
+только с `--insecure-no-verify`. Без `--date`/`--key` берётся самая
+свежая ночная копия не позже сегодняшней даты, а в рабочую базу
+(`POSTGRES_DB`) — только явно названная.
+**Последствия.** Выгрузка идёт во временный `backups/pg/incoming/…`,
+скачивается обратно и сверяется по sha256 и только потом копируется
+внутри хранилища в ночной ключ; у R2 исходящий трафик бесплатен, на
+объёме дампа hobby-базы это копейки. Повторный прогон в тот же день
+заменяет копию дня только проверенной. Ночные копии с датой позже
+сегодняшней чистка не удаляет, но называет и завершается с ошибкой.
+Манифест живёт на VPS: при переезде на новую машину его копию нужно
+держать рядом с `deploy/.env`, иначе сверка — только по метаданным.
+Восстановление — одной транзакцией; непустую базу скрипт перезаписывает
+только с `--force`.
+Роли и гранты из дампа не переносятся — объекты получает учётка контейнера
+(`POSTGRES_USER`), других ролей у стенда нет. Расписание — systemd-таймер
+на VPS, 03:30 UTC; провал виден как `failed`-юнит, оповещения нет. Пока
+владелец не завёл бакет и токен для бэкапов — долг D-8.
+
+## ADR-023 · 2026-10-26 · accepted — Google Calendar: OAuth2 с PKCE, AES-GCM для токена, свой id события
+
+**Контекст.** S1-1 и джоба `calendar_sync` из S1-2 (долг D-7). Доки задают
+web flow только для преподавателей, scope `calendar.events`, шифрованный
+refresh token «примитив — в ADR», `events.insert/update/delete` и
+идемпотентность через `gcal_event_id`. Не заданы библиотека, защита flow,
+формат шифртекста и ротация ключа, способ сделать идемпотентным сам insert
+(ответ Google может потеряться после создания события) и удаление события
+при отмене — строка урока при отмене удаляется. В
+[04-api.md](04-api.md) был `POST /auth/google/callback`, а Google
+возвращает браузер на redirect URI обычным переходом (GET).
+**Решение.**
+- Зависимость — `golang.org/x/oauth2` v0.37.0, только корневой пакет:
+  обмен кода, PKCE, обновление access token. Calendar API v3 — три
+  REST-вызова своим кодом (`internal/gcal`). `google.golang.org/api`
+  не берём: ради трёх вызовов он тянет gRPC и OpenTelemetry;
+  `x/oauth2/google` — тоже, он тянет `cloud.google.com/go/compute/metadata`
+  ради двух адресов.
+- Эндпоинты, все под ролью teacher (уроки создаёт только он):
+  `GET /auth/google` — статус, `POST /auth/google/start` — адрес экрана
+  согласия, `GET /auth/google/callback` — обмен кода и редирект на
+  `/account?google=<итог>`, `DELETE /auth/google` — отключение. Старт —
+  POST: cookie сессии SameSite=Lax не уходит в межсайтовом POST.
+- Защита flow: `state` (256 бит, Google требует защиту от CSRF) и PKCE S256
+  (RFC 9700 рекомендует его и конфиденциальным клиентам; S256 объявлен
+  в discovery-документе Google). Оба значения — в cookie `google_oauth`
+  (HttpOnly, Secure, SameSite=Lax, Path `/api/auth/google`, 10 мин),
+  гасится после любого исхода callback. `access_type=offline` и
+  `prompt=consent` — refresh token приходит и при повторном подключении.
+  Выданный scope проверяется: экран согласия Google позволяет снять
+  галочку календаря.
+- Хранение: `users.google_refresh_token bytea` (миграция `0012`) —
+  AES-256-GCM, ключ `GOOGLE_TOKEN_KEY` (base64 от 32 байт), формат
+  версия (1 байт) ‖ nonce (12) ‖ шифртекст с тегом, в associated data —
+  id пользователя: шифртекст из чужой строки не расшифруется.
+- Ротация ключа: замена `GOOGLE_TOKEN_KEY` делает сохранённые токены
+  нечитаемыми — `/account` показывает «не подключён», calendar_sync
+  пропускает уроки со строкой в журнале, преподаватели подключаются заново.
+  Для пяти человек это дешевле схемы из двух ключей. Байт версии оставляет
+  место для неё (id ключа, старый ключ только на чтение, перешифровка при
+  использовании), если преподавателей станет много.
+- Отключение стирает токен и затем отзывает его в Google
+  (`oauth2.googleapis.com/revoke`); отзыв по возможности — сбой только
+  в журнале. Отозванный в Google или истёкший токен (`invalid_grant`
+  при обновлении) worker снимает сам.
+- `calendar_sync` ставится в транзакции создания, переноса и отмены урока
+  и только если у организатора есть токен. Проверка — `FOR SHARE` на его
+  строке users первой в транзакции: порядок блокировок users → lessons тот
+  же, что у подключения, и урок, созданный одновременно с подключением,
+  не теряется. Подключение ставит джобы для всех будущих `scheduled`-уроков
+  преподавателя — заведённые раньше тоже попадают в календарь.
+- Идемпотентность: id события назначаем сами в той же транзакции —
+  `gcal_event_id` = 32 hex-символа `gen_random_uuid()` (алфавит base32hex,
+  который принимает Calendar API). Хендлер делает insert с этим id;
+  409 duplicate → update (так советует справочник ошибок Calendar API);
+  404/410 на удалении — успех. Событие строится из текущего состояния урока,
+  поэтому порядок и повторы джоб не важны. Payload — `{"lesson_id"}`,
+  у отмены ещё `teacher_id` и `event_id`: строки урока к запуску уже нет.
+  После insert/update хендлер проверяет, что урок не отменили за время
+  вызова, иначе удаляет событие сам.
+- Событие: основной календарь (`primary`) преподавателя; summary —
+  название события или имя группы; description —
+  `https://<DOMAIN>/lesson/{id}`; attendees — `lesson_participants` без
+  гостей (синтетический email, ADR-010) и без самого преподавателя;
+  `sendUpdates=all` во всех трёх вызовах.
+- Без любого из трёх ключей интеграция выключена (`gcal.New` → nil, как
+  `storage.New`): старт — 503, `/account` пишет «недоступно», worker снимает
+  calendar_sync со строкой в журнале. Битый ключ — ошибка старта api
+  и worker, как пустой регион у storage. Worker с ключами требует `DOMAIN`.
+**Последствия.** `update` перезаписывает событие целиком (patch-семантики
+у метода нет): правки руками в Google при переносе теряются. Состав группы,
+изменённый после создания урока, в календарь не попадает — участники урока
+и так снапшот. Access token обновляется в каждой джобе — лишний запрос
+к Google, на нашем масштабе незаметно. Откат `0012` удаляет токены
+и ожидающие calendar_sync. С настоящим Google ничего не проверено: OAuth-
+клиента у стенда нет, всё покрыто httptest-фейком (долг D-13).
+
+<!-- Следующие ADR добавлять ниже по мере реализации. -->
