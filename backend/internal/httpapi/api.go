@@ -138,10 +138,11 @@ func (a *API) Router() http.Handler {
 	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
 
 	// S1-1: Google Calendar преподавателя (ADR-023). Callback — GET:
-	// сюда браузер возвращается со страницы согласия Google
+	// сюда браузер возвращается со страницы согласия Google. Он без
+	// teacher(): сессию проверяет сам и отвечает редиректом, а не JSON
 	mux.Handle("GET /auth/google", teacher(a.handleGoogleStatus))
 	mux.Handle("POST /auth/google/start", teacher(a.handleGoogleStart))
-	mux.Handle("GET /auth/google/callback", teacher(a.handleGoogleCallback))
+	mux.HandleFunc("GET /auth/google/callback", a.handleGoogleCallback)
 	mux.Handle("DELETE /auth/google", teacher(a.handleGoogleDisconnect))
 	return mux
 }

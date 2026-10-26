@@ -2,12 +2,18 @@ package gcal
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 func testConfig(key string) Config {
@@ -107,5 +113,80 @@ func TestAuthCodeURL(t *testing.T) {
 	}
 	if _, again := c.AuthCodeURL("fixture-state"); again == verifier {
 		t.Fatal("verifier must be fresh for every start")
+	}
+}
+
+// Cookie подключения открывается только для того же преподавателя, тем же
+// ключом и до срока; шифртекст токена и cookie друг за друга не сойдут.
+func TestFlowCookie(t *testing.T) {
+	c, _ := New(testConfig(testKey(1)))
+	now := time.Now()
+	flow := Flow{State: "fixture-state", Verifier: "fixture-verifier", Expires: now.Add(10 * time.Minute)}
+	value, err := c.SealFlow(7, flow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(value, flow.State) || strings.Contains(value, flow.Verifier) || url.QueryEscape(value) != value {
+		t.Fatalf("cookie value %q leaks the flow or is not cookie-safe", value)
+	}
+	got, err := c.OpenFlow(7, value, now)
+	if err != nil || got.State != flow.State || got.Verifier != flow.Verifier || !got.Expires.Equal(flow.Expires) {
+		t.Fatalf("OpenFlow = %+v, %v", got, err)
+	}
+	other, _ := New(testConfig(testKey(2)))
+	raw, _ := base64.RawURLEncoding.DecodeString(value)
+	token, _ := c.Seal(7, "1//refresh-token-fixture")
+	for name, open := range map[string]func() error{
+		"other user":    func() error { _, err := c.OpenFlow(8, value, now); return err },
+		"other key":     func() error { _, err := other.OpenFlow(7, value, now); return err },
+		"expired":       func() error { _, err := c.OpenFlow(7, value, flow.Expires); return err },
+		"plain":         func() error { _, err := c.OpenFlow(7, "fixture-state.fixture-verifier", now); return err },
+		"token as flow": func() error { _, err := c.OpenFlow(7, base64.RawURLEncoding.EncodeToString(token), now); return err },
+		"flow as token": func() error { _, err := c.Open(7, raw); return err },
+	} {
+		if open() == nil {
+			t.Errorf("%s: opened", name)
+		}
+	}
+}
+
+// Вызов Calendar API ограничен своим контекстом, а не Timeout клиента:
+// зависший Google обрывается по сроку, и x/oauth2 не пишет в журнал
+// «Transport.CancelRequest no longer does anything».
+func TestCalendarRequestTimeout(t *testing.T) {
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"fixture-access","token_type":"Bearer","expires_in":3599}`))
+			return
+		}
+		select { // Calendar API висит
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	cfg := testConfig(testKey(1))
+	cfg.TokenURL, cfg.CalendarURL = srv.URL+"/token", srv.URL
+	c, _ := New(cfg)
+	c.timeout = 100 * time.Millisecond
+
+	cal := c.Calendar(context.Background(), "1//refresh-token-fixture")
+	if cal.http.Timeout != 0 {
+		t.Fatalf("Calendar API client has Timeout %s: net/http would cancel through oauth2.Transport", cal.http.Timeout)
+	}
+	start := time.Now()
+	err := cal.Delete(context.Background(), "fixtureevent")
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+		t.Fatalf("Delete = %v after %s, want the per-request deadline", err, time.Since(start))
+	}
+	if strings.Contains(logs.String(), "CancelRequest") {
+		t.Fatalf("misleading oauth2 log line: %s", logs.String())
 	}
 }

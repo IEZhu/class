@@ -15,6 +15,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,7 +97,12 @@ type Client struct {
 	aead        cipher.AEAD
 	revokeURL   string
 	calendarURL string
-	http        *http.Client
+	// http — для обмена кода, обновления access token и отзыва: у этих
+	// запросов потолок — Timeout клиента.
+	http *http.Client
+	// timeout — потолок одного вызова Calendar API (Calendar.do);
+	// requestTimeout, тесты ставят короче.
+	timeout time.Duration
 }
 
 // New возвращает nil без ошибки, пока задан не каждый ключ: стенд
@@ -136,6 +142,7 @@ func New(cfg Config) (*Client, error) {
 		revokeURL:   or(cfg.RevokeURL, defaultRevokeURL),
 		calendarURL: strings.TrimSuffix(or(cfg.CalendarURL, defaultCalendarURL), "/"),
 		http:        &http.Client{Timeout: requestTimeout},
+		timeout:     requestTimeout,
 	}, nil
 }
 
@@ -155,7 +162,7 @@ func (c *Client) withHTTP(ctx context.Context) context.Context {
 // AuthCodeURL — адрес экрана согласия и PKCE-verifier к нему (ADR-023).
 // access_type=offline даёт refresh token; prompt=consent — даёт его и при
 // повторном подключении, иначе Google присылает только access token.
-// state и verifier api держит в cookie до возврата на callback.
+// state и verifier api держит в cookie до возврата на callback (SealFlow).
 func (c *Client) AuthCodeURL(state string) (authURL, verifier string) {
 	verifier = oauth2.GenerateVerifier()
 	return c.oauth.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce,
@@ -181,7 +188,8 @@ func (c *Client) Exchange(ctx context.Context, code, verifier string) (string, e
 }
 
 // Revoke отзывает токен в Google: у отключённого календаря не должно
-// остаться рабочей копии токена, например в бэкапе БД.
+// остаться рабочей копии токена, например в бэкапе БД. Потолок — Timeout
+// клиента, поэтому вызывающий может отвязать ctx от запроса браузера.
 func (c *Client) Revoke(ctx context.Context, token string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.revokeURL,
 		strings.NewReader(url.Values{"token": {token}}.Encode()))
@@ -208,30 +216,88 @@ const sealVersion = 1
 // версия ‖ nonce ‖ шифртекст с тегом. id пользователя — в associated data:
 // шифртекст, перенесённый в чужую строку, не расшифруется.
 func (c *Client) Seal(userID int64, token string) ([]byte, error) {
-	out := make([]byte, 1+c.aead.NonceSize(), 1+c.aead.NonceSize()+len(token)+c.aead.Overhead())
-	out[0] = sealVersion
-	if _, err := io.ReadFull(rand.Reader, out[1:]); err != nil {
-		return nil, err
-	}
-	return c.aead.Seal(out, out[1:], []byte(token), sealAAD(userID)), nil
+	return c.seal(tokenAAD(userID), []byte(token))
 }
 
 // Open — обратное к Seal. Ошибка — другой ключ (сменили GOOGLE_TOKEN_KEY),
 // чужая строка или порча.
 func (c *Client) Open(userID int64, sealed []byte) (string, error) {
-	n := c.aead.NonceSize()
-	if len(sealed) < 1+n || sealed[0] != sealVersion {
-		return "", errors.New("gcal: неизвестный формат шифртекста")
-	}
-	plain, err := c.aead.Open(nil, sealed[1:1+n], sealed[1+n:], sealAAD(userID))
+	plain, err := c.open(tokenAAD(userID), sealed)
 	if err != nil {
 		return "", fmt.Errorf("gcal: токен не расшифровывается: %w", err)
 	}
 	return string(plain), nil
 }
 
-func sealAAD(userID int64) []byte {
+// Flow — state и PKCE-verifier одного подключения: api держит их в cookie,
+// пока преподаватель на экране согласия Google (ADR-023).
+type Flow struct {
+	State    string    `json:"state"`
+	Verifier string    `json:"verifier"`
+	Expires  time.Time `json:"expires"`
+}
+
+// SealFlow — значение cookie для Flow: тот же AES-256-GCM, что у токенов,
+// с id преподавателя в associated data. Cookie, подложенный чужим сайтом
+// или выданный другой учётке, не откроется: без ключа его не собрать.
+func (c *Client) SealFlow(userID int64, f Flow) (string, error) {
+	plain, err := json.Marshal(f)
+	if err != nil {
+		return "", err
+	}
+	sealed, err := c.seal(flowAAD(userID), plain)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
+}
+
+// OpenFlow — обратное к SealFlow. Ошибка — cookie чужой, испорчен или
+// старше Flow.Expires на момент now.
+func (c *Client) OpenFlow(userID int64, value string, now time.Time) (Flow, error) {
+	var f Flow
+	sealed, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return f, fmt.Errorf("gcal: cookie подключения: %w", err)
+	}
+	plain, err := c.open(flowAAD(userID), sealed)
+	if err != nil {
+		return f, fmt.Errorf("gcal: cookie подключения не расшифровывается: %w", err)
+	}
+	if err := json.Unmarshal(plain, &f); err != nil {
+		return f, fmt.Errorf("gcal: cookie подключения: %w", err)
+	}
+	if !now.Before(f.Expires) {
+		return f, errors.New("gcal: cookie подключения истёк")
+	}
+	return f, nil
+}
+
+// seal — версия ‖ nonce ‖ шифртекст с тегом; aad разводит назначения
+// одного ключа: токен из cookie не откроется как токен из users и наоборот.
+func (c *Client) seal(aad, plain []byte) ([]byte, error) {
+	out := make([]byte, 1+c.aead.NonceSize(), 1+c.aead.NonceSize()+len(plain)+c.aead.Overhead())
+	out[0] = sealVersion
+	if _, err := io.ReadFull(rand.Reader, out[1:]); err != nil {
+		return nil, err
+	}
+	return c.aead.Seal(out, out[1:], plain, aad), nil
+}
+
+func (c *Client) open(aad, sealed []byte) ([]byte, error) {
+	n := c.aead.NonceSize()
+	if len(sealed) < 1+n || sealed[0] != sealVersion {
+		return nil, errors.New("gcal: неизвестный формат шифртекста")
+	}
+	return c.aead.Open(nil, sealed[1:1+n], sealed[1+n:], aad)
+}
+
+func tokenAAD(userID int64) []byte {
 	return []byte("users.google_refresh_token:" + strconv.FormatInt(userID, 10))
+}
+
+func flowAAD(userID int64) []byte {
+	return []byte("google_oauth:" + strconv.FormatInt(userID, 10))
 }
 
 func responseError(res *http.Response) string {

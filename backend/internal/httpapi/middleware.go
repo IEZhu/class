@@ -21,15 +21,27 @@ func userFrom(ctx context.Context) *store.User {
 	return u
 }
 
+// errNoSession — в запросе нет cookie сессии.
+var errNoSession = errors.New("нет cookie сессии")
+
+// sessionUser — владелец сессии из cookie: errNoSession — cookie нет,
+// store.ErrNotFound — сессия недействительна (истекла, вышли).
+func (a *API) sessionUser(r *http.Request) (*store.User, error) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		return nil, errNoSession
+	}
+	return a.store.UserBySessionTokenHash(r.Context(), hashToken(c.Value))
+}
+
 // requireUser — 401 без валидной сессии; кладёт пользователя в контекст запроса.
 func (a *API) requireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookie)
-		if err != nil || c.Value == "" {
+		u, err := a.sessionUser(r)
+		if errors.Is(err, errNoSession) {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "требуется вход")
 			return
 		}
-		u, err := a.store.UserBySessionTokenHash(r.Context(), hashToken(c.Value))
 		if errors.Is(err, store.ErrNotFound) {
 			// сбросить битый cookie, чтобы клиент не долбился с ним до logout
 			http.SetCookie(w, sessionCookieFor("", -1))

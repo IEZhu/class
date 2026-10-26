@@ -32,7 +32,8 @@ func recordingReady(st *store.Store) jobs.Handler {
 }
 
 // RegisterCalendar — S1-1: джоба calendar_sync (ADR-023). cal == nil —
-// Google не настроен: джобы снимаются со строкой в журнале, а не копятся.
+// Google не настроен: создание и перенос снимаются со строкой в журнале,
+// удаления событий ждут в очереди (calendarSync.remove).
 // publicBaseURL — https://<DOMAIN> для ссылки на урок в описании события.
 func RegisterCalendar(r *jobs.Runner, st *store.Store, cal *gcal.Client, publicBaseURL string) {
 	r.Handle(store.JobCalendarSync, calendarSync{st: st, cal: cal, publicBaseURL: publicBaseURL}.handle)

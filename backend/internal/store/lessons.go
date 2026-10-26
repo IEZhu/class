@@ -254,10 +254,6 @@ func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	calendar, err := calendarConnected(ctx, tx, teacherID)
-	if err != nil {
-		return err
-	}
 	if err := lessonForUpdate(ctx, tx, lessonID, teacherID); err != nil {
 		return err
 	}
@@ -266,8 +262,10 @@ func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) err
 		`DELETE FROM lessons WHERE id = $1 RETURNING gcal_event_id`, lessonID).Scan(&eventID); err != nil {
 		return err
 	}
-	// Без id событие в календарь не ставилось: удалять нечего
-	if calendar && eventID != nil {
+	// Без id событие в календарь не ставилось: удалять нечего. С id
+	// удаление ставится и без подключения: событие могло появиться раньше,
+	// и джоба дождётся нового токена (ADR-023)
+	if eventID != nil {
 		if _, err := jobs.Enqueue(ctx, tx, JobCalendarSync,
 			CalendarSync{LessonID: lessonID, TeacherID: teacherID, EventID: *eventID}); err != nil {
 			return err

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,17 +13,19 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/jobs"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/worker"
 )
 
-// calendarWorker — worker с одной джобой calendar_sync против фейка Google;
-// drain выполняет всё, что готово к запуску.
-func calendarWorker(t *testing.T, a *API) func() {
+// calendarWorker — worker с одной джобой calendar_sync против фейка Google
+// с клиентом cal (его ключ расшифровывает токены); drain выполняет всё,
+// что готово к запуску.
+func calendarWorker(t *testing.T, a *API, cal *gcal.Client) func() {
 	t.Helper()
 	runner := jobs.NewRunner(a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
-	worker.RegisterCalendar(runner, a.store, a.google, "https://class.example")
+	worker.RegisterCalendar(runner, a.store, cal, "https://class.example")
 	return func() {
 		t.Helper()
 		for {
@@ -74,7 +77,7 @@ func TestCalendarSyncLifecycle(t *testing.T) {
 	f := withFakeGoogle(t, a)
 	h := a.Router()
 	logs := captureLog(t)
-	drain := calendarWorker(t, a)
+	drain := calendarWorker(t, a, a.google)
 
 	teacherID, teacher := securityUser(t, a, conn, store.RoleTeacher, "teacher")
 	student1, _ := securityUser(t, a, conn, store.RoleStudent, "student1")
@@ -223,7 +226,9 @@ func TestCalendarSyncLifecycle(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	expectStatus(t, securityRequest(h, "DELETE", "/auth/google", "", teacher), http.StatusNoContent)
+	if !googleDisconnect(t, h, teacher) {
+		t.Fatal("disconnect did not revoke")
+	}
 	drain()
 	expectNoPendingJobs(t, conn)
 	if got := f.takeCalls(); len(got) != 0 {
@@ -232,7 +237,8 @@ func TestCalendarSyncLifecycle(t *testing.T) {
 	if want := fmt.Sprintf("урок %d пропущен: у преподавателя %d не подключён Google Calendar", created.ID, teacherID); !strings.Contains(logs.String(), want) {
 		t.Fatalf("no skip line %q in log:\n%s", want, logs.String())
 	}
-	// Без подключения уроки джоб не ставят вовсе
+	// Без подключения создание урока джоб не ставит вовсе (отмена — ставит,
+	// TestCalendarCancelSurvivesTokenLoss)
 	expectStatus(t, securityRequest(h, "POST", "/lessons", createBody, teacher), http.StatusCreated)
 	if got := calendarJobs(t, conn); len(got) != 0 {
 		t.Fatalf("jobs without connection %v", got)
@@ -245,6 +251,178 @@ func TestCalendarSyncLifecycle(t *testing.T) {
 	expectNoPendingJobs(t, conn)
 	if sealed := storedGoogleToken(t, conn, teacherID); sealed != nil {
 		t.Fatal("revoked token kept")
+	}
+	if !strings.Contains(logs.String(), "отозвал доступ к календарю") {
+		t.Fatalf("no revoke line in log:\n%s", logs.String())
+	}
+}
+
+// createOpenLesson — событие без группы через api: id и id события в Google.
+func createOpenLesson(t *testing.T, conn *pgx.Conn, h http.Handler, teacher *http.Cookie, start time.Time) (int64, string) {
+	t.Helper()
+	w := securityRequest(h, "POST", "/lessons", fmt.Sprintf(`{"title":"Open",%s}`, lessonTimes(start)), teacher)
+	expectStatus(t, w, http.StatusCreated)
+	var created lessonResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	return created.ID, lessonEventID(t, conn, created.ID)
+}
+
+// Отмена урока без рабочего токена не теряется: удаление ждёт в очереди
+// (исчерпав попытки — мёртвым), новое подключение возвращает его в работу,
+// и событие отменённого урока уходит из календаря.
+func TestCalendarCancelSurvivesTokenLoss(t *testing.T) {
+	for _, mode := range []string{"disconnect", "invalid_grant", "key_change"} {
+		t.Run(mode, func(t *testing.T) {
+			a, conn := securityDB(t)
+			ctx := context.Background()
+			f := withFakeGoogle(t, a)
+			h := a.Router()
+			logs := captureLog(t)
+			drain := calendarWorker(t, a, a.google)
+			teacherID, teacher := securityUser(t, a, conn, store.RoleTeacher, "teacher")
+			connectTeacherGoogle(t, f, h, teacher)
+			start := time.Now().Add(24 * time.Hour).Truncate(time.Second).UTC()
+			lessonID, eventID := createOpenLesson(t, conn, h, teacher, start)
+			drain()
+			if got := f.takeCalls(); !slices.Equal(got, []string{"POST " + eventID}) {
+				t.Fatalf("create calls %v", got)
+			}
+			path := fmt.Sprintf("/lessons/%d", lessonID)
+
+			switch mode {
+			case "disconnect":
+				if !googleDisconnect(t, h, teacher) {
+					t.Fatal("disconnect did not revoke")
+				}
+			case "invalid_grant":
+				f.with(func() { f.revoked = true })
+			case "key_change":
+				// Сменили GOOGLE_TOKEN_KEY: worker старый токен не расшифрует.
+				// Перенос пропускается со строкой в журнале, без повторов
+				otherKey, err := gcal.New(fakeGoogleConfig(f.srv.URL, 2))
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.google = otherKey
+				drain = calendarWorker(t, a, otherKey)
+				expectStatus(t, securityRequest(h, "PATCH", path, "{"+lessonTimes(start.Add(time.Hour))+"}", teacher), http.StatusOK)
+				drain()
+				expectNoPendingJobs(t, conn)
+				want := fmt.Sprintf("урок %d пропущен: токен преподавателя %d не расшифровывается", lessonID, teacherID)
+				if !strings.Contains(logs.String(), want) {
+					t.Fatalf("no skip line %q in log:\n%s", want, logs.String())
+				}
+			}
+
+			expectStatus(t, securityRequest(h, "DELETE", path, "", teacher), http.StatusNoContent)
+			cancel := store.CalendarSync{LessonID: lessonID, TeacherID: teacherID, EventID: eventID}
+			if got := calendarJobs(t, conn); len(got) != 1 || got[0] != cancel {
+				t.Fatalf("cancel queued %v, want %v", got, cancel)
+			}
+			drain()
+			var attempts int
+			var lastError string
+			if err := conn.QueryRow(ctx, `SELECT attempts, last_error FROM jobs WHERE failed_at IS NULL AND run_at > now()`).Scan(&attempts, &lastError); err != nil ||
+				attempts != 1 || !strings.Contains(lastError, "ждёт повторного подключения календаря") {
+				t.Fatalf("parked delete: attempts %d, last_error %q, %v", attempts, lastError, err)
+			}
+			if got := f.takeCalls(); len(got) != 0 {
+				t.Fatalf("calls without a usable token %v", got)
+			}
+			if mode == "invalid_grant" {
+				if storedGoogleToken(t, conn, teacherID) != nil {
+					t.Fatal("revoked token kept")
+				}
+				// Попытки кончились, джоба мертва — подключение оживит и её
+				if _, err := conn.Exec(ctx, `UPDATE jobs SET failed_at = now(), attempts = 8`); err != nil {
+					t.Fatal(err)
+				}
+				f.with(func() { f.revoked = false })
+			}
+			f.with(func() {
+				if _, ok := f.events[eventID]; !ok {
+					t.Fatal("event gone before the delete ran")
+				}
+			})
+
+			connectTeacherGoogle(t, f, h, teacher)
+			if got := calendarJobs(t, conn); len(got) != 1 || got[0] != cancel {
+				t.Fatalf("reconnect re-armed %v, want %v", got, cancel)
+			}
+			drain()
+			expectNoPendingJobs(t, conn)
+			if got := f.takeCalls(); !slices.Equal(got, []string{"DELETE " + eventID}) {
+				t.Fatalf("calls after reconnect %v", got)
+			}
+			f.with(func() {
+				if len(f.events) != 0 {
+					t.Fatalf("cancelled lesson's event survives reconnect: %+v", f.events)
+				}
+			})
+		})
+	}
+}
+
+// Отмена пришла, пока шёл insert: её джоба уже получила 404 (события ещё
+// не было), поэтому upsert, не найдя урока после записи, удаляет событие сам.
+func TestCalendarSyncCancelDuringWrite(t *testing.T) {
+	a, conn := securityDB(t)
+	f := withFakeGoogle(t, a)
+	h := a.Router()
+	drain := calendarWorker(t, a, a.google)
+	_, teacher := securityUser(t, a, conn, store.RoleTeacher, "teacher")
+	connectTeacherGoogle(t, f, h, teacher)
+	lessonID, eventID := createOpenLesson(t, conn, h, teacher, time.Now().Add(24*time.Hour).Truncate(time.Second).UTC())
+	f.with(func() {
+		f.onInsert = func(string) {
+			if _, err := conn.Exec(context.Background(), `DELETE FROM lessons WHERE id = $1`, lessonID); err != nil {
+				f.t.Error(err)
+			}
+		}
+	})
+	drain()
+	expectNoPendingJobs(t, conn)
+	if got := f.takeCalls(); !slices.Equal(got, []string{"POST " + eventID, "DELETE " + eventID}) {
+		t.Fatalf("calls %v", got)
+	}
+	f.with(func() {
+		if len(f.events) != 0 {
+			t.Fatalf("event of the cancelled lesson left: %+v", f.events)
+		}
+	})
+}
+
+// invalid_grant у джобы со старым шифртекстом не стирает токен, который
+// преподаватель успел сохранить заново: ClearGoogleToken сравнивает шифртекст.
+func TestCalendarSyncStaleRevokeKeepsFreshToken(t *testing.T) {
+	a, conn := securityDB(t)
+	f := withFakeGoogle(t, a)
+	h := a.Router()
+	logs := captureLog(t)
+	drain := calendarWorker(t, a, a.google)
+	teacherID, teacher := securityUser(t, a, conn, store.RoleTeacher, "teacher")
+	connectTeacherGoogle(t, f, h, teacher)
+	fresh, err := a.google.Seal(teacherID, fakeRefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.with(func() {
+		f.revoked = true
+		f.onRefresh = func() {
+			// Переподключение, пока джоба ждала ответа Google
+			if _, err := conn.Exec(context.Background(),
+				`UPDATE users SET google_refresh_token = $2 WHERE id = $1`, teacherID, fresh); err != nil {
+				f.t.Error(err)
+			}
+		}
+	})
+	createOpenLesson(t, conn, h, teacher, time.Now().Add(24*time.Hour).Truncate(time.Second).UTC())
+	drain()
+	expectNoPendingJobs(t, conn)
+	if got := storedGoogleToken(t, conn, teacherID); !bytes.Equal(got, fresh) {
+		t.Fatal("a stale invalid_grant wiped the fresh token")
 	}
 	if !strings.Contains(logs.String(), "отозвал доступ к календарю") {
 		t.Fatalf("no revoke line in log:\n%s", logs.String())

@@ -40,15 +40,21 @@ type fakeGoogle struct {
 	mu sync.Mutex
 	// challenge — code_challenge последнего старта: обмен кода без
 	// подходящего verifier отклоняется, как у Google
-	challenge string
-	scope     string // scope в ответе обмена кода
-	revoked   bool   // обновление refresh token → invalid_grant
-	failNext  int    // код ответа следующего вызова Calendar API
-	exchanges int
-	calls     []string // "METHOD id" вызовов Calendar API
-	events    map[string]fakeEvent
-	deleted   map[string]bool
-	revokes   []string
+	challenge  string
+	scope      string // scope в ответе обмена кода
+	revoked    bool   // обновление refresh token → invalid_grant
+	failNext   int    // код ответа следующего вызова Calendar API
+	revokeFail int    // код ответа отзыва вместо 200
+	exchanges  int
+	calls      []string // "METHOD id" вызовов Calendar API
+	events     map[string]fakeEvent
+	deleted    map[string]bool
+	revokes    []string
+	// Хуки под мьютексом фейка: событие посреди вызова worker'а или api.
+	// Тест в это время ждёт ответа, поэтому conn в хуке свободен
+	onInsert  func(id string) // после создания события
+	onRefresh func()          // до ответа на обновление access token
+	onRevoke  func()          // до ответа на отзыв
 }
 
 type fakeEvent struct {
@@ -81,11 +87,7 @@ func withFakeGoogle(t *testing.T, a *API) *fakeGoogle {
 	f := &fakeGoogle{t: t, scope: gcal.Scope, events: map[string]fakeEvent{}, deleted: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", f.token)
-	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.revokes = append(f.revokes, r.FormValue("token"))
-	})
+	mux.HandleFunc("POST /revoke", f.revoke)
 	mux.HandleFunc("/calendar/v3/calendars/primary/events", f.calendar)
 	mux.HandleFunc("/calendar/v3/calendars/primary/events/{id}", f.calendar)
 	f.srv = httptest.NewServer(mux)
@@ -127,6 +129,9 @@ func (f *fakeGoogle) token(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"access_token": fakeAccessToken, "token_type": "Bearer",
 			"expires_in": 3599, "refresh_token": fakeRefreshToken, "scope": f.scope})
 	case "refresh_token":
+		if f.onRefresh != nil {
+			f.onRefresh()
+		}
 		if f.revoked || r.FormValue("refresh_token") != fakeRefreshToken {
 			f.oauthError(w, "invalid_grant")
 			return
@@ -139,6 +144,19 @@ func (f *fakeGoogle) token(w http.ResponseWriter, r *http.Request) {
 
 func (f *fakeGoogle) oauthError(w http.ResponseWriter, code string) {
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": code})
+}
+
+func (f *fakeGoogle) revoke(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.onRevoke != nil {
+		f.onRevoke()
+	}
+	if f.revokeFail != 0 {
+		http.Error(w, "backendError", f.revokeFail)
+		return
+	}
+	f.revokes = append(f.revokes, r.FormValue("token"))
 }
 
 func (f *fakeGoogle) calendar(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +191,9 @@ func (f *fakeGoogle) calendar(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost, r.Method == http.MethodPut && (exists || f.deleted[id]):
 		f.events[id] = ev
 		delete(f.deleted, id)
+		if r.Method == http.MethodPost && f.onInsert != nil {
+			f.onInsert(id)
+		}
 		writeJSON(w, http.StatusOK, ev)
 	case r.Method == http.MethodDelete && exists:
 		delete(f.events, id)
@@ -227,19 +248,39 @@ func startGoogle(t *testing.T, f *fakeGoogle, h http.Handler, cookie *http.Cooki
 	return nil, nil
 }
 
-// googleCallback — возврат браузера с Google: cookie сессии и state.
-func googleCallback(t *testing.T, h http.Handler, query url.Values, cookies ...*http.Cookie) string {
-	t.Helper()
+// callbackRequest — возврат браузера с Google: cookie сессии и state.
+func callbackRequest(h http.Handler, query url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	r := httptest.NewRequest("GET", "/auth/google/callback?"+query.Encode(), nil)
 	for _, c := range cookies {
 		r.AddCookie(c)
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
+	return w
+}
+
+// clearsStateCookie — ответ гасит одноразовый cookie подключения; для
+// префикса __Host- браузер примет это только с Secure и Path=/.
+func clearsStateCookie(w *httptest.ResponseRecorder) bool {
+	for _, c := range w.Result().Cookies() {
+		if c.Name == googleStateCookie && c.MaxAge < 0 && c.Secure && c.Path == "/" && c.Domain == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// googleCallback — callback в сессии: итог из редиректа на /account.
+func googleCallback(t *testing.T, h http.Handler, query url.Values, cookies ...*http.Cookie) string {
+	t.Helper()
+	w := callbackRequest(h, query, cookies...)
 	expectStatus(t, w, http.StatusSeeOther)
 	loc, err := url.Parse(w.Header().Get("Location"))
 	if err != nil || loc.Path != "/account" {
 		t.Fatalf("callback redirected to %q", w.Header().Get("Location"))
+	}
+	if !clearsStateCookie(w) {
+		t.Fatal("callback must clear the one-time state cookie")
 	}
 	return loc.Query().Get("google")
 }
@@ -251,6 +292,19 @@ func connectTeacherGoogle(t *testing.T, f *fakeGoogle, h http.Handler, teacher *
 	if got := googleCallback(t, h, url.Values{"state": {q.Get("state")}, "code": {fakeAuthCode}}, teacher, state); got != googleConnected {
 		t.Fatalf("connect result %q", got)
 	}
+}
+
+// googleDisconnect — DELETE /auth/google; true — токен отозван в Google
+// или его и не было.
+func googleDisconnect(t *testing.T, h http.Handler, cookie *http.Cookie) bool {
+	t.Helper()
+	w := securityRequest(h, "DELETE", "/auth/google", "", cookie)
+	expectStatus(t, w, http.StatusOK)
+	var resp googleDisconnectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp.Revoked
 }
 
 func googleStatus(t *testing.T, h http.Handler, cookie *http.Cookie) googleStatusResponse {
@@ -327,14 +381,14 @@ func TestGoogleConnectStoresOnlyEncryptedToken(t *testing.T) {
 	studentID, student := securityUser(t, a, conn, store.RoleStudent, "student")
 	_, admin := securityUser(t, a, conn, store.RoleAdmin, "admin")
 
-	// Календарь — только у преподавателя: уроки создаёт он один
+	// Календарь — только у преподавателя: уроки создаёт он один. Callback
+	// проверяет сессию сам (TestGoogleCallbackBoundToSession)
 	for _, cookie := range []*http.Cookie{student, admin} {
 		expectStatus(t, securityRequest(h, "GET", "/auth/google", "", cookie), http.StatusForbidden)
 		expectStatus(t, securityRequest(h, "POST", "/auth/google/start", "", cookie), http.StatusForbidden)
-		expectStatus(t, securityRequest(h, "GET", "/auth/google/callback?state=x&code="+fakeAuthCode, "", cookie), http.StatusForbidden)
 		expectStatus(t, securityRequest(h, "DELETE", "/auth/google", "", cookie), http.StatusForbidden)
 	}
-	for _, route := range []string{"GET /auth/google", "POST /auth/google/start", "GET /auth/google/callback", "DELETE /auth/google"} {
+	for _, route := range []string{"GET /auth/google", "POST /auth/google/start", "DELETE /auth/google"} {
 		method, path, _ := strings.Cut(route, " ")
 		expectStatus(t, securityRequest(h, method, path, "", nil), http.StatusUnauthorized)
 	}
@@ -355,17 +409,29 @@ func TestGoogleConnectStoresOnlyEncryptedToken(t *testing.T) {
 	}
 
 	state, q := startGoogle(t, f, h, teacher)
-	stateValue, verifier, _ := strings.Cut(state.Value, ".")
-	if !state.HttpOnly || !state.Secure || state.SameSite != http.SameSiteLaxMode ||
-		state.Path != "/api/auth/google" || state.MaxAge != int(googleStateTTL.Seconds()) ||
-		q.Get("state") != stateValue || q.Get("code_challenge") != oauth2.S256ChallengeFromVerifier(verifier) ||
+	flow, err := a.google.OpenFlow(teacherID, state.Value, time.Now())
+	if err != nil {
+		t.Fatalf("state cookie does not open for its teacher: %v", err)
+	}
+	stateValue := flow.State
+	if until := time.Until(flow.Expires); until <= googleStateTTL-time.Minute || until > googleStateTTL {
+		t.Fatalf("flow expires in %s, want %s", until, googleStateTTL)
+	}
+	if state.Name != "__Host-google_oauth" || !state.HttpOnly || !state.Secure || state.SameSite != http.SameSiteLaxMode ||
+		state.Path != "/" || state.Domain != "" || state.MaxAge != int(googleStateTTL.Seconds()) ||
+		q.Get("state") != stateValue || q.Get("code_challenge") != oauth2.S256ChallengeFromVerifier(flow.Verifier) ||
 		q.Get("access_type") != "offline" || q.Get("prompt") != "consent" || q.Get("scope") != gcal.Scope ||
 		q.Get("redirect_uri") != "https://class.example/api/auth/google/callback" {
 		t.Fatalf("start: cookie %+v, auth params %v", state, q)
 	}
 
 	good := url.Values{"state": {stateValue}, "code": {fakeAuthCode}}
-	forged := &http.Cookie{Name: googleStateCookie, Value: stateValue + ".forged-verifier"}
+	forgedValue, err := a.google.SealFlow(teacherID, gcal.Flow{State: stateValue,
+		Verifier: oauth2.GenerateVerifier(), Expires: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := &http.Cookie{Name: googleStateCookie, Value: forgedValue}
 	for _, attempt := range []struct {
 		query   url.Values
 		cookies []*http.Cookie
@@ -389,6 +455,11 @@ func TestGoogleConnectStoresOnlyEncryptedToken(t *testing.T) {
 	if got := googleCallback(t, h, good, teacher, forged); got != googleFailed {
 		t.Fatalf("forged verifier: %q", got)
 	}
+	f.with(func() {
+		if f.exchanges != 1 {
+			t.Fatalf("PKCE case must reach the token endpoint once, got %d", f.exchanges)
+		}
+	})
 	f.with(func() { f.scope = "openid" })
 	if got := googleCallback(t, h, good, teacher, state); got != googleScopeDenied {
 		t.Fatalf("scope denied: %q", got)
@@ -398,21 +469,8 @@ func TestGoogleConnectStoresOnlyEncryptedToken(t *testing.T) {
 		t.Fatalf("failed attempts stored a token: %x", sealed)
 	}
 
-	r := httptest.NewRequest("GET", "/auth/google/callback?"+good.Encode(), nil)
-	r.AddCookie(teacher)
-	r.AddCookie(state)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	expectStatus(t, w, http.StatusSeeOther)
-	if w.Header().Get("Location") != "/account?google=connected" {
-		t.Fatalf("redirect %q", w.Header().Get("Location"))
-	}
-	cleared := false
-	for _, c := range w.Result().Cookies() {
-		cleared = cleared || (c.Name == googleStateCookie && c.MaxAge < 0)
-	}
-	if !cleared {
-		t.Fatal("callback must clear the one-time state cookie")
+	if got := googleCallback(t, h, good, teacher, state); got != googleConnected {
+		t.Fatalf("connect: %q", got)
 	}
 
 	sealed := storedGoogleToken(t, conn, teacherID)
@@ -453,11 +511,15 @@ func TestGoogleConnectStoresOnlyEncryptedToken(t *testing.T) {
 	}
 	a.google, _ = gcal.New(fakeGoogleConfig(f.srv.URL, 1))
 
-	expectStatus(t, securityRequest(h, "DELETE", "/auth/google", "", teacher), http.StatusNoContent)
+	if !googleDisconnect(t, h, teacher) {
+		t.Fatal("disconnect did not report the revoke")
+	}
 	if sealed := storedGoogleToken(t, conn, teacherID); sealed != nil {
 		t.Fatal("disconnect left the token")
 	}
-	expectStatus(t, securityRequest(h, "DELETE", "/auth/google", "", teacher), http.StatusNoContent)
+	if !googleDisconnect(t, h, teacher) {
+		t.Fatal("repeated disconnect: nothing left at Google, want revoked=true")
+	}
 	f.with(func() {
 		if !slices.Equal(f.revokes, []string{fakeRefreshToken}) {
 			t.Fatalf("revoked at Google: %v", f.revokes)
@@ -470,7 +532,7 @@ func TestGoogleConnectStoresOnlyEncryptedToken(t *testing.T) {
 
 // Без ключей Google стенд работает: страница видит «недоступно»,
 // подключение — 503, уроки создаются без джоб, а случайная джоба
-// снимается worker'ом со строкой в журнале.
+// создания снимается worker'ом со строкой в журнале (удаление — ждёт).
 func TestGoogleUnavailableWithoutKeys(t *testing.T) {
 	a, conn := securityDB(t)
 	ctx := context.Background()
@@ -487,7 +549,16 @@ func TestGoogleUnavailableWithoutKeys(t *testing.T) {
 	if got := googleCallback(t, h, url.Values{"state": {"x"}, "code": {fakeAuthCode}}, teacher); got != googleUnavailable {
 		t.Fatalf("callback %q", got)
 	}
-	expectStatus(t, securityRequest(h, "DELETE", "/auth/google", "", teacher), http.StatusNoContent)
+	if !googleDisconnect(t, h, teacher) {
+		t.Fatal("disconnect without a token: want revoked=true")
+	}
+	// Токен остался с тех пор, когда ключи были: стереть — да, отозвать — нечем
+	if _, err := conn.Exec(ctx, `UPDATE users SET google_refresh_token = '\x01' WHERE id = $1`, teacherID); err != nil {
+		t.Fatal(err)
+	}
+	if googleDisconnect(t, h, teacher) || storedGoogleToken(t, conn, teacherID) != nil {
+		t.Fatal("disconnect without keys must wipe the token and report revoked=false")
+	}
 
 	lesson, err := a.store.CreateLesson(ctx, nil, "event", teacherID, time.Now().Add(time.Hour), time.Now().Add(2*time.Hour))
 	if err != nil {
@@ -512,6 +583,19 @@ func TestGoogleUnavailableWithoutKeys(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "Google Calendar не настроен") {
 		t.Fatalf("no log line about the skipped lesson: %s", logs.String())
+	}
+	// Удаление события без ключей не выбрасывается: ждёт в очереди
+	if _, err := jobs.Enqueue(ctx, a.store.Pool(), store.JobCalendarSync,
+		store.CalendarSync{LessonID: lesson.ID, TeacherID: teacherID, EventID: "fixtureevent"}); err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := runner.RunOnce(ctx); err != nil || !worked {
+		t.Fatalf("RunOnce = %v, %v", worked, err)
+	}
+	var lastError string
+	if err := conn.QueryRow(ctx, `SELECT last_error FROM jobs WHERE failed_at IS NULL AND run_at > now()`).Scan(&lastError); err != nil ||
+		!strings.Contains(lastError, "ждёт повторного подключения календаря: Google Calendar не настроен") {
+		t.Fatalf("delete without keys: last_error %q, %v", lastError, err)
 	}
 }
 
@@ -559,5 +643,140 @@ func TestMigration0012Reversible(t *testing.T) {
 	}
 	if !slices.Equal(kinds, []string{store.JobRecordingReady}) {
 		t.Fatalf("jobs after rollback: %v", kinds)
+	}
+}
+
+// Cookie подключения привязан к учётке, начавшей подключение: подложенный
+// (и в прежнем открытом формате state.verifier, и запечатанный чужим
+// ключом), начатый в другой сессии и истёкший отклоняются до обмена кода.
+// Callback без сессии преподавателя отвечает редиректом, а не JSON.
+func TestGoogleCallbackBoundToSession(t *testing.T) {
+	a, conn := securityDB(t)
+	f := withFakeGoogle(t, a)
+	h := a.Router()
+	victimID, victim := securityUser(t, a, conn, store.RoleTeacher, "victim")
+	otherID, other := securityUser(t, a, conn, store.RoleTeacher, "other")
+	_, student := securityUser(t, a, conn, store.RoleStudent, "student")
+	exchanges := func() int {
+		var n int
+		f.with(func() { n = f.exchanges })
+		return n
+	}
+
+	// Атакующий сам начал авторизацию со своими state и verifier
+	// и согласился своим аккаунтом Google: код у него на руках
+	verifier := oauth2.GenerateVerifier()
+	f.with(func() { f.challenge = oauth2.S256ChallengeFromVerifier(verifier) })
+	attack := url.Values{"state": {"attackerstate"}, "code": {fakeAuthCode}}
+	attackerKey, err := gcal.New(fakeGoogleConfig(f.srv.URL, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedByAttacker, err := attackerKey.SealFlow(victimID,
+		gcal.Flow{State: "attackerstate", Verifier: verifier, Expires: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"attackerstate." + verifier, sealedByAttacker} {
+		if got := googleCallback(t, h, attack, victim, &http.Cookie{Name: googleStateCookie, Value: value}); got != googleFailed {
+			t.Fatalf("planted cookie %q: %q", value, got)
+		}
+	}
+	// Старт в сессии одного преподавателя не завершается в сессии другого
+	theirCookie, q := startGoogle(t, f, h, other)
+	theirs := url.Values{"state": {q.Get("state")}, "code": {fakeAuthCode}}
+	if got := googleCallback(t, h, theirs, victim, theirCookie); got != googleFailed {
+		t.Fatalf("cross-session callback: %q", got)
+	}
+	expired, err := a.google.SealFlow(victimID, gcal.Flow{State: "fixturestate", Verifier: verifier, Expires: time.Now().Add(-time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := googleCallback(t, h, url.Values{"state": {"fixturestate"}, "code": {fakeAuthCode}}, victim,
+		&http.Cookie{Name: googleStateCookie, Value: expired}); got != googleFailed {
+		t.Fatalf("expired flow: %q", got)
+	}
+
+	// Без сессии — на вход, не преподаватель — failed; cookie гасится всегда
+	for _, tc := range []struct {
+		name    string
+		cookies []*http.Cookie
+		want    string
+	}{
+		{"no session", []*http.Cookie{theirCookie}, "/login"},
+		{"stale session", []*http.Cookie{{Name: sessionCookie, Value: "expired"}, theirCookie}, "/login"},
+		{"student", []*http.Cookie{student, theirCookie}, "/account?google=failed"},
+	} {
+		w := callbackRequest(h, theirs, tc.cookies...)
+		expectStatus(t, w, http.StatusSeeOther)
+		if got := w.Header().Get("Location"); got != tc.want || !clearsStateCookie(w) {
+			t.Fatalf("%s: redirect %q (want %q), state cookie cleared %v", tc.name, got, tc.want, clearsStateCookie(w))
+		}
+	}
+	if n := exchanges(); n != 0 {
+		t.Fatalf("refused callbacks reached the token endpoint %d times", n)
+	}
+	if storedGoogleToken(t, conn, victimID) != nil || storedGoogleToken(t, conn, otherID) != nil {
+		t.Fatal("a refused callback stored a token")
+	}
+
+	// Свой старт в своей сессии по-прежнему подключает
+	if got := googleCallback(t, h, theirs, other, theirCookie); got != googleConnected || storedGoogleToken(t, conn, otherID) == nil {
+		t.Fatalf("own callback: %q", got)
+	}
+}
+
+// Отключение: отзыв не обрывается вместе с запросом браузера, а не вышло
+// отозвать — {revoked:false}; токен у нас стёрт в любом случае.
+func TestGoogleDisconnectReportsRevoke(t *testing.T) {
+	a, conn := securityDB(t)
+	f := withFakeGoogle(t, a)
+	h := a.Router()
+	teacherID, teacher := securityUser(t, a, conn, store.RoleTeacher, "teacher")
+	revokes := func() int {
+		var n int
+		f.with(func() { n = len(f.revokes) })
+		return n
+	}
+
+	// Вкладку закрыли, пока шёл отзыв: контекст запроса отменён
+	connectTeacherGoogle(t, f, h, teacher)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.with(func() {
+		f.onRevoke = func() {
+			cancel()
+			// клиент успевает увидеть отмену раньше ответа
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	r := httptest.NewRequest("DELETE", "/auth/google", nil).WithContext(ctx)
+	r.AddCookie(teacher)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	expectStatus(t, w, http.StatusOK)
+	if strings.TrimSpace(w.Body.String()) != `{"revoked":true}` || revokes() != 1 {
+		t.Fatalf("disconnect with a cancelled request: %s, revokes %d", w.Body.String(), revokes())
+	}
+	f.with(func() { f.onRevoke = nil })
+
+	// Google не принял отзыв
+	connectTeacherGoogle(t, f, h, teacher)
+	f.with(func() { f.revokeFail = http.StatusServiceUnavailable })
+	if googleDisconnect(t, h, teacher) || storedGoogleToken(t, conn, teacherID) != nil {
+		t.Fatal("failed revoke: want revoked=false and the token wiped")
+	}
+	f.with(func() { f.revokeFail = 0 })
+
+	// Сменили GOOGLE_TOKEN_KEY: токен не расшифровать, отозвать нечем
+	connectTeacherGoogle(t, f, h, teacher)
+	before := revokes()
+	otherKey, err := gcal.New(fakeGoogleConfig(f.srv.URL, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.google = otherKey
+	if googleDisconnect(t, h, teacher) || storedGoogleToken(t, conn, teacherID) != nil || revokes() != before {
+		t.Fatal("undecryptable token: want revoked=false, the token wiped and no revoke call")
 	}
 }

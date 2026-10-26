@@ -29,16 +29,25 @@ type Event struct {
 // Access token получается при первом вызове и переиспользуется в
 // следующих: insert, получивший 409, и update после него — один обмен.
 type Calendar struct {
-	http *http.Client
-	base string
+	http    *http.Client
+	base    string
+	timeout time.Duration
 }
 
 // Calendar открывает основной календарь владельца refresh token. ctx
 // ограничивает и обновление токена, поэтому клиент живёт одну джобу.
+// Обновление идёт клиентом c.http с его Timeout, а сами вызовы API —
+// клиентом без Timeout: их потолок — контекст запроса в do. Timeout
+// у клиента oauth2 net/http исполняет через устаревший
+// Transport.CancelRequest, и тот пишет в журнал вводящую в заблуждение
+// строку «deprecated … no longer does anything».
 func (c *Client) Calendar(ctx context.Context, refreshToken string) *Calendar {
-	ctx = c.withHTTP(ctx)
-	src := c.oauth.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken})
-	return &Calendar{http: oauth2.NewClient(ctx, src), base: c.calendarURL + "/calendars/primary/events"}
+	src := c.oauth.TokenSource(c.withHTTP(ctx), &oauth2.Token{RefreshToken: refreshToken})
+	return &Calendar{
+		http:    oauth2.NewClient(ctx, src),
+		base:    c.calendarURL + "/calendars/primary/events",
+		timeout: c.timeout,
+	}
 }
 
 // Insert — events.insert; ErrConflict — событие с этим id уже есть.
@@ -60,6 +69,8 @@ func (c *Calendar) Delete(ctx context.Context, id string) error {
 // do — один вызов events с sendUpdates=all: участники получают
 // приглашение, перенос и отмену письмом от Google.
 func (c *Calendar) do(ctx context.Context, method, path string, body any) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
