@@ -1,0 +1,27 @@
+# Ночной бэкап Postgres в объектное хранилище (S1-7, ADR-014): запускается
+# таймером lingua-backup-pg.timer. Установка — deploy/README.md.
+# /opt/Class — клон репозитория на VPS; клон в другом месте — поправьте
+# WorkingDirectory и ExecStart.
+[Unit]
+Description=Lingua Class: бэкап Postgres в объектное хранилище (S1-7)
+Documentation=https://github.com/IEZhu/class/blob/main/deploy/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/Class
+ExecStart=/opt/Class/deploy/backup-pg.sh
+# Дамп содержит хэши паролей и email: временные файлы — только владельцу.
+# Данные в контейнеры идут через stdin/stdout, bind-mount'ов нет, поэтому
+# приватный /tmp юниту не мешает
+UMask=0077
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=full
+Nice=10
+IOSchedulingClass=idle
+# Зависшая сеть не должна держать юнит вечно: провал виден в
+# systemctl --failed и journalctl -u lingua-backup-pg
+TimeoutStartSec=1h
