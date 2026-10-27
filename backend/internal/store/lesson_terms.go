@@ -20,6 +20,20 @@ const (
 	CandidateManual     = "manual"
 )
 
+// MaxClickCandidates — потолок кандидатов-кликов одного урока: сверх него
+// новое слово кандидатом не становится, а клики по уже заведённым
+// считаются. Участник, кликающий всё подряд, не завалит чеклист
+// преподавателя тысячами слов (ADR-033). Потолок мягкий: параллельные
+// клики по новым словам превышают его не больше чем на число
+// одновременных запросов.
+const MaxClickCandidates = 300
+
+// MaxCandidatesPerSource — сколько кандидатов одного источника отдаёт
+// чеклист: самые частые, а подтверждённые — всегда, иначе сохранение
+// чеклиста сняло бы их со словаря урока. Столько же слов приносит один
+// разбор доски (lessonterms.MaxWhiteboardTerms).
+const MaxCandidatesPerSource = 500
+
 // JobWhiteboardTerms — разобрать доску кончившегося урока в кандидатов
 // (S3-7). Ставится переходом урока из live (closeLessonIfOver), только
 // если доску открывали.
@@ -71,20 +85,40 @@ type AssignResult struct {
 	Kept     int
 }
 
-// RecordClickCandidate — клик по слову на уроке (S3-7): кандидат
-// source='click' заводится с формой клика или его счётчик растёт на один.
+// RecordClickCandidate — клик по слову на уроке (S3-7, ADR-033): кандидат
+// source='click' заводится с формой клика, или его счётчик растёт на один,
+// если этот участник кликает слово впервые (lesson_term_clicks): count —
+// число разных кликнувших, повторные клики того же человека его не растят.
 // Пишется только клик участника из снапшота урока (lesson_participants),
 // кроме самого преподавателя: его клики по чеклисту и транскрипту —
-// не сигнал учеников. recorded — строка записана.
+// не сигнал учеников; только в окне комнаты урока (RoomWindow) — клик
+// по материалам заранее или по транскрипту после урока в чеклист уже
+// разобранного урока не попадает; новое слово — только пока кандидатов-
+// кликов урока меньше MaxClickCandidates. recorded — клик засчитан.
 func (s *Store) RecordClickCandidate(ctx context.Context, lessonID, userID, termID int64, surface string) (recorded bool, err error) {
 	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO lesson_term_candidates AS c (lesson_id, term_id, source, surface, added_by)
-		 SELECT lp.lesson_id, $3, 'click', $4, lp.user_id
-		 FROM lesson_participants lp JOIN lessons l ON l.id = lp.lesson_id
-		 WHERE lp.lesson_id = $1 AND lp.user_id = $2 AND l.teacher_id <> lp.user_id
+		`WITH clicker AS (
+		     SELECT lp.lesson_id, lp.user_id
+		     FROM lesson_participants lp JOIN lessons l ON l.id = lp.lesson_id
+		     WHERE lp.lesson_id = $1 AND lp.user_id = $2 AND l.teacher_id <> lp.user_id
+		       AND now() BETWEEN l.starts_at - $5::bigint * interval '1 second'
+		                     AND l.ends_at + $6::bigint * interval '1 second'
+		       AND (EXISTS (SELECT 1 FROM lesson_term_candidates c
+		                    WHERE c.lesson_id = $1 AND c.term_id = $3 AND c.source = 'click')
+		            OR (SELECT count(*) FROM lesson_term_candidates c
+		                WHERE c.lesson_id = $1 AND c.source = 'click') < $7)
+		 ), click AS (
+		     INSERT INTO lesson_term_clicks (lesson_id, term_id, user_id)
+		     SELECT lesson_id, $3, user_id FROM clicker
+		     ON CONFLICT DO NOTHING
+		     RETURNING lesson_id, user_id
+		 )
+		 INSERT INTO lesson_term_candidates AS c (lesson_id, term_id, source, surface, added_by)
+		 SELECT lesson_id, $3, 'click', $4, user_id FROM click
 		 ON CONFLICT (lesson_id, term_id, source) DO UPDATE
 		     SET count = c.count + 1, last_seen_at = now()`,
-		lessonID, userID, termID, surface)
+		lessonID, userID, termID, surface,
+		seconds(RoomOpensBefore), seconds(RoomClosesAfter), MaxClickCandidates)
 	if err != nil {
 		return false, err
 	}
@@ -137,16 +171,20 @@ func candidateColumns(terms []CandidateTerm) (ids []int64, surfaces []string, co
 }
 
 // LessonCandidates — кандидаты урока для чеклиста: по источникам, внутри
-// источника — частые сверху; lang — язык перевода из кэша термина.
+// источника — частые сверху, не больше MaxCandidatesPerSource на источник
+// плюс все подтверждённые; lang — язык перевода из кэша термина.
 func (s *Store) LessonCandidates(ctx context.Context, lessonID int64, lang string) ([]Candidate, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT c.term_id, t.lemma, c.surface, t.translation_cache->$2::text->>'text', c.source,
-		        c.count, c.first_seen_at, c.last_seen_at, lt.term_id IS NOT NULL
-		 FROM lesson_term_candidates c
-		 JOIN terms t ON t.id = c.term_id
-		 LEFT JOIN lesson_terms lt ON lt.lesson_id = c.lesson_id AND lt.term_id = c.term_id
-		 WHERE c.lesson_id = $1
-		 ORDER BY c.source, c.count DESC, t.lemma`, lessonID, lang)
+		`SELECT term_id, lemma, surface, translation, source, count, first_seen_at, last_seen_at, confirmed
+		 FROM (SELECT c.term_id, t.lemma, c.surface, t.translation_cache->$2::text->>'text' AS translation,
+		              c.source, c.count, c.first_seen_at, c.last_seen_at, lt.term_id IS NOT NULL AS confirmed,
+		              row_number() OVER (PARTITION BY c.source ORDER BY c.count DESC, t.lemma) AS rank
+		       FROM lesson_term_candidates c
+		       JOIN terms t ON t.id = c.term_id
+		       LEFT JOIN lesson_terms lt ON lt.lesson_id = c.lesson_id AND lt.term_id = c.term_id
+		       WHERE c.lesson_id = $1) c
+		 WHERE rank <= $3 OR confirmed
+		 ORDER BY source, count DESC, lemma`, lessonID, lang, MaxCandidatesPerSource)
 	if err != nil {
 		return nil, err
 	}

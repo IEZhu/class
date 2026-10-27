@@ -6,6 +6,7 @@ BEGIN;
 
 DELETE FROM jobs WHERE kind = 'whiteboard_terms';
 DROP TABLE lesson_terms;
+DROP TABLE lesson_term_clicks;
 DROP TABLE lesson_term_candidates;
 
 COMMIT;

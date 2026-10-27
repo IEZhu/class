@@ -50,10 +50,12 @@ terms(id, lang /*en*/, lemma /*ключ, ADR-017*/, surface /*форма пер�
 user_terms(user_id, term_id, status /*1..5: new..known*/, source_lesson_id nullable,
            added_at, updated_at, PRIMARY KEY(user_id, term_id))
 -- кандидаты словаря урока (0019, ADR-033): строка на (урок, термин, источник);
--- count — клики участников / вхождения на доске при последнем разборе / 1
+-- count — разные кликнувшие участники / вхождения на доске при последнем разборе / 1
 lesson_term_candidates(lesson_id, term_id, source /*click|whiteboard|manual*/, surface,
                        count, added_by, first_seen_at, last_seen_at,
                        PRIMARY KEY(lesson_id, term_id, source))
+-- кто из участников уже кликнул слово на уроке (0019, ADR-033)
+lesson_term_clicks(lesson_id, term_id, user_id, PRIMARY KEY(lesson_id, term_id, user_id))
 -- подтверждённый «словарь урока» (0019, ADR-034)
 lesson_terms(lesson_id, term_id, confirmed_by, confirmed_at, PRIMARY KEY(lesson_id, term_id))
 -- словарный датасет из Wiktextract (S3-4, ADR-019); с terms связан по lemma
@@ -133,7 +135,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | transcripts, utterances (миграция `0008_transcripts`); FK lessons.transcript_id | 2 | S2-1…S2-3 |
 | колонки utterances.edited_at, edited_by (миграция `0014_utterance_edits`) | 2 | S2-4 |
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
-| user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_terms (миграция `0019_lesson_terms`), whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
+| user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_term_clicks, lesson_terms (миграция `0019_lesson_terms`), whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews (миграция `0021_srs`, ADR-036) | 4 | S4-1…S4-3 |
 | cloze_tests, cloze_items, cloze_attempts | 4 | S4-4, S4-5 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
