@@ -38,16 +38,17 @@ type ClozeTarget struct {
 	Checked bool
 }
 
-// ClozeTargets — страница слов пользователя по очереди упражнения
-// (limit слов после offset): сначала те, чей показ наступил (самые
-// просроченные первыми), затем карточки на шагах обучения
-// и переобучения, затем остальные по ближайшему показу. Checked —
-// запись cloze_misses позже staleBefore и позже новых источников
-// пользователя (ADR-037): материала его урока или подтверждения файла
-// материала, своего сгенерированного текста, законченного импорта
-// Tatoeba. Реплик среди источников нет — у транскрипта нет времени
-// готовности, новые реплики слово получит, когда запись устареет.
-func (s *Store) ClozeTargets(ctx context.Context, userID int64, now, staleBefore time.Time, limit, offset int) ([]ClozeTarget, error) {
+// ClozeTargets — первые limit слов пользователя по очереди упражнения:
+// сначала те, чей показ наступил (самые просроченные первыми), затем
+// карточки на шагах обучения и переобучения, затем остальные по
+// ближайшему показу. Checked — запись cloze_misses позже staleBefore
+// и позже новых источников пользователя (ADR-037): материала его урока
+// или подтверждения файла материала, своего сгенерированного текста,
+// законченного импорта Tatoeba. Реплик среди источников нет — у
+// транскрипта нет времени готовности, новые реплики слово получит, когда
+// запись устареет. Слова со свежей записью и без пунктов в очереди нет:
+// выдаче ему дать нечего, и место среди limit слов достаётся следующим.
+func (s *Store) ClozeTargets(ctx context.Context, userID int64, now, staleBefore time.Time, limit int) ([]ClozeTarget, error) {
 	rows, err := s.pool.Query(ctx,
 		`WITH fresh AS (
 		     SELECT greatest($3::timestamptz,
@@ -64,8 +65,10 @@ func (s *Store) ClozeTargets(ctx context.Context, userID int64, now, staleBefore
 		 CROSS JOIN fresh
 		 LEFT JOIN cloze_misses cm ON cm.user_id = c.user_id AND cm.term_id = c.term_id
 		 WHERE c.user_id = $1
+		   AND (cm.checked_at IS NULL OR cm.checked_at <= fresh.since
+		        OR EXISTS (SELECT 1 FROM cloze_items i WHERE i.user_id = c.user_id AND i.term_id = c.term_id))
 		 ORDER BY c.due_at <= $2 DESC, c.state IN ('learning', 'relearning') DESC, c.due_at, c.term_id
-		 LIMIT $4 OFFSET $5`, userID, now, staleBefore, limit, offset)
+		 LIMIT $4`, userID, now, staleBefore, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +120,18 @@ type ClozeItemRef struct {
 	Attempts    int
 	// LastAttemptAt — nil, если ответов не было
 	LastAttemptAt *time.Time
+	// NoOptions — пункт закреплён за LLM-набором, а записи кэша
+	// cloze_distractors нет (её удалили, ADR-037): кнопкой остался бы один
+	// ответ, и в выдачу пункт не идёт
+	NoOptions bool
 }
 
 // ClozeItemRefs — пункты пользователя по словам termIDs, старые первыми.
 func (s *Store) ClozeItemRefs(ctx context.Context, userID int64, termIDs []int64) ([]ClozeItemRef, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT i.id, i.term_id, i.context_hash, i.sentence, count(a.id), max(a.created_at)
+		`SELECT i.id, i.term_id, i.context_hash, i.sentence, count(a.id), max(a.created_at),
+		        i.option_source IS NOT DISTINCT FROM 'llm' AND NOT EXISTS (
+		            SELECT 1 FROM cloze_distractors d WHERE d.term_id = i.term_id AND d.context_hash = i.context_hash)
 		 FROM cloze_items i LEFT JOIN cloze_attempts a ON a.item_id = i.id
 		 WHERE i.user_id = $1 AND i.term_id = ANY($2)
 		 GROUP BY i.id ORDER BY i.id`, userID, termIDs)
@@ -131,7 +140,7 @@ func (s *Store) ClozeItemRefs(ctx context.Context, userID int64, termIDs []int64
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClozeItemRef, error) {
 		var r ClozeItemRef
-		return r, row.Scan(&r.ID, &r.TermID, &r.ContextHash, &r.Sentence, &r.Attempts, &r.LastAttemptAt)
+		return r, row.Scan(&r.ID, &r.TermID, &r.ContextHash, &r.Sentence, &r.Attempts, &r.LastAttemptAt, &r.NoOptions)
 	})
 }
 

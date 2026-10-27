@@ -10,6 +10,7 @@ import {
   llmErrorNote,
   MAX_RESPONSE_MS,
   responseMs,
+  restartClock,
   scheduleText,
   sourceLabel,
   verdictText,
@@ -38,6 +39,18 @@ test("время ответа — целые миллисекунды в гра�
   assert.equal(responseMs(1000, 2500.4), 1500);
   assert.equal(responseMs(2000, 1000), 0, "часы назад — не отрицательное");
   assert.equal(responseMs(0, 10 * MAX_RESPONSE_MS), MAX_RESPONSE_MS);
+});
+
+test("время ответа: заново с новым пунктом и с приходом вариантов в режиме вариантов", () => {
+  const at = (index: number, mode: "choice" | "typing", ready: boolean) => ({ index, mode, ready });
+  assert.equal(restartClock(null, at(0, "choice", true)), true, "первый пункт");
+  assert.equal(restartClock(at(0, "choice", true), at(1, "choice", true)), true, "следующий пункт");
+  assert.equal(restartClock(at(0, "choice", false), at(0, "choice", true)), true, "кнопки pending-пункта пришли");
+  assert.equal(restartClock(at(0, "choice", true), at(0, "choice", true)), false);
+  assert.equal(restartClock(at(0, "choice", false), at(0, "choice", false)), false, "ждём вариантов");
+  assert.equal(restartClock(at(0, "typing", false), at(0, "typing", true)), false, "вводу варианты не нужны");
+  assert.equal(restartClock(at(0, "choice", true), at(0, "typing", true)), false, "смена режима — не новый показ");
+  assert.equal(restartClock(at(0, "typing", true), at(0, "choice", true)), false);
 });
 
 test("итог ответа и график", () => {

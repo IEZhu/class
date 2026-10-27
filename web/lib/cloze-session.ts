@@ -29,6 +29,24 @@ export function responseMs(shownAt: number, now: number): number {
   return Math.min(MAX_RESPONSE_MS, Math.max(0, Math.round(now - shownAt)));
 }
 
+// Что на экране для часов ответа: номер пункта, режим и пришли ли его
+// варианты (у pending — после POST /practice/cloze/distractors)
+export interface ClozeClock {
+  index: number;
+  mode: ClozeMode;
+  ready: boolean;
+}
+
+// restartClock — начать ли отсчёт времени ответа заново: показан другой
+// пункт или в режиме вариантов у пункта только что появились кнопки.
+// Ожидание вариантов LLM — не время ответа: иначе быстрый верный выбор
+// после ожидания получил бы good вместо easy (ADR-037). В режиме ввода
+// ответить можно и без вариантов — их приход отсчёт не трогает.
+export function restartClock(prev: ClozeClock | null, cur: ClozeClock): boolean {
+  if (!prev || prev.index !== cur.index) return true;
+  return cur.mode === "choice" && cur.ready && !prev.ready;
+}
+
 // Итог ответа — поля ClozeAttemptResult, нужные подписи
 export interface ClozeVerdict {
   correct: boolean;

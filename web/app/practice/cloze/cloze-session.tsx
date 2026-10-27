@@ -14,11 +14,12 @@ import {
   itemOptions,
   llmErrorNote,
   responseMs,
+  restartClock,
   scheduleText,
   sourceLabel,
   verdictText,
 } from "../../../lib/cloze-session";
-import type { ClozeCredit, ClozeMode } from "../../../lib/cloze-session";
+import type { ClozeClock, ClozeCredit, ClozeMode } from "../../../lib/cloze-session";
 import { reviewId } from "../../../lib/review-session";
 import ClickableText from "../../clickable-text";
 import { RequestError, requestJson } from "../../forms";
@@ -59,15 +60,20 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const [llmNote, setLlmNote] = useState<string | null>(null);
   const attemptRef = useRef<string | null>(null);
   const shownAt = useRef(0);
+  const clock = useRef<ClozeClock | null>(null);
   const item: ClozeItem | undefined = page.items[index];
   const total = page.items.length;
   // null — варианты пункта ещё не пришли (pending)
   const options = item ? itemOptions(item, fetched) : [];
+  const ready = options !== null;
 
-  // Время ответа — от показа пункта
+  // Время ответа — от показа пункта, а в режиме вариантов у pending — от
+  // прихода кнопок (restartClock)
   useEffect(() => {
-    shownAt.current = performance.now();
-  }, [index]);
+    const cur = { index, mode, ready };
+    if (restartClock(clock.current, cur)) shownAt.current = performance.now();
+    clock.current = cur;
+  }, [index, mode, ready]);
 
   // fetchOptions — окончательные варианты pending-пунктов одним запросом.
   // Повтор безопасен: api отдаёт уже закреплённый набор

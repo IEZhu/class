@@ -137,9 +137,11 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   `Options` (порядок по ключу пункта); тесты `cloze_test.go`,
   `distractors_test.go`. В `internal/lemma` — `WordSpans` (места слов
   токенизатора `Words`) и `POS` (части речи OEWN).
-- Store (`backend/internal/store/cloze.go`): `ClozeTargets` (страница
-  очереди: к показу, шаги обучения, остальные; `Checked` — свежая запись
-  `cloze_misses`), `RecordClozeMisses`, `ClozeWords`, `ClozeItemRefs`,
+- Store (`backend/internal/store/cloze.go`): `ClozeTargets` (первые
+  слова очереди: к показу, шаги обучения, остальные; `Checked` — свежая
+  запись `cloze_misses`; слова со свежей записью и без пунктов в очереди
+  нет), `RecordClozeMisses`, `ClozeWords`, `ClozeItemRefs` (`NoOptions` —
+  пункт с LLM-набором без записи кэша),
   `ClozeLessonTexts` (реплики и видимые участникам материалы своих уроков:
   tsquery слов одним запросом, тексты — запросом на слово по хранимым
   лексемам; тест плана `TestClozeLessonTextsUseIndexes` в
@@ -153,10 +155,14 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   llm_available}`; ответа (леммы, термина, перевода) и ссылок на
   tatoeba.org в выдаче нет. У слова — неотвеченный пункт, иначе новое
   предложение, иначе давний; предложение — не больше чем в одном пункте
-  выдачи; слова идут страницами до 200, слово без нового предложения час
-  не ищется (раньше — после нового материала, своего текста, импорта
-  Tatoeba). Набор вариантов пункта закрепляется при первой отдаче; с
-  ключом LLM пункты после первого — `pending`.
+  выдачи; очередь — до 200 слов одной выборкой, страницами; слово без
+  нового предложения час не ищется (раньше — после нового материала,
+  своего текста, импорта Tatoeba) и, пока у него нет пунктов, места
+  в очереди не занимает. Набор вариантов пункта закрепляется при первой
+  отдаче; с ключом LLM пункты после первого — `pending`; пункт
+  с LLM-набором без записи кэша не отдаётся. У непохожего ключа
+  (t-shirt, café) среди дистракторов словаря есть такой же непохожий
+  (`PickDistractors`), иначе пункта у слова нет.
 - DoD «по словарю урока — валидный тест ≥ 5 пунктов» — тест
   `TestClozeLessonDictionaryGivesTest` (`backend/internal/httpapi/cloze_test.go`):
   пять слов урока, назначенных через `SaveUserTerm`, дают пять пунктов из
@@ -193,9 +199,11 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   варианты кнопками и клавишами 1–4 или ввод слова, Enter — дальше,
   прогресс «N из M», счётчики «верно/неверно», что стало с графиком;
   варианты `pending`-пунктов — одним `POST /practice/cloze/distractors`,
-  пока их нет — «Подбираем варианты…» и ввод слова.
+  пока их нет — «Подбираем варианты…» и ввод слова; время ответа такого
+  пункта в режиме вариантов — от появления кнопок (`restartClock`).
   `web/lib/cloze-session.ts` (`distractorRequestIds`, `itemOptions`,
-  `clozeCredit`, `llmErrorNote` и др.) с тестами `npm test`; типы
+  `restartClock`, `clozeCredit`, `llmErrorNote` и др.) с тестами
+  `npm test`; типы
   `ClozeItem`, `ClozePage`, `ClozeOptions`, `ClozeAttemptResult`
   в `web/lib/api.ts`; ссылка «Вставь слово» в шапке студента.
 - Тесты правок ревью cloze (`backend/internal/httpapi/cloze_test.go`,
@@ -210,8 +218,14 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   пункту и режиму и гонка ключа до `UNIQUE` (409, оценка откатилась);
   каскады при удалении материала, отмене урока, удалении своего текста
   и предложения Tatoeba; составное слово, служебные слова и неизвестная
-  часть речи в подборе дистракторов. Каждый новый тест убивает свой
-  мутант (замер и мутанты — в результате задачи).
+  часть речи в подборе дистракторов. Правки финального ревью:
+  `TestClozeScanCapSkipsFreshMisses` (210 слов без предложений впереди:
+  первая выдача `limit=1` — ровно 200 записей `cloze_misses`, вторая —
+  полная), `TestClozeLLMSetWithoutCacheNotServed`,
+  `TestClozeOddShapedAnswersStayOffLLM`, `TestClozeLockKeepsFirstSet`,
+  сброс записи материалом без файла в `TestClozeMissCacheNewSources`,
+  `TestPickDistractorsOddShapedTarget`, `TestLLMShaped`. Каждый новый
+  тест убивает свой мутант (замер и мутанты — в результате задачи).
 - Тесты — `backend/internal/httpapi/cloze_test.go`: свои слова и тексты
   (чужой урок не виден, урок слова раньше нового, материалы, Tatoeba,
   смена предложения после ответа), оценки easy → ранний верный не в

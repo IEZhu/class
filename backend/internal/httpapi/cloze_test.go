@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/IEZhu/class/backend/internal/cloze"
 	"github.com/IEZhu/class/backend/internal/lemma"
 	"github.com/IEZhu/class/backend/internal/llm"
 	"github.com/IEZhu/class/backend/internal/llm/llmtest"
@@ -247,8 +248,10 @@ func TestClozeLessonDictionaryGivesTest(t *testing.T) {
 // сгенерированные тексты, затем Tatoeba; урок и текст Боба Алисе не
 // видны, урок Алисы — Бобу. Отвеченный пункт сменяется новым
 // предложением слова; когда они кончились, возвращается пункт, на
-// который отвечали давнее всех. Ответ у вариантов словаря — лемма, а не
-// форма из предложения (ran среди лемм выдал бы ответ). У Tatoeba до
+// который отвечали давнее всех, — и при свежей записи «нет предложения»
+// (у слова есть пункты, из очереди оно не выпадает). Ответ у вариантов
+// словаря — лемма, а не форма из предложения (ran среди лемм выдал бы
+// ответ). У Tatoeba до
 // ответа — только автор и лицензия: ссылки на страницу предложения
 // (там оно целиком) и перевод — в ответе на попытку.
 func TestClozeOwnWordsAndSources(t *testing.T) {
@@ -306,6 +309,12 @@ func TestClozeOwnWordsAndSources(t *testing.T) {
 			// Предложения кончились: давнее всех отвечали на первый
 			if first := f.itemOf(t, resp, run); sources[0] != store.ClozeSourceLesson || first.Before != "Yesterday I " {
 				t.Fatalf("после всех предложений: %+v", first)
+			}
+			// Запись «нет предложения» теперь свежая, но у слова есть
+			// пункты: оно остаётся в очереди, и следующая выдача — тот же
+			// давний пункт
+			if again, _ := f.get(t, f.alice); len(again.Items) != 1 || again.Items[0].ID != it.ID {
+				t.Fatalf("слово с пунктами и свежей записью выпало из очереди: %+v", again.Items)
 			}
 			break
 		}
@@ -850,9 +859,9 @@ func TestClozeFullBatchBehindSentencelessWords(t *testing.T) {
 }
 
 // Запись «нет предложения» сбрасывают новые источники студента: свой
-// сгенерированный текст и импорт Tatoeba, появившиеся после проверки
-// (как и материал, ADR-037). Новый транскрипт — нет (у него нет времени
-// готовности): реплика ждёт, пока запись устареет.
+// сгенерированный текст, импорт Tatoeba и материал без файла в его уроке,
+// появившиеся после проверки (ADR-037). Новый транскрипт — нет (у него
+// нет времени готовности): реплика ждёт, пока запись устареет.
 func TestClozeMissCacheNewSources(t *testing.T) {
 	f := newClozeFixture(t, nil, 0)
 	river := f.word(t, f.aliceID, "river", &f.lessonID)
@@ -884,6 +893,26 @@ func TestClozeMissCacheNewSources(t *testing.T) {
 	resp, _ = f.get(t, f.alice)
 	if len(resp.Items) != 2 || f.itemOf(t, resp, bank).Source != store.ClozeSourceTatoeba {
 		t.Fatalf("после импорта Tatoeba: %+v", resp.Items)
+	}
+	// Проверка kitchen — позже всех источников; затем учитель добавляет
+	// в урок материал без файла: его created_at сбрасывает запись
+	kitchen := f.word(t, f.aliceID, "kitchen", &f.lessonID)
+	f.clock.set(time.Now())
+	for range 2 {
+		if resp, _ := f.get(t, f.alice); len(resp.Items) != 2 {
+			t.Fatalf("до материала: %+v", resp.Items)
+		}
+	}
+	if n := countRows(t, f.conn, `SELECT count(*) FROM cloze_misses WHERE user_id = $1 AND term_id = $2`, f.aliceID, kitchen); n != 1 {
+		t.Fatalf("kitchen не записано как слово без предложения: %d", n)
+	}
+	if _, err := f.a.store.CreateMaterial(context.Background(), f.lessonID, "material", "Dinner",
+		"Mum is cooking dinner in the kitchen.", nil); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ = f.get(t, f.alice)
+	if len(resp.Items) != 3 || f.itemOf(t, resp, kitchen).Source != store.ClozeSourceMaterial {
+		t.Fatalf("после материала: %+v", resp.Items)
 	}
 }
 
@@ -946,6 +975,221 @@ func TestClozePendingMaterialNotASource(t *testing.T) {
 	resp, _ := f.get(t, f.alice)
 	if len(resp.Items) != 1 || resp.Items[0].Source != store.ClozeSourceMaterial {
 		t.Fatalf("после подтверждения: %+v", resp.Items)
+	}
+}
+
+// Потолок очереди одной выдачи — 200 слов (ADR-037), и слова, которым
+// недавно не нашлось предложения, его не съедают. 210 самых просроченных
+// слов без текстов впереди 11 слов с предложениями: первая выдача
+// (limit=1) проверяет ровно 200 слов — 200 записей cloze_misses, пунктов
+// нет; вторая (через минуту, записи свежие) этих 200 слов в очереди уже не
+// видит, проверяет оставшиеся 10 и набирает полную выдачу.
+func TestClozeScanCapSkipsFreshMisses(t *testing.T) {
+	f := newClozeFixture(t, nil, 0)
+	ctx := context.Background()
+	var lonely []int64
+	for i := range 210 {
+		lonely = append(lonely, f.word(t, f.aliceID, fmt.Sprintf("zorbix%c%c", 'a'+i/26, 'a'+i%26), nil))
+	}
+	if _, err := f.conn.Exec(ctx, `UPDATE srs_cards SET due_at = now() - interval '60 days'
+		WHERE user_id = $1 AND term_id = ANY($2)`, f.aliceID, lonely); err != nil {
+		t.Fatal(err)
+	}
+	lines := map[string]string{
+		"apple": "I eat an apple every day.", "river": "We swam in the river.", "garden": "Flowers grow in our garden.",
+		"window": "Please close the window now.", "teacher": "Our teacher is very kind.", "kitchen": "Mum is cooking in the kitchen.",
+		"bicycle": "He rides a bicycle to work.", "mountain": "They climbed a high mountain.",
+		"library": "She reads books in the library.", "doctor": "The doctor visited my grandfather.",
+		"camera": "My new camera takes good photos.",
+	}
+	var texts []string
+	words := map[int64]bool{}
+	for w, line := range lines {
+		texts = append(texts, line)
+		words[f.word(t, f.aliceID, w, &f.lessonID)] = true
+	}
+	f.transcript(t, f.lessonID, texts...)
+	misses := func() int {
+		return countRows(t, f.conn, `SELECT count(*) FROM cloze_misses WHERE user_id = $1`, f.aliceID)
+	}
+
+	w := securityRequest(f.h, "GET", "/practice/cloze?limit=1", "", f.alice)
+	expectStatus(t, w, http.StatusOK)
+	var first clozeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 0 || misses() != 200 {
+		t.Fatalf("первая выдача: пунктов %d, проверено слов без предложения %d из 200", len(first.Items), misses())
+	}
+	f.clock.set(f.clock.now().Add(time.Minute))
+	resp, _ := f.get(t, f.alice)
+	if len(resp.Items) != defaultClozeLimit || misses() != len(lonely) {
+		t.Fatalf("вторая выдача: пунктов %d, записей %d", len(resp.Items), misses())
+	}
+	for _, it := range resp.Items {
+		if !words[f.itemTerm(t, it.ID)] {
+			t.Fatalf("пункт по слову без предложения: %+v", it)
+		}
+	}
+}
+
+// cacheDistractors — запись общего кэша LLM-дистракторов слова word
+// в предложении, как её положил бы POST /practice/cloze/distractors.
+func (f *clozeFixture) cacheDistractors(t *testing.T, termID int64, sentence, word string, options ...string) {
+	t.Helper()
+	b, ok := cloze.Find(sentence, word)
+	if !ok {
+		t.Fatalf("в %q нет пропуска для %q", sentence, word)
+	}
+	if err := f.a.store.SaveClozeDistractors(context.Background(), termID, cloze.Hash(sentence, b), options, "fake", "fake-model"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Запись кэша, за которой закреплён набор пункта, удалили (рецепт ADR-037
+// для неуместного слова): кнопкой остался бы один ответ, поэтому такой
+// пункт в выдачу не идёт — ни отвеченный (давний), ни неотвеченный. Его
+// предложение у слова занято; слово с другим предложением получает новый
+// пункт с четырьмя вариантами, слово без другого — ни одного.
+func TestClozeLLMSetWithoutCacheNotServed(t *testing.T) {
+	f := newClozeFixture(t, nil, 0)
+	ctx := context.Background()
+	ranLine, swamLine := "Yesterday I ran to the park with my sister.", "We swam in the river after dinner."
+	f.transcript(t, f.lessonID, ranLine, swamLine)
+	f.generated(t, f.aliceID, "They swim in the lake every summer.", "they", "swim", "in", "the", "lake", "every", "summer")
+	run := f.word(t, f.aliceID, "run", &f.lessonID)
+	swim := f.word(t, f.aliceID, "swim", &f.lessonID)
+	f.cacheDistractors(t, run, ranLine, "run", "walked", "drove", "flew")
+	f.cacheDistractors(t, swim, swamLine, "swim", "walked", "sat", "slept")
+
+	resp, _ := f.get(t, f.alice)
+	if len(resp.Items) != 2 {
+		t.Fatalf("выдача: %+v", resp.Items)
+	}
+	runItem, swimItem := f.itemOf(t, resp, run), f.itemOf(t, resp, swim)
+	for _, it := range []clozeItemResponse{runItem, swimItem} {
+		if it.DistractorSource != distractorsLLM || len(it.Options) != 4 {
+			t.Fatalf("набор из кэша: %+v", it)
+		}
+	}
+	f.attempt(t, f.alice, runItem.ID, attemptBody(1, "ran", "choice", 1000), http.StatusCreated)
+	if _, err := f.conn.Exec(ctx, `DELETE FROM cloze_distractors`); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ = f.get(t, f.alice)
+	if len(resp.Items) != 1 {
+		t.Fatalf("после удаления кэша: %+v", resp.Items)
+	}
+	it := resp.Items[0]
+	if it.ID == runItem.ID || it.ID == swimItem.ID || f.itemTerm(t, it.ID) != swim || len(it.Options) != 4 ||
+		f.sentenceOf(t, it.ID) != "They swim in the lake every summer." {
+		t.Fatalf("после удаления кэша: %+v", it)
+	}
+}
+
+// nonLetters — вариантов не из одних строчных латинских букв.
+func nonLetters(options []string) int {
+	n := 0
+	for _, o := range options {
+		if strings.ContainsFunc(o, func(r rune) bool { return r < 'a' || r > 'z' }) {
+			n++
+		}
+	}
+	return n
+}
+
+// Ответ с дефисом или диакритикой (t-shirt, café) среди вариантов LLM
+// (строчные латинские буквы) был бы единственным непохожим: такие пункты
+// и с ключом сразу получают варианты словаря, даже когда запись кэша LLM
+// есть, — и в выдаче, и в POST /practice/cloze/distractors; провайдер их
+// не видит. Среди вариантов словаря у такого ответа есть второй непохожий
+// (x-ray, t-shirt из словаря студента); у Боба такого слова нет — пункта
+// t-shirt не будет. Обычное слово (run) по-прежнему получает варианты LLM.
+func TestClozeOddShapedAnswersStayOffLLM(t *testing.T) {
+	ctx := context.Background()
+	fake := llmtest.Texts(`{"items":[{"id":"1","options":["walked","drove","flew"]}]}`)
+	f := newClozeFixture(t, fake, 5)
+	shirtLine, cafeLine := "He wore a white t-shirt to school today.", "We met at a small café near the station."
+	f.transcript(t, f.lessonID, shirtLine, cafeLine, "Yesterday I ran to the park with my sister.")
+	shirt := f.word(t, f.aliceID, "t-shirt", &f.lessonID)
+	cafe := f.word(t, f.aliceID, "café", &f.lessonID)
+	f.word(t, f.aliceID, "run", &f.lessonID)
+	for _, w := range []string{"x-ray", "coat", "jacket", "sweater", "bar", "restaurant"} {
+		f.word(t, f.aliceID, w, nil)
+	}
+	f.cacheDistractors(t, cafe, cafeLine, "café", "shop", "bar", "restaurant")
+	sets := &optionSets{t: t, seen: map[int64][]string{}}
+	odd := func(it clozeItemResponse) {
+		t.Helper()
+		if it.DistractorSource != distractorsList || len(it.Options) != 4 || nonLetters(it.Options) < 2 {
+			t.Fatalf("пункт с непохожим ответом: %+v", it)
+		}
+	}
+
+	resp, _ := f.get(t, f.alice)
+	sets.page(resp)
+	if len(resp.Items) != 3 || resp.Items[2].DistractorSource != distractorsPending {
+		t.Fatalf("выдача: %+v", resp.Items)
+	}
+	shirtItem, cafeItem := f.itemOf(t, resp, shirt).ID, f.itemOf(t, resp, cafe).ID
+	odd(f.itemOf(t, resp, shirt))
+	odd(f.itemOf(t, resp, cafe))
+	got := postDistractors(t, f.h, f.alice, http.StatusOK, shirtItem, cafeItem, resp.Items[2].ID)
+	sets.distractors(got)
+	if got.Items[2].DistractorSource != distractorsLLM || !slices.Contains(got.Items[2].Options, "ran") {
+		t.Fatalf("обычное слово без вариантов LLM: %+v", got.Items[2])
+	}
+	// Пункт, которому набор ещё не отдавали, POST тоже не отправляет в LLM
+	if _, err := f.conn.Exec(ctx, `UPDATE cloze_items SET option_source = NULL WHERE id = $1`, cafeItem); err != nil {
+		t.Fatal(err)
+	}
+	got = postDistractors(t, f.h, f.alice, http.StatusOK, cafeItem)
+	sets.distractors(got)
+	odd(clozeItemResponse{ID: got.Items[0].ID, Options: got.Items[0].Options, DistractorSource: got.Items[0].DistractorSource})
+	reqs := fake.Requests()
+	if len(reqs) != 1 || strings.Contains(reqs[0].Prompt, "t-shirt") || strings.Contains(reqs[0].Prompt, "caf") {
+		t.Fatalf("запросы к LLM: %+v", reqs)
+	}
+
+	f.transcript(t, f.bobLessonID, shirtLine)
+	f.word(t, f.bobID, "t-shirt", &f.bobLessonID)
+	for _, w := range []string{"coat", "jacket", "sweater"} {
+		f.word(t, f.bobID, w, nil)
+	}
+	if bobResp, _ := f.get(t, f.bob); len(bobResp.Items) != 0 {
+		t.Fatalf("t-shirt без второго непохожего слова: %+v", bobResp.Items)
+	}
+}
+
+// Набор закрепляется только за пунктом без набора (option_source IS
+// NULL): повторный LockClozeOptions с другим набором закреплённый не
+// меняет, и выдача отдаёт прежние варианты — и list поверх llm, и llm
+// поверх list при записи кэша.
+func TestClozeLockKeepsFirstSet(t *testing.T) {
+	f := newClozeFixture(t, nil, 0)
+	ctx := context.Background()
+	ranLine, swamLine := "Yesterday I ran to the park with my sister.", "We swam in the river after dinner."
+	f.transcript(t, f.lessonID, ranLine, swamLine)
+	run := f.word(t, f.aliceID, "run", &f.lessonID)
+	swim := f.word(t, f.aliceID, "swim", &f.lessonID)
+	f.cacheDistractors(t, run, ranLine, "run", "walked", "drove", "flew")
+	resp, _ := f.get(t, f.alice)
+	runItem, swimItem := f.itemOf(t, resp, run), f.itemOf(t, resp, swim)
+	if runItem.DistractorSource != distractorsLLM || swimItem.DistractorSource != distractorsList {
+		t.Fatalf("первая отдача: %+v", resp.Items)
+	}
+	f.cacheDistractors(t, swim, swamLine, "swim", "walked", "sat", "slept")
+	if err := f.a.store.LockClozeOptions(ctx, f.aliceID, []int64{runItem.ID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.a.store.LockClozeOptions(ctx, f.aliceID, nil, []int64{swimItem.ID}); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := f.get(t, f.alice)
+	if !reflect.DeepEqual(f.itemOf(t, again, run), runItem) || !reflect.DeepEqual(f.itemOf(t, again, swim), swimItem) {
+		t.Fatalf("набор сменился: было %+v, стало %+v", resp.Items, again.Items)
 	}
 }
 
