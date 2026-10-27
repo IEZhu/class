@@ -230,6 +230,8 @@ LLM с контекстом предложения — **закрывает до
   `ErrAuth`, `ErrRateLimited`, `ErrUnavailable`, `ErrTimeout`, `ErrRejected`,
   `ErrTruncated`, `ErrEmpty`, `ErrTooLarge`, `ErrBadResponse` и
   `llm.Temporary`. Фейк для тестов — `backend/internal/llm/llmtest`.
+  Переадресаций клиент не выполняет: 3xx — `ErrRejected`, ключ на чужой
+  хост не уходит (ревью волны B, `TestRedirectRefused`).
 - Генерация и валидатор — `backend/internal/textgen` (ADR-030):
   `NewParams` (белые списки, `lemma.IsWord`), промпт со словами-данными в
   `<target_words>`, `Check` (покрытие по леммам, вхождения, доля слов вне

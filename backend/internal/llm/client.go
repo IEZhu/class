@@ -31,7 +31,16 @@ type client struct {
 	http    *http.Client
 }
 
-func newHTTPClient() *http.Client { return &http.Client{Timeout: Timeout} }
+// newHTTPClient — переадресаций клиент не выполняет: net/http при смене
+// хоста убирает только Authorization и Cookie, а ключ Anthropic —
+// x-api-key, он ушёл бы на чужой адрес вместе с промптом. Ответ 3xx
+// разбирает post как отказ провайдера.
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       Timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
 
 func (c *client) Name() string  { return c.name }
 func (c *client) Model() string { return c.model }
@@ -86,6 +95,9 @@ func (c *client) post(ctx context.Context, url string, auth func(http.Header), b
 	}
 	if len(data) > maxResponseBytes {
 		return c.fail(res.StatusCode, ErrTooLarge, "")
+	}
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return c.fail(res.StatusCode, ErrRejected, "переадресация не выполняется: "+res.Header.Get("Location"))
 	}
 	if res.StatusCode != http.StatusOK {
 		kind := statusKind(res.StatusCode)
