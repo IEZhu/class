@@ -380,7 +380,9 @@ location /whiteboard/ {
 
 затем `sudo nginx -t && sudo systemctl reload nginx`. Проверка:
 в DevTools браузера на вкладке «Доска» запрос `socket.io/?EIO=4&transport=websocket`
-отвечает `101 Switching Protocols`.
+отвечает `101 Switching Protocols`. Сокет живёт до 10 минут: caddy
+закрывает его (`stream_timeout`, ADR-020), и клиент сам переподключается
+через forward_auth — короткое «нет связи с доской» раз в 10 минут ожидаемо.
 
 ## Примеры Tatoeba: импорт корпуса (S5-4)
 
