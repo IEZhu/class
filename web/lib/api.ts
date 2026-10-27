@@ -205,6 +205,50 @@ export interface GeneratedText {
   created_at: string;
 }
 
+// Видео-практика (S5-5, ADR-038). Цели подбора: слова из ?words= (вес 1)
+// или невыученные слова словаря с весами по карточкам FSRS или статусу.
+export interface VideoTargets {
+  weighting: "words" | "srs" | "status";
+  words: { lemma: string; weight: number }[];
+}
+
+// Сегмент субтитров; words — леммы целей, найденных в нём.
+export interface VideoSegment {
+  idx: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  words: string[];
+}
+
+// Видео корпуса субтитров: youtube_id — для встраивания, url — страница
+// ролика на YouTube (подпись источника); coverage — доля веса найденных
+// целей, per_minute — их вхождений на минуту. В подборе segments — лучшие
+// места видео, в GET /practice/videos/{id} — все сегменты по порядку.
+export interface PracticeVideo {
+  id: number;
+  youtube_id: string;
+  url: string;
+  title: string;
+  channel: string | null;
+  duration_ms: number;
+  subtitles: "manual" | "auto";
+  coverage: number;
+  occurrences: number;
+  per_minute: number;
+  matched_words: string[];
+  segments: VideoSegment[];
+}
+
+export interface PracticeVideosPage extends VideoTargets {
+  items: PracticeVideo[];
+  next_cursor: string | null;
+}
+
+export interface PracticeVideoDetail extends VideoTargets {
+  video: PracticeVideo;
+}
+
 const API_TIMEOUT_MS = 5000;
 
 export async function apiFetch<T>(path: string): Promise<T> {
