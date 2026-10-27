@@ -126,23 +126,35 @@ func validOptions(it LLMItem, raw []string) []string {
 // упражнения короче, длиннее — уже не слово, а текст.
 const maxOptionBytes = 24
 
-// llmOption — вариант модели годится в кнопку: одно слово из строчных
-// латинских букв не длиннее maxOptionBytes, известное словарю, — его
-// лемма есть в OEWN (lemma.Known) или это служебное слово. Варианты
-// ложатся в общий кэш и показываются другим студентам (ADR-037), поэтому
-// ни ссылка, ни фраза, ни выдуманное или замаскированное слово (k1ll,
-// sh!t) туда не попадут. Настоящее слово OEWN, неуместное в упражнении,
-// проверка не отличит — это остаточный риск ADR-037.
-func llmOption(o string) bool {
-	if o == "" || len(o) > maxOptionBytes {
-		return false
-	}
-	for i := 0; i < len(o); i++ {
-		if o[i] < 'a' || o[i] > 'z' {
+// letters — непустая строка из одних строчных латинских букв.
+func letters(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
 			return false
 		}
 	}
-	return lemma.Known(lemma.Lemma(o)) || lemma.FunctionWord(o)
+	return s != ""
+}
+
+// LLMShaped — слово той же формы, что любой вариант LLM (llmOption):
+// строчные латинские буквы (после нижнего регистра), не длиннее
+// maxOptionBytes. Ответ другой формы (t-shirt, café, o'clock, длинное
+// слово) среди вариантов LLM был бы единственным непохожим, поэтому
+// такой пункт LLM-дистракторов не получает (ADR-037).
+func LLMShaped(word string) bool {
+	w := strings.ToLower(word)
+	return len(w) <= maxOptionBytes && letters(w)
+}
+
+// llmOption — вариант модели годится в кнопку: одно слово формы
+// LLMShaped, известное словарю, — его лемма есть в OEWN (lemma.Known) или
+// это служебное слово. Варианты ложатся в общий кэш и показываются другим
+// студентам (ADR-037), поэтому ни ссылка, ни фраза, ни выдуманное или
+// замаскированное слово (k1ll, sh!t) туда не попадут. Настоящее слово
+// OEWN, неуместное в упражнении, проверка не отличит — это остаточный
+// риск ADR-037.
+func llmOption(o string) bool {
+	return LLMShaped(o) && (lemma.Known(lemma.Lemma(o)) || lemma.FunctionWord(o))
 }
 
 // Generate — LLM-дистракторы пачки пунктов одним вызовом: проверенные

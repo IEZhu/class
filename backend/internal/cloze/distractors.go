@@ -44,7 +44,11 @@ const (
 // частые слова. Не годятся цель и её формы, служебные слова и слова
 // самого предложения. Порядок внутри ступени задаёт seed (ключ пункта),
 // поэтому выбор детерминирован. Варианты — леммы: в предложении стоит
-// форма, а проверка ответа — по лемме (Check).
+// форма, а проверка ответа — по лемме (Check). Ключ цели не из одних
+// латинских букв (t-shirt, café, o'clock) — первым берётся такой же
+// непохожий дистрактор: иначе ответ был бы единственной кнопкой с
+// дефисом, диакритикой или апострофом. Такого слова нет — вариантов нет
+// (nil), и пункта из этого предложения не будет (ADR-037).
 func PickDistractors(t Target, pool []Word, sentence string, seed []byte) []string {
 	taken := map[string]bool{t.Lemma: true, lemma.Normalize(t.Surface): true}
 	for _, w := range lemma.Words(sentence) {
@@ -97,17 +101,27 @@ func PickDistractors(t Target, pool []Word, sentence string, seed []byte) []stri
 		return strings.Compare(a.word, b.word)
 	})
 	out := make([]string, 0, Distractors)
-	for _, c := range cands {
-		if len(out) == Distractors {
-			break
+	// take добирает out до n слов по порядку кандидатов; odd — только
+	// слова не из одних латинских букв
+	take := func(n int, odd bool) {
+		for _, c := range cands {
+			if len(out) == n {
+				return
+			}
+			l := lemma.Lemma(c.word)
+			if odd && letters(c.word) || !distractor(c.word) || taken[c.word] || taken[l] {
+				continue
+			}
+			taken[c.word], taken[l] = true, true
+			out = append(out, c.word)
 		}
-		l := lemma.Lemma(c.word)
-		if !distractor(c.word) || taken[c.word] || taken[l] {
-			continue
-		}
-		taken[c.word], taken[l] = true, true
-		out = append(out, c.word)
 	}
+	if !letters(t.Lemma) {
+		if take(1, true); len(out) == 0 {
+			return nil
+		}
+	}
+	take(Distractors, false)
 	return out
 }
 

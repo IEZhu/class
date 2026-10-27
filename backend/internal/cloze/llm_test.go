@@ -73,7 +73,8 @@ func TestParseDistractors(t *testing.T) {
 // слова из строчных латинских букв: ссылка, фраза, разметка, цифры,
 // маскировка звёздочками, выдуманное слово, кириллица, слишком длинное —
 // не годятся; пункт, у которого годных меньше трёх, остаётся
-// с дистракторами словаря.
+// с дистракторами словаря. Правило букв проверяется само по себе:
+// o'clock, x-ray, well-known и came's (лемма come) OEWN знает.
 func TestParseDistractorsRejectsInjectedOptions(t *testing.T) {
 	items := llmItems()
 	for _, opts := range [][]string{
@@ -86,6 +87,10 @@ func TestParseDistractorsRejectsInjectedOptions(t *testing.T) {
 		{"пришёл", "came", "drove"},
 		{"came", "drove", strings.Repeat("a", 30)},
 		{"came", "drove", "don't"},
+		{"came", "drove", "o'clock"},
+		{"came", "drove", "x-ray"},
+		{"came", "drove", "well-known"},
+		{"walked", "drove", "came's"},
 	} {
 		raw, err := json.Marshal(map[string]any{"items": []map[string]any{{"id": "1", "options": opts}}})
 		if err != nil {
@@ -99,6 +104,20 @@ func TestParseDistractorsRejectsInjectedOptions(t *testing.T) {
 	got := ParseDistractors(`{"items":[{"id":"1","options":["Came","flew","under"]}]}`, items)
 	if !reflect.DeepEqual(got, map[string][]string{"1": {"came", "flew", "under"}}) {
 		t.Fatalf("годные варианты: %v", got)
+	}
+}
+
+// Ответ получает варианты LLM, только если он той же формы, что они:
+// строчные латинские буквы (регистр не важен) до 24 байт.
+func TestLLMShaped(t *testing.T) {
+	for w, want := range map[string]bool{
+		"went": true, "Went": true, strings.Repeat("a", maxOptionBytes): true,
+		"t-shirt": false, "café": false, "o'clock": false, "o’clock": false, "students'": false,
+		strings.Repeat("a", maxOptionBytes+1): false, "": false,
+	} {
+		if got := LLMShaped(w); got != want {
+			t.Errorf("LLMShaped(%q) = %v", w, got)
+		}
 	}
 }
 

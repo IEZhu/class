@@ -106,6 +106,39 @@ func TestPickDistractorsUnknownPOSUsesWholeList(t *testing.T) {
 	}
 }
 
+// Ключ цели не из одних латинских букв (t-shirt, café): среди
+// дистракторов есть такой же непохожий из словаря — ответ не единственная
+// кнопка с дефисом или диакритикой; нет такого слова — вариантов нет.
+// Обычной цели непохожие слова словаря по-прежнему годятся.
+func TestPickDistractorsOddShapedTarget(t *testing.T) {
+	if lemma.POS("t-shirt") != "n" || lemma.POS("café") != "" || !sharesPOS(lemma.POS("x-ray"), "n") {
+		t.Fatal("фикстура: t-shirt — существительное, café вне OEWN, x-ray — и существительное")
+	}
+	pool := words("coat", "jacket", "sweater", "shop", "x-ray", "t-shirt", "café")
+	cases := []struct{ lemma, sentence string }{
+		{"t-shirt", "He wore a white t-shirt to school today."},
+		{"café", "We met at a small café near the station."},
+	}
+	for _, c := range cases {
+		target := Target{Lemma: c.lemma, Surface: c.lemma}
+		seed := []byte(c.sentence)
+		got := PickDistractors(target, pool, c.sentence, seed)
+		if len(got) != Distractors || letters(got[0]) {
+			t.Fatalf("%s: дистракторы %q — первым нужен непохожий", c.lemma, got)
+		}
+		if !reflect.DeepEqual(got, PickDistractors(target, pool, c.sentence, seed)) {
+			t.Fatalf("%s: выбор не детерминирован", c.lemma)
+		}
+		if lonely := PickDistractors(target, words("coat", "jacket", "sweater", "shop"), c.sentence, seed); lonely != nil {
+			t.Fatalf("%s без непохожих слов в словаре: %q", c.lemma, lonely)
+		}
+	}
+	plain := PickDistractors(Target{Lemma: "coat", Surface: "coat"}, words("x-ray", "t-shirt"), "She took off her warm coat.", []byte("s"))
+	if len(plain) != Distractors || !slices.Contains(plain, "x-ray") || !slices.Contains(plain, "t-shirt") {
+		t.Fatalf("обычная цель: %q", plain)
+	}
+}
+
 // Варианты: ответ ровно один раз, порядок стабилен у пункта и меняется
 // между пунктами — ответ не стоит всегда на одном месте.
 func TestOptionsShuffleDeterministically(t *testing.T) {

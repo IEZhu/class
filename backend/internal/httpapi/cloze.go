@@ -24,8 +24,9 @@ const (
 	// clozeScan — страница очереди слов: во столько раз больше слов, чем
 	// пунктов в выдаче, — у слова может не найтись годного предложения
 	clozeScan = 3
-	// clozeMaxTargets — потолок слов, которые одна выдача просматривает
-	// страницами, пока не наберёт limit пунктов
+	// clozeMaxTargets — потолок слов очереди, которые одна выдача
+	// просматривает страницами, пока не наберёт limit пунктов: он же
+	// потолок поисков предложений (запросов на слово) за выдачу
 	clozeMaxTargets = 200
 	// clozeMissTTL — сколько слово без нового предложения не ищется
 	// заново, если новых источников не появилось (ADR-037)
@@ -101,6 +102,14 @@ func clozeOptions(it *store.ClozeItem) ([]string, string) {
 	return []string{}, distractorsPending
 }
 
+// llmShaped — пункту можно отдать LLM-дистракторы: ответ среди них —
+// форма из предложения, и она той же формы, что они (cloze.LLMShaped).
+// Иначе (t-shirt, café) непохожей кнопкой был бы сам ответ.
+func llmShaped(it *store.ClozeItem) bool {
+	_, surface, _ := cloze.Parts(it.Sentence, it.Blank)
+	return cloze.LLMShaped(surface)
+}
+
 func toClozeItemResponse(it *store.ClozeItem) clozeItemResponse {
 	before, _, after := cloze.Parts(it.Sentence, it.Blank)
 	options, source := clozeOptions(it)
@@ -117,10 +126,11 @@ func toClozeItemResponse(it *store.ClozeItem) clozeItemResponse {
 // handlePracticeCloze — GET /practice/cloze?limit= (S4-4, S4-5): пункты
 // по словам вызывающего — сначала те, чей показ наступил, затем шаги
 // обучения, затем остальные. Набор вариантов пункт получает один раз
-// (ADR-037): из кэша LLM-дистракторов, если запись там есть; иначе
-// дистракторы словаря — без ключа LLM у всех пунктов, с ключом у первого
-// (он сразу на экране); остальным с ключом варианты отдаст POST
-// /practice/cloze/distractors (pending).
+// (ADR-037): ответ не той формы, что варианты LLM (cloze.LLMShaped), —
+// дистракторы словаря; иначе из кэша LLM-дистракторов, если запись там
+// есть; иначе дистракторы словаря — без ключа LLM у всех пунктов, с
+// ключом у первого (он сразу на экране); остальным с ключом варианты
+// отдаст POST /practice/cloze/distractors (pending).
 func (a *API) handlePracticeCloze(w http.ResponseWriter, r *http.Request) {
 	limit := defaultClozeLimit
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -148,6 +158,8 @@ func (a *API) handlePracticeCloze(w http.ResponseWriter, r *http.Request) {
 	for i := range items {
 		switch it := &items[i]; {
 		case it.OptionSource != "":
+		case !llmShaped(it):
+			list = append(list, it.ID)
 		case it.LLM != nil:
 			fromCache = append(fromCache, it.ID)
 		case a.llm == nil || i == 0:
@@ -207,14 +219,14 @@ func (b *clozeBatch) add(id int64, sentence string) {
 	b.sentences[sentence] = true
 }
 
-// pick — пункт слова для выдачи, чьё предложение ещё не в ней: первый
-// неотвеченный (answered false) или, из отвеченных, тот, на который
-// отвечали давнее всех.
+// pick — пункт слова для выдачи, чьё предложение ещё не в ней и у
+// которого есть варианты (не NoOptions): первый неотвеченный (answered
+// false) или, из отвеченных, тот, на который отвечали давнее всех.
 func (b *clozeBatch) pick(own []store.ClozeItemRef, answered bool) (store.ClozeItemRef, bool) {
 	var best store.ClozeItemRef
 	found := false
 	for _, ref := range own {
-		if b.sentences[ref.Sentence] || (ref.Attempts > 0) != answered {
+		if ref.NoOptions || b.sentences[ref.Sentence] || (ref.Attempts > 0) != answered {
 			continue
 		}
 		if !answered {
@@ -227,24 +239,22 @@ func (b *clozeBatch) pick(own []store.ClozeItemRef, answered bool) (store.ClozeI
 	return best, found
 }
 
-// clozeItemIDs — пункты выдачи, не больше limit. Слова идут страницами
-// очереди (ClozeTargets по limit*clozeScan), пока выдача не наберётся
-// или не кончатся clozeMaxTargets слов: слово без годного предложения не
-// занимает места у слов с предложениями.
+// clozeItemIDs — пункты выдачи, не больше limit. Очередь — до
+// clozeMaxTargets слов одной выборкой (порядок не сдвигается от промахов,
+// записанных по ходу выдачи); слова идут страницами по limit*clozeScan,
+// пока выдача не наберётся. Слово, которому недавно не нашлось
+// предложения и у которого нет пунктов, в очередь не входит (ClozeTargets)
+// и места у слов с предложениями не занимает.
 func (a *API) clozeItemIDs(ctx context.Context, userID int64, now time.Time, limit int) ([]int64, error) {
+	targets, err := a.store.ClozeTargets(ctx, userID, now, now.Add(-clozeMissTTL), clozeMaxTargets)
+	if err != nil {
+		return nil, err
+	}
 	b := &clozeBatch{limit: limit, sentences: map[string]bool{}}
 	page := limit * clozeScan
-	for offset := 0; !b.full() && offset < clozeMaxTargets; offset += page {
-		n := min(page, clozeMaxTargets-offset)
-		targets, err := a.store.ClozeTargets(ctx, userID, now, now.Add(-clozeMissTTL), n, offset)
-		if err != nil {
+	for start := 0; start < len(targets) && !b.full(); start += page {
+		if err := a.clozeFill(ctx, userID, now, b, targets[start:min(start+page, len(targets))]); err != nil {
 			return nil, err
-		}
-		if err := a.clozeFill(ctx, userID, now, b, targets); err != nil {
-			return nil, err
-		}
-		if len(targets) < n {
-			break
 		}
 	}
 	return b.ids, nil
@@ -255,9 +265,11 @@ func (a *API) clozeItemIDs(ctx context.Context, userID int64, now time.Time, lim
 // предложения его текстов; нет и его — пункт, на который отвечали давнее
 // всех. Предложение уже в выдаче — слово ждёт следующей. Слово, которому
 // нового предложения не нашлось, запоминается в cloze_misses и до
-// устаревания записи не ищется (Checked). Тексты уроков ищутся одной
-// пачкой на все слова страницы, которым нужен поиск, тексты вне уроков —
-// по слову, когда в уроках предложение не нашлось.
+// устаревания записи не ищется (Checked). Пункт без вариантов
+// (NoOptions) не берётся, но его предложение остаётся занятым у слова.
+// Тексты уроков ищутся одной пачкой на все слова страницы, которым нужен
+// поиск, тексты вне уроков — по слову, когда в уроках предложение не
+// нашлось.
 func (a *API) clozeFill(ctx context.Context, userID int64, now time.Time, b *clozeBatch, targets []store.ClozeTarget) error {
 	termIDs := make([]int64, 0, len(targets))
 	for _, t := range targets {
@@ -271,7 +283,7 @@ func (a *API) clozeFill(ctx context.Context, userID int64, now time.Time, b *clo
 	unanswered := map[int64]bool{}
 	for _, ref := range refs {
 		byTerm[ref.TermID] = append(byTerm[ref.TermID], ref)
-		unanswered[ref.TermID] = unanswered[ref.TermID] || ref.Attempts == 0
+		unanswered[ref.TermID] = unanswered[ref.TermID] || ref.Attempts == 0 && !ref.NoOptions
 	}
 	var queries []store.ClozeQuery
 	query := map[int64]int{} // слово → номер его запроса в queries
@@ -531,8 +543,9 @@ type clozeDistractorsResponse struct {
 
 // handleClozeDistractors — POST /practice/cloze/distractors {item_ids}
 // (S5-8, часть 2): окончательные варианты своих пунктов выдачи. Набор у
-// пункта один (ADR-037): уже закреплённый отдаётся как есть, запись кэша
-// закрепляется, а пункты без набора и без кэша идут в один вызов LLM.
+// пункта один (ADR-037): уже закреплённый отдаётся как есть, пункту
+// с ответом не той формы, что варианты LLM, закрепляется словарь, запись
+// кэша закрепляется, а пункты без набора и без кэша идут в один вызов LLM.
 // Варианты проверяет cloze.ParseDistractors; годные кладутся в общий кэш
 // по слову и предложению (повтор провайдера не зовёт и лимит не тратит).
 // Негодный ответ модели, сбой провайдера или исчерпанный лимит — у пункта
@@ -580,6 +593,8 @@ func (a *API) handleClozeDistractors(w http.ResponseWriter, r *http.Request) {
 	for i := range items {
 		switch it := &items[i]; {
 		case it.OptionSource != "":
+		case !llmShaped(it):
+			list = append(list, it.ID)
 		case it.LLM != nil:
 			fromCache = append(fromCache, it.ID)
 		default:
