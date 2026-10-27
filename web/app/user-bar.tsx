@@ -47,6 +47,12 @@ export default function UserBar({ name, role }: { name: string; role: Role }) {
             Словарь
           </Link>
         )}
+        {/* S4-3: карточки повторения — по словам личного словаря студента */}
+        {role === "student" && (
+          <Link href="/practice/cards" style={{ marginRight: "0.75rem" }}>
+            Карточки
+          </Link>
+        )}
         {/* S5-6: генерация текстов — студенту и преподавателю */}
         {(role === "student" || role === "teacher") && (
           <Link href="/practice/text" style={{ marginRight: "0.75rem" }}>
