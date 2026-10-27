@@ -53,6 +53,16 @@ func TestNewParams(t *testing.T) {
 	}
 }
 
+// Целей из личного словаря — по длине текста: десять слов на цель,
+// не больше MaxTargets и не меньше одной (длину проверит NewParams).
+func TestTargetsFor(t *testing.T) {
+	for maxWords, want := range map[int]int{0: 15, 50: 5, 100: 10, 400: MaxTargets, 10: 1, 5: 1} {
+		if got := TargetsFor(maxWords); got != want {
+			t.Errorf("TargetsFor(%d) = %d, ждали %d", maxWords, got, want)
+		}
+	}
+}
+
 // Инструкции — в системной части из белых списков; слова — данными в
 // тегах отдельного сообщения. Ретрай перечисляет недостающие слова.
 func TestBuildRequest(t *testing.T) {

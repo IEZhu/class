@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/IEZhu/class/backend/internal/lemma"
 	"github.com/IEZhu/class/backend/internal/llm"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/textgen"
@@ -24,7 +25,7 @@ const (
 )
 
 type generateTextRequest struct {
-	// Words — целевые слова; пусто — из личного словаря (S3-5, долг D-19)
+	// Words — целевые слова; пусто — из личного словаря (S3-5, ADR-030)
 	Words    []string `json:"words"`
 	Level    string   `json:"level"`
 	Genre    string   `json:"genre"`
@@ -57,15 +58,28 @@ func toGeneratedTextResponse(t store.GeneratedText) generatedTextResponse {
 	}
 }
 
-var errNoUserTerms = errors.New("личного словаря ещё нет")
+var errNoUserTerms = errors.New("в личном словаре нет невыученных слов")
 
-// userTermWords — шов S3-5: целевые слова из личного словаря
-// вызывающего, когда список в запросе пуст. Таблицу user_terms заводит
-// S3-5 в параллельной ветке; интеграция подставит сюда выборку новых и
-// «забытых» слов из store (долг D-19), а до того запрос без слов
-// отвечает 400.
-func (a *API) userTermWords(context.Context, int64) ([]string, error) {
-	return nil, errNoUserTerms
+// userTermWords — целевые слова из личного словаря вызывающего (S3-5),
+// когда список в запросе пуст: новые и «забытые» невыученные слова
+// (store.PracticeLemmas), столько, сколько уместит текст длиной maxWords.
+// Лемма, которую NewParams не примет за слово, пропускается: иначе одна
+// такая строка словаря отвечала бы 400 на каждый запрос без списка.
+func (a *API) userTermWords(ctx context.Context, userID int64, maxWords int) ([]string, error) {
+	lemmas, err := a.store.PracticeLemmas(ctx, userID, termLang, textgen.TargetsFor(maxWords))
+	if err != nil {
+		return nil, err
+	}
+	words := lemmas[:0]
+	for _, l := range lemmas {
+		if lemma.IsWord(l) {
+			words = append(words, l)
+		}
+	}
+	if len(words) == 0 {
+		return nil, errNoUserTerms
+	}
+	return words, nil
 }
 
 // handleGenerateText — POST /practice/generate-text (S5-6,
@@ -92,11 +106,11 @@ func (a *API) handleGenerateText(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	words := req.Words
 	if len(words) == 0 {
-		fromTerms, err := a.userTermWords(r.Context(), u.ID)
+		fromTerms, err := a.userTermWords(r.Context(), u.ID, req.MaxWords)
 		switch {
 		case errors.Is(err, errNoUserTerms):
 			writeError(w, http.StatusBadRequest, "bad_request",
-				"words — укажите целевые слова: подбора из личного словаря пока нет")
+				"words — укажите целевые слова: в личном словаре нет невыученных слов")
 			return
 		case err != nil:
 			internalError(w, "user term words", err)

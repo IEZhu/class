@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -118,8 +119,8 @@ func TestGenerateTextStoresValidatedText(t *testing.T) {
 	}
 }
 
-// Плохие параметры отсекаются до провайдера и лимита; без слов — 400,
-// пока подбора из личного словаря нет (долг D-19). Провал валидатора —
+// Плохие параметры отсекаются до провайдера и лимита; без слов и с пустым
+// личным словарём — 400. Провал валидатора —
 // 422 с недостающими словами, без строки в generated_texts.
 func TestGenerateTextRejects(t *testing.T) {
 	fake := llmtest.Texts(catOnly)
@@ -156,6 +157,60 @@ func TestGenerateTextRejects(t *testing.T) {
 	}
 	if n := countRows(t, conn, `SELECT requests FROM llm_usage WHERE user_id = $1`, userID); n != 1 {
 		t.Fatalf("провальная генерация заняла %d мест, ждали одно", n)
+	}
+}
+
+// Без списка слов цели берутся из личного словаря вызывающего (ADR-030):
+// невыученные, сначала новые по статусу, среди равных — дольше всех
+// не тронутые; «знаю» и чужие слова не попадают, число целей — по длине
+// текста.
+func TestGenerateTextFromUserTerms(t *testing.T) {
+	fake := llmtest.Texts(catDogText)
+	a, conn := practiceAPI(t, fake, 0)
+	ctx := context.Background()
+	userID, student := securityUser(t, a, conn, store.RoleStudent, "llm-dict")
+	otherID, _ := securityUser(t, a, conn, store.RoleStudent, "llm-dict-other")
+	knowsAllID, _ := securityUser(t, a, conn, store.RoleStudent, "llm-dict-known")
+	save := func(user int64, word string, status int) {
+		t.Helper()
+		term, err := a.store.EnsureTerm(ctx, termLang, word, word)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.store.SaveUserTerm(ctx, user, term.ID, &status, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(userID, "cat", 2)
+	save(userID, "dog", 2)
+	save(userID, "mat", 5)
+	save(otherID, "park", 1)
+	save(knowsAllID, "cat", 5)
+	// Из равных по статусу dog не трогали дольше — он «забыт» и идёт первым
+	if _, err := conn.Exec(ctx, `UPDATE user_terms SET updated_at = now() - interval '1 day'
+		WHERE user_id = $1 AND term_id = (SELECT id FROM terms WHERE lemma = 'dog')`, userID); err != nil {
+		t.Fatal(err)
+	}
+	h := a.Router()
+
+	w := securityRequest(h, "POST", "/practice/generate-text", `{"level":"B1","max_words":100}`, student)
+	expectStatus(t, w, http.StatusCreated)
+	if got := decodeText(t, w.Body.Bytes()); !reflect.DeepEqual(got.TargetLemmas, []string{"dog", "cat"}) || got.Coverage != 1 {
+		t.Fatalf("цели из словаря %v, покрытие %v", got.TargetLemmas, got.Coverage)
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 1 || !strings.HasPrefix(reqs[0].Prompt, "<target_words>\ndog\ncat\n</target_words>") {
+		t.Fatalf("запросы к провайдеру %+v", reqs)
+	}
+
+	// Новое слово впереди «забытых»; в текст на 20 слов умещаются две цели
+	save(userID, "sun", 1)
+	if words, err := a.userTermWords(ctx, userID, 20); err != nil || !reflect.DeepEqual(words, []string{"sun", "dog"}) {
+		t.Fatalf("цели для текста на 20 слов: %v, %v", words, err)
+	}
+	// Словарь из одних «знаю» — как пустой
+	if _, err := a.userTermWords(ctx, knowsAllID, 100); !errors.Is(err, errNoUserTerms) {
+		t.Fatalf("словарь без невыученных слов: %v", err)
 	}
 }
 

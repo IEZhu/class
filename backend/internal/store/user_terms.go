@@ -203,3 +203,20 @@ func (s *Store) UserTermStatusesByLemma(ctx context.Context, userID int64, lang 
 	}
 	return out, rows.Err()
 }
+
+// PracticeLemmas — целевые слова генерации текста из словаря пользователя
+// (S5-6, ADR-030): ещё не выученные (статус ниже MaxTermStatus), сначала
+// самые новые по статусу, среди равных — дольше всех не тронутые, то есть
+// «забытые»; не больше limit. Пустой словарь — пустой список.
+func (s *Store) PracticeLemmas(ctx context.Context, userID int64, lang string, limit int) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT t.lemma FROM user_terms ut
+		 JOIN terms t ON t.id = ut.term_id
+		 WHERE ut.user_id = $1 AND t.lang = $2 AND ut.status < $3
+		 ORDER BY ut.status, ut.updated_at, ut.term_id
+		 LIMIT $4`, userID, lang, MaxTermStatus, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}

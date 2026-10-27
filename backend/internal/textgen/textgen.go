@@ -122,6 +122,17 @@ func NewParams(words []string, level, genre string, maxWords int) (Params, error
 	return p, nil
 }
 
+// TargetsFor — сколько целевых слов умещается в текст длиной maxWords
+// (0 — DefaultWords): по wordsPerTarget слов текста на каждое, не больше
+// MaxTargets и не меньше одного — длину вне MinWords..MaxWords отвергнет
+// NewParams. По нему подбираются слова из личного словаря.
+func TargetsFor(maxWords int) int {
+	if maxWords == 0 {
+		maxWords = DefaultWords
+	}
+	return max(1, min(MaxTargets, maxWords/wordsPerTarget))
+}
+
 // Lemmas — леммы целей в порядке запроса (generated_texts.target_lemmas).
 func (p Params) Lemmas() []string {
 	out := make([]string, len(p.Targets))
