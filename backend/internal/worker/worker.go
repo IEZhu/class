@@ -80,6 +80,16 @@ func RegisterHarvester(r *jobs.Runner, s *jobs.Scheduler, h *harvester.Harvester
 	s.Every(harvester.JobSubtitlesFetch, harvester.FetchEvery)
 }
 
+// HarvesterRole — runner и расписание процесса с ролью harvester: только
+// джобы сборщика, потолок попытки — harvester.JobTimeout. С потолком
+// по умолчанию (5 мин) subtitles_fetch не берётся ни за одно видео.
+func HarvesterRole(db jobs.DB, h *harvester.Harvester) (*jobs.Runner, *jobs.Scheduler) {
+	runner := jobs.NewRunner(db, jobs.Config{HandlerTimeout: harvester.JobTimeout})
+	scheduler := jobs.NewScheduler(db)
+	RegisterHarvester(runner, scheduler, h)
+	return runner, scheduler
+}
+
 // MaterialFiles — то, что worker'у нужно от хранилища (storage.Client).
 type MaterialFiles interface {
 	Delete(ctx context.Context, key string) error

@@ -48,15 +48,14 @@ func main() {
 	}
 	defer st.Close()
 
-	scheduler := jobs.NewScheduler(st.Pool())
 	var runner *jobs.Runner
+	var scheduler *jobs.Scheduler
 	if role == "harvester" {
-		runner = jobs.NewRunner(st.Pool(), jobs.Config{HandlerTimeout: harvester.JobTimeout})
-		worker.RegisterHarvester(runner, scheduler, harvester.New(st, harvester.Config{
+		runner, scheduler = worker.HarvesterRole(st.Pool(), harvester.New(st, harvester.Config{
 			Fetcher: harvester.YTDLP{Cookies: os.Getenv("HARVESTER_COOKIES")},
 		}))
 	} else {
-		runner = jobs.NewRunner(st.Pool(), jobs.Config{})
+		runner, scheduler = jobs.NewRunner(st.Pool(), jobs.Config{}), jobs.NewScheduler(st.Pool())
 		registerCore(runner, st)
 		// F1: уроки, которые egress_ended сам не завершил, и Egress, пишущий
 		// после окна комнаты (ADR-031)

@@ -56,8 +56,7 @@ func applySubtitlesMigration(t *testing.T, conn *pgx.Conn, name string) {
 func runHarvesterJob(t *testing.T, a *API, kind string, h *harvester.Harvester) {
 	t.Helper()
 	ctx := context.Background()
-	runner := jobs.NewRunner(a.store.Pool(), jobs.Config{WorkerID: "harvester-test", HandlerTimeout: harvester.JobTimeout})
-	worker.RegisterHarvester(runner, jobs.NewScheduler(a.store.Pool()), h)
+	runner, _ := worker.HarvesterRole(a.store.Pool(), h)
 	if _, err := jobs.Enqueue(ctx, a.store.Pool(), kind, struct{}{}); err != nil {
 		t.Fatal(err)
 	}
@@ -386,6 +385,56 @@ func TestSubtitlesFetchFillsCorpus(t *testing.T) {
 	}
 	if got := strings.Count(string(args), "watch?v="); got != 1 {
 		t.Fatalf("retry fetched %d videos, want only the blocked one", got)
+	}
+}
+
+// Очередь сборщика (NextVideoToHarvest): сначала видео без неудачных
+// попыток, свежие раньше старых; неудачное — только после паузы 6 ч ×
+// число попыток; после MaxHarvestAttempts попыток видео не берётся
+// никогда. Порядок вставки нарочно не совпадает с порядком очереди.
+func TestHarvestQueuePolicy(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	for _, v := range []struct {
+		id        string
+		attempts  int
+		published string
+		triedAgo  string
+	}{
+		{"deadVideo01", store.MaxHarvestAttempts, "2026-10-01", "30 days"},
+		{"failedTwice", 2, "2026-09-01", "13 hours"},
+		{"failedOnce1", 1, "2026-10-20", "7 hours"},
+		{"failedSoon1", 1, "2026-10-21", "1 hour"},
+		{"freshOld001", 0, "2020-01-01", ""},
+		{"freshNew001", 0, "2025-06-01", ""},
+		{"freshNoDate", 0, "", ""},
+	} {
+		if _, err := conn.Exec(ctx, `INSERT INTO videos (source, external_id, title, published_at, harvest_attempts, harvested_at)
+			VALUES ('youtube', $1, $1, NULLIF($2, '')::timestamptz, $3, now() - NULLIF($4, '')::interval)`,
+			v.id, v.published, v.attempts, v.triedAgo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var order []string
+	for {
+		v, err := a.store.NextVideoToHarvest(ctx)
+		if errors.Is(err, store.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		order = append(order, v.ExternalID)
+		if len(order) > 10 {
+			t.Fatalf("очередь не кончается: %v", order)
+		}
+		// Собрано — из очереди уходит
+		if err := a.store.SaveSubtitles(ctx, v.ID, store.SubtitlesNone, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := "freshNew001,freshOld001,freshNoDate,failedOnce1,failedTwice"; strings.Join(order, ",") != want {
+		t.Fatalf("очередь %v, хотели %s", order, want)
 	}
 }
 
