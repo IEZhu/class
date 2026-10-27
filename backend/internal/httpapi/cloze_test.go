@@ -1051,9 +1051,12 @@ func (f *clozeFixture) cacheDistractors(t *testing.T, termID int64, sentence, wo
 // для неуместного слова): кнопкой остался бы один ответ, поэтому такой
 // пункт в выдачу не идёт — ни отвеченный (давний), ни неотвеченный. Его
 // предложение у слова занято; слово с другим предложением получает новый
-// пункт с четырьмя вариантами, слово без другого — ни одного.
+// пункт с четырьмя вариантами, слово без другого — ни одного. POST
+// /practice/cloze/distractors по такому пункту — 404, как после рецепта,
+// без вызова LLM, и попытку на него api не принимает.
 func TestClozeLLMSetWithoutCacheNotServed(t *testing.T) {
-	f := newClozeFixture(t, nil, 0)
+	fake := llmtest.Texts(`{"items":[{"id":"1","options":["walked","drove","flew"]}]}`)
+	f := newClozeFixture(t, fake, 5)
 	ctx := context.Background()
 	ranLine, swamLine := "Yesterday I ran to the park with my sister.", "We swam in the river after dinner."
 	f.transcript(t, f.lessonID, ranLine, swamLine)
@@ -1086,6 +1089,72 @@ func TestClozeLLMSetWithoutCacheNotServed(t *testing.T) {
 	if it.ID == runItem.ID || it.ID == swimItem.ID || f.itemTerm(t, it.ID) != swim || len(it.Options) != 4 ||
 		f.sentenceOf(t, it.ID) != "They swim in the lake every summer." {
 		t.Fatalf("после удаления кэша: %+v", it)
+	}
+	postDistractors(t, f.h, f.alice, http.StatusNotFound, runItem.ID)
+	postDistractors(t, f.h, f.alice, http.StatusNotFound, it.ID, swimItem.ID)
+	f.attempt(t, f.alice, swimItem.ID, attemptBody(2, "swam", "typing", 1000), http.StatusNotFound)
+	if n := len(fake.Requests()); n != 0 {
+		t.Fatalf("запросов к LLM: %d", n)
+	}
+}
+
+// Удалили одну запись кэша (ADR-037), а у слова есть второе предложение
+// с записью: пункт без записи не отдаётся, пункт второго предложения —
+// с четырьмя вариантами. Признак — по слову и предложению, а не по слову.
+func TestClozeLLMSetOneCacheRowDeleted(t *testing.T) {
+	f := newClozeFixture(t, nil, 0)
+	ctx := context.Background()
+	first, second := "Yesterday I ran to the park with my sister.", "We ran home after the rain stopped."
+	f.transcript(t, f.lessonID, first, second)
+	run := f.word(t, f.aliceID, "run", &f.lessonID)
+	f.cacheDistractors(t, run, first, "run", "walked", "drove", "flew")
+	f.cacheDistractors(t, run, second, "run", "walked", "sat", "slept")
+	resp, _ := f.get(t, f.alice)
+	firstItem := f.itemOf(t, resp, run)
+	f.attempt(t, f.alice, firstItem.ID, attemptBody(1, "ran", "choice", 1000), http.StatusCreated)
+	f.clock.set(f.clock.now().Add(time.Minute))
+	resp, _ = f.get(t, f.alice)
+	secondItem := f.itemOf(t, resp, run)
+	if secondItem.ID == firstItem.ID || f.sentenceOf(t, firstItem.ID) != first {
+		t.Fatalf("фикстура: второй пункт %+v после %+v", secondItem, firstItem)
+	}
+	f.attempt(t, f.alice, secondItem.ID, attemptBody(2, "ran", "choice", 1000), http.StatusCreated)
+	b, _ := cloze.Find(first, "run")
+	if _, err := f.conn.Exec(ctx, `DELETE FROM cloze_distractors WHERE term_id = $1 AND context_hash = $2`,
+		run, cloze.Hash(first, b)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.clock.set(f.clock.now().Add(time.Minute))
+	resp, _ = f.get(t, f.alice)
+	if len(resp.Items) != 1 || resp.Items[0].ID != secondItem.ID || len(resp.Items[0].Options) != 4 {
+		t.Fatalf("после удаления одной записи: %+v", resp.Items)
+	}
+}
+
+// Слово со свежим промахом и без пунктов уходит из очереди студента, даже
+// если пункты по этому слову есть у другого: считаются только свои.
+func TestClozeFreshMissExclusionPerUser(t *testing.T) {
+	f := newClozeFixture(t, nil, 0)
+	ctx := context.Background()
+	f.transcript(t, f.bobLessonID, "He wore a warm coat in winter.")
+	f.word(t, f.bobID, "coat", &f.bobLessonID)
+	coat := f.word(t, f.aliceID, "coat", nil)
+	if resp, _ := f.get(t, f.bob); len(resp.Items) != 1 {
+		t.Fatalf("фикстура: у Боба пункты %+v", resp.Items)
+	}
+	if resp, _ := f.get(t, f.alice); len(resp.Items) != 0 {
+		t.Fatalf("фикстура: у Алисы пункты %+v", resp.Items)
+	}
+	now := f.clock.now()
+	targets, err := f.a.store.ClozeTargets(ctx, f.aliceID, now, now.Add(-clozeMissTTL), clozeMaxTargets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range targets {
+		if tg.TermID == coat {
+			t.Fatalf("слово с промахом Алисы осталось в её очереди из-за пунктов Боба: %+v", tg)
+		}
 	}
 }
 

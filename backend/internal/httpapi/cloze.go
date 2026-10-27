@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +109,15 @@ func clozeOptions(it *store.ClozeItem) ([]string, string) {
 func llmShaped(it *store.ClozeItem) bool {
 	_, surface, _ := cloze.Parts(it.Sentence, it.Blank)
 	return cloze.LLMShaped(surface)
+}
+
+// noClozeOptions — пункт закреплён за LLM-набором, а записи кэша нет (её
+// удалили, ADR-037): кнопкой остался бы один ответ. Такой пункт не
+// отдаётся, как после рецепта ADR-037, где он удалён вместе с записью:
+// выдача его не берёт (ClozeItemRef.NoOptions), POST
+// /practice/cloze/distractors и попытка отвечают 404.
+func noClozeOptions(it store.ClozeItem) bool {
+	return it.OptionSource == store.ClozeOptionsLLM && it.LLM == nil
 }
 
 func toClozeItemResponse(it *store.ClozeItem) clozeItemResponse {
@@ -445,8 +455,9 @@ type clozeAttemptResponse struct {
 // и статус слова. Засчитывается ответ по карточке к показу и промах по
 // любой; верный ответ раньше показа только пишется в журнал (ADR-037).
 // 201 — записан, 200 — повтор того же attempt_id; 404 — пункта нет
-// у вызывающего (чужие недостижимы) или слово убрали; 409
-// attempt_conflict — attempt_id занят другим ответом.
+// у вызывающего (чужие недостижимы), слово убрали или у пункта LLM-набор
+// без записи кэша (noClozeOptions); 409 attempt_conflict — attempt_id
+// занят другим ответом.
 func (a *API) handleClozeAttempt(w http.ResponseWriter, r *http.Request) {
 	itemID, ok := pathID(w, r)
 	if !ok {
@@ -481,7 +492,7 @@ func (a *API) handleClozeAttempt(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "cloze item", err)
 		return
 	}
-	if len(items) == 0 {
+	if len(items) == 0 || noClozeOptions(items[0]) {
 		writeError(w, http.StatusNotFound, "not_found", "пункт не найден")
 		return
 	}
@@ -537,7 +548,8 @@ type clozeDistractorsResponse struct {
 	Items []clozeOptionsResponse `json:"items"`
 	// LLMError — почему пункты без кэша получили дистракторы словаря, а не
 	// LLM: rate_limited, llm_unavailable, llm_failed; null — вызов прошёл
-	// или не понадобился
+	// (пункты, чьи варианты модели не прошли проверку, тоже получают
+	// словарь) или не понадобился
 	LLMError *string `json:"llm_error"`
 }
 
@@ -549,10 +561,12 @@ type clozeDistractorsResponse struct {
 // Варианты проверяет cloze.ParseDistractors; годные кладутся в общий кэш
 // по слову и предложению (повтор провайдера не зовёт и лимит не тратит).
 // Негодный ответ модели, сбой провайдера или исчерпанный лимит — у пункта
-// закрепляются дистракторы словаря, ответ — 200 с llm_error. Лимит —
-// суточный счётчик «объясни» (тот же вид дешёвых словесных вызовов,
-// ADR-037); без ключа — 503, как у генерации и «объясни», а выдача тогда
-// сразу отдаёт дистракторы словаря и сюда не ведёт.
+// закрепляются дистракторы словаря, ответ — 200; llm_error называет
+// только лимит или сбой провайдера, при негодном ответе модели он null.
+// Пункт LLM-набора без записи кэша (noClozeOptions) — 404, как удалённый.
+// Лимит — суточный счётчик «объясни» (тот же вид дешёвых словесных
+// вызовов, ADR-037); без ключа — 503, как у генерации и «объясни», а
+// выдача тогда сразу отдаёт дистракторы словаря и сюда не ведёт.
 func (a *API) handleClozeDistractors(w http.ResponseWriter, r *http.Request) {
 	if a.llm == nil {
 		writeError(w, http.StatusServiceUnavailable, "llm_not_configured", "LLM не настроен")
@@ -629,6 +643,12 @@ func (a *API) handleClozeDistractors(w http.ResponseWriter, r *http.Request) {
 	}
 	if items, err = a.lockClozeOptions(context.WithoutCancel(ctx), u.ID, items, list, fromCache, now); err != nil {
 		internalError(w, "cloze options", err)
+		return
+	}
+	// Проверка — после закрепления и перечитывания: так и запись кэша,
+	// удалённая между ними, не даст набора из одного ответа
+	if slices.ContainsFunc(items, noClozeOptions) {
+		writeError(w, http.StatusNotFound, "not_found", "пункт не найден")
 		return
 	}
 	resp := clozeDistractorsResponse{Items: make([]clozeOptionsResponse, 0, len(items)), LLMError: llmError}
