@@ -106,3 +106,31 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, userID int64) error {
 		`DELETE FROM sessions WHERE user_id = $1 AND expires_at <= now()`, userID)
 	return err
 }
+
+// JobSessionCleanup — периодическая уборка протухших сессий (долг D-15,
+// ADR-035), payload {}.
+const JobSessionCleanup = "session_cleanup"
+
+// CleanupExpiredSessions — глобальная уборка (D-15): протухшие сессии
+// всех учёток, в том числе гостей событий, которые повторно не входят и
+// ленивой уборки при логине не дождутся. Пачка — отдельный оператор из
+// batch самых старых строк (sessions_expires_idx): блокировки короткие,
+// вход не ждёт. Не больше maxBatches пачек за вызов — остаток доберёт
+// следующий запуск. Возвращает число удалённых сессий.
+func (s *Store) CleanupExpiredSessions(ctx context.Context, batch, maxBatches int) (int64, error) {
+	var total int64
+	for range maxBatches {
+		tag, err := s.pool.Exec(ctx,
+			`DELETE FROM sessions WHERE id IN (
+			     SELECT id FROM sessions WHERE expires_at <= now()
+			     ORDER BY expires_at LIMIT $1)`, batch)
+		if err != nil {
+			return total, err
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < int64(batch) {
+			break
+		}
+	}
+	return total, nil
+}

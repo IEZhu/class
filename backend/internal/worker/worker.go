@@ -124,3 +124,26 @@ func RegisterRecordingSweep(r *jobs.Runner, s *jobs.Scheduler, st *store.Store) 
 	})
 	s.Every(store.JobRecordingSweep, recordingSweepEvery)
 }
+
+// Уборка протухших сессий (долг D-15, ADR-035): раз в час, пачками по
+// 1000 строк, не больше 100 пачек за запуск — запуск укладывается
+// в таймаут хендлера и при накопившемся хвосте.
+const (
+	sessionCleanupEvery      = time.Hour
+	sessionCleanupBatch      = 1000
+	sessionCleanupMaxBatches = 100
+)
+
+// RegisterSessionCleanup — долг D-15 (ADR-006, ADR-035): глобальная уборка
+// протухших сессий, в том числе гостевых. Джоба периодическая, расписание
+// ставится рядом с хендлером (ADR-021).
+func RegisterSessionCleanup(r *jobs.Runner, s *jobs.Scheduler, st *store.Store) {
+	r.Handle(store.JobSessionCleanup, func(ctx context.Context, _ jobs.Job) error {
+		n, err := st.CleanupExpiredSessions(ctx, sessionCleanupBatch, sessionCleanupMaxBatches)
+		if n > 0 {
+			log.Printf("worker: уборка сессий удалила протухших: %d", n)
+		}
+		return err
+	})
+	s.Every(store.JobSessionCleanup, sessionCleanupEvery)
+}
