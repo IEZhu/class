@@ -285,3 +285,33 @@ func TestBodyIdleTimeout(t *testing.T) {
 		t.Fatalf("медленная загрузка: %q, %v за %s", body, err, elapsed)
 	}
 }
+
+// Таймаут простоя считает только ожидание внутри Read (ревью PR #18):
+// пауза между чтениями — импорт пишет пачку в базу — дольше
+// bodyIdleTimeout не обрывает тело, в котором ещё есть данные.
+func TestBodyIdleNotSpentBetweenReads(t *testing.T) {
+	prev := bodyIdleTimeout
+	bodyIdleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { bodyIdleTimeout = prev })
+	want := strings.Repeat("1\t2\n", 4)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, want)
+	}))
+	defer srv.Close()
+	trustTestCert(t, srv)
+
+	rc, _, err := Open(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(rc, head); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * bodyIdleTimeout)
+	rest, err := io.ReadAll(rc)
+	if err != nil || string(head)+string(rest) != want {
+		t.Fatalf("после паузы между чтениями: %q %q, %v", head, rest, err)
+	}
+}
