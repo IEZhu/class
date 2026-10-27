@@ -389,6 +389,7 @@ body:has(.app-shell) .auth-top { display: none; }
 .account { position: relative; margin-left: auto; flex: none; }
 .account-btn { display: grid; place-items: center; width: var(--h-md); height: var(--h-md); padding: 0; border: 0; border-radius: var(--r-full); background: none; color: var(--c-text); }
 .account-btn:hover .avatar, .account-btn[aria-expanded="true"] .avatar { background: var(--c-primary-soft); color: var(--c-primary-strong); }
+.account-btn[aria-current] .avatar { background: var(--c-nav-active); color: var(--c-nav-active-text); box-shadow: 0 0 0 2px var(--c-primary); }
 .account-menu {
   position: absolute; right: 0; top: calc(100% + var(--sp-2)); z-index: var(--z-popover); width: 260px;
   display: grid; gap: var(--sp-1); padding: var(--sp-2);

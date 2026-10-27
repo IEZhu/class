@@ -203,6 +203,8 @@ function AccountMenu({ name, role, avatar, pathname, onLogout }: MenuProps) {
         className="account-btn"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        // на /account текущий пункт спрятан в меню — кнопка помечена текущей, как «Ещё»
+        aria-current={isCurrent(pathname, account) ? "true" : undefined}
         aria-label={`${name}: учётная запись и выход`}
         onClick={() => setOpen((v) => !v)}
       >
