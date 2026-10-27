@@ -318,8 +318,10 @@ func TestDictionaryMigrationReverts(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
-	// Откат идёт в обратном порядке: user_terms (0015) ссылается на terms
-	// и уходит раньше 0009, а возвращается после него
+	// Откат идёт в обратном порядке: карточки FSRS (0021) ссылаются на
+	// user_terms, user_terms (0015) — на terms; обе уходят раньше 0009,
+	// а возвращаются после него
+	apply("../../migrations/0021_srs.down.sql")
 	apply("../../migrations/0015_user_terms.down.sql")
 	apply("../../migrations/0009_dictionary.down.sql")
 	if got := state(); got != " " {
@@ -327,6 +329,7 @@ func TestDictionaryMigrationReverts(t *testing.T) {
 	}
 	apply("../../migrations/0009_dictionary.up.sql")
 	apply("../../migrations/0015_user_terms.up.sql")
+	apply("../../migrations/0021_srs.up.sql")
 	if got := state(); got != want {
 		t.Fatalf("повторный up: %s", got)
 	}
