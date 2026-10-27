@@ -315,8 +315,9 @@ func TestGeneratedTextsHistoryIsOwn(t *testing.T) {
 }
 
 // Миграция 0017 откатывается и накатывается заново. Её таблицы меняют
-// 0020 (generated_texts.lemmas) и 0024 (llm_usage.kind), поэтому откат —
-// в обратном порядке номеров, накат — в прямом.
+// 0020 (generated_texts.lemmas) и 0024 (llm_usage.kind), а пункты cloze
+// (0022) ссылаются на generated_texts, поэтому откат — в обратном порядке
+// номеров, накат — в прямом.
 func TestGeneratedTextsMigrationReversible(t *testing.T) {
 	_, conn := securityDB(t)
 	tables := func() string {
@@ -332,6 +333,7 @@ func TestGeneratedTextsMigrationReversible(t *testing.T) {
 		t.Fatalf("после наката: %q", got)
 	}
 	testdb.Apply(t, conn, "0024_term_explanations.down.sql")
+	testdb.Apply(t, conn, "0022_cloze.down.sql")
 	testdb.Apply(t, conn, "0020_text_practice.down.sql")
 	testdb.Apply(t, conn, "0017_generated_texts.down.sql")
 	if got := tables(); got != "" {
@@ -339,6 +341,7 @@ func TestGeneratedTextsMigrationReversible(t *testing.T) {
 	}
 	testdb.Apply(t, conn, "0017_generated_texts.up.sql")
 	testdb.Apply(t, conn, "0020_text_practice.up.sql")
+	testdb.Apply(t, conn, "0022_cloze.up.sql")
 	testdb.Apply(t, conn, "0024_term_explanations.up.sql")
 	if got := tables(); got != "generated_texts,llm_usage" {
 		t.Fatalf("повторный накат: %q", got)

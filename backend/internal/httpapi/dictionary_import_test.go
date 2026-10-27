@@ -318,11 +318,13 @@ func TestDictionaryMigrationReverts(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
-	// Откат идёт в обратном порядке номеров: объяснения (0024) и словарь
-	// урока (0019) ссылаются на terms, карточки FSRS (0021) — на user_terms,
+	// Откат идёт в обратном порядке номеров: объяснения (0024), кэш
+	// дистракторов cloze (0022) и словарь урока (0019) ссылаются на terms,
+	// пункты cloze (0022) и карточки FSRS (0021) — на user_terms,
 	// user_terms (0015) — на terms; все уходят раньше 0009, а возвращаются
 	// после него
 	apply("../../migrations/0024_term_explanations.down.sql")
+	apply("../../migrations/0022_cloze.down.sql")
 	apply("../../migrations/0021_srs.down.sql")
 	apply("../../migrations/0019_lesson_terms.down.sql")
 	apply("../../migrations/0015_user_terms.down.sql")
@@ -334,6 +336,7 @@ func TestDictionaryMigrationReverts(t *testing.T) {
 	apply("../../migrations/0015_user_terms.up.sql")
 	apply("../../migrations/0019_lesson_terms.up.sql")
 	apply("../../migrations/0021_srs.up.sql")
+	apply("../../migrations/0022_cloze.up.sql")
 	apply("../../migrations/0024_term_explanations.up.sql")
 	if got := state(); got != want {
 		t.Fatalf("повторный up: %s", got)

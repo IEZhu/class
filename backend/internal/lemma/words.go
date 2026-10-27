@@ -8,11 +8,26 @@ import (
 // Words — слова текста: буквы (с диакритикой), внутри — апостроф или
 // дефис перед буквой. Цифры и знаки — разделители; апостроф в конце
 // (students') в слово не входит, Normalize всё равно бы его срезал.
-// Один токенизатор на Go-стороне: валидатор покрытия (S5-6, ADR-030)
-// и слова доски урока (S3-7, ADR-033).
+// Один токенизатор на Go-стороне: валидатор покрытия (S5-6, ADR-030),
+// слова доски урока (S3-7, ADR-033) и пропуск cloze (S4-4, ADR-037).
 func Words(text string) []string {
 	rs := []rune(text)
-	var out []string
+	spans := WordSpans(text)
+	out := make([]string, 0, len(spans))
+	for _, sp := range spans {
+		out = append(out, string(rs[sp.Start:sp.End]))
+	}
+	return out
+}
+
+// Span — место слова в тексте: руны [Start, End).
+type Span struct{ Start, End int }
+
+// WordSpans — те же слова, что у Words, местами в тексте (в рунах):
+// cloze вырезает слово из предложения, не теряя знаков вокруг.
+func WordSpans(text string) []Span {
+	rs := []rune(text)
+	var out []Span
 	for i := 0; i < len(rs); {
 		if !unicode.IsLetter(rs[i]) {
 			i++
@@ -31,7 +46,7 @@ func Words(text string) []string {
 			}
 			break
 		}
-		out = append(out, string(rs[i:j]))
+		out = append(out, Span{Start: i, End: j})
 		i = j
 	}
 	return out

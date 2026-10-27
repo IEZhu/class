@@ -109,6 +109,23 @@ func TestForms(t *testing.T) {
 	}
 }
 
+// Части речи — набор из OEWN в порядке n, v, a, r; служебного слова
+// и имени там нет.
+func TestPOS(t *testing.T) {
+	for word, want := range map[string]string{
+		"run":     "nv",
+		"apple":   "n",
+		"happy":   "a",
+		"quickly": "r",
+		"the":     "",
+		"blorpy":  "",
+	} {
+		if got := POS(word); got != want {
+			t.Errorf("POS(%q) = %q, хотели %q", word, got, want)
+		}
+	}
+}
+
 // Замер точности на выборке словоформ (ADR-017): общий порог и полный
 // список промахов в выводе теста. Неоднозначные формы (building, tired)
 // входят в выборку честно — без части речи их не развести.
