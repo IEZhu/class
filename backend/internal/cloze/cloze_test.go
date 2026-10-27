@@ -62,6 +62,8 @@ func TestFindRejects(t *testing.T) {
 	for _, tc := range []struct{ sentence, target string }{
 		{"I run fast and she runs faster than me.", "run"},
 		{"It is a well-known fact around here.", "know"},
+		// Цель есть и отдельным словом: отказ — из-за составного слова
+		{"I know it is a well-known fact.", "know"},
 		{"The weather is lovely today, isn't it?", "run"},
 		{"Run home now!", "run"},
 		{"I run " + strings.Repeat("very ", 40) + "fast.", "run"},
@@ -106,6 +108,41 @@ func TestCheck(t *testing.T) {
 		correct, exact := Check(tc.answer, "ran", "run")
 		if correct != tc.correct || exact != tc.exact {
 			t.Errorf("Check(%q) = %v, %v; хотели %v, %v", tc.answer, correct, exact, tc.correct, tc.exact)
+		}
+	}
+}
+
+// Ключ термина — верный ответ и кнопкой, и вводом, даже когда Lemma
+// уводит ключ в другое слово: клик по roses заводит термин rose, а
+// Lemma(rose) — rise; так же wound → wind, found → find, bore → bear,
+// saw → see, fell → fall, better → good. Пропуск — на форме из клика.
+func TestCheckAcceptsTermKey(t *testing.T) {
+	for _, tc := range []struct{ click, sentence string }{
+		{"roses", "She bought red roses for her mother."},
+		{"wounds", "The soldier had deep wounds on his arm."},
+		{"founded", "They founded the school in the old town."},
+		{"bores", "This long film really bores my little brother."},
+		{"sawed", "He sawed the old branch off the tree."},
+		{"felled", "They felled the tall tree near the river."},
+		{"bettered", "She bettered her own record this year."},
+	} {
+		key := lemma.Lemma(tc.click) // ключ термина, как его заводит POST /terms/click
+		if lemma.Lemma(key) == key {
+			t.Fatalf("фикстура: Lemma(%q) = %q, случай не проверяет неидемпотентность", key, key)
+		}
+		b, ok := Find(tc.sentence, key)
+		if !ok {
+			t.Fatalf("%q: пропуск для термина %q не найден", tc.sentence, key)
+		}
+		_, surface, _ := Parts(tc.sentence, b)
+		for _, answer := range []string{key, strings.ToUpper(key[:1]) + key[1:], " " + key + " "} {
+			correct, exact := Check(answer, surface, key)
+			if !correct || exact || Rate(correct, Choice, 1000) == srs.Again {
+				t.Errorf("термин %q, пропуск %q: ответ %q — correct %v, exact %v", key, surface, answer, correct, exact)
+			}
+		}
+		if correct, _ := Check(lemma.Lemma(key), surface, key); correct {
+			t.Errorf("термин %q: лемма ключа %q — другое слово, а засчитана", key, lemma.Lemma(key))
 		}
 	}
 }

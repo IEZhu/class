@@ -181,13 +181,16 @@ func Hash(sentence string, b Blank) []byte {
 	return sum[:]
 }
 
-// Check — ответ на пункт: correct — любая форма целевого слова (cloze
-// проверяет слово словаря, а не грамматику: термин — лемма), exact —
-// именно форма из предложения.
+// Check — ответ на пункт: correct — сам ключ термина или любая форма
+// слова (cloze проверяет слово словаря, а не грамматику: термин — лемма),
+// exact — именно форма из предложения. Ключ сверяется сам по себе, как
+// в matches: Lemma не идемпотентна на ключах (клик по roses заводит
+// термин rose, а Lemma(rose) — rise), а кнопка ответа из словаря — сам
+// ключ.
 func Check(answer, surface, target string) (correct, exact bool) {
 	a := strings.TrimSpace(answer)
 	exact = a != "" && lemma.Normalize(a) == lemma.Normalize(surface)
-	return exact || lemma.IsWord(a) && lemma.Lemma(a) == target, exact
+	return exact || lemma.IsWord(a) && matches(a, target), exact
 }
 
 // Mode — как отвечали: выбором варианта или вводом с клавиатуры.
