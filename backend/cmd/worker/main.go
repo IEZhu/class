@@ -60,6 +60,8 @@ func main() {
 		// F1: уроки, которые egress_ended сам не завершил (ADR-031)
 		worker.RegisterRecordingSweep(runner, scheduler, st)
 		backfillSRSCards(ctx, st)
+		// D-15: протухшие сессии всех учёток, в том числе гостей (ADR-035)
+		worker.RegisterSessionCleanup(runner, scheduler, st)
 	}
 	go scheduler.Run(ctx)
 

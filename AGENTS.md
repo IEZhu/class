@@ -33,8 +33,8 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`, `app/dictionary`, `app/practice/text`,
-  `app/practice/cards` (FSRS review cards), public `app/join/[token]` for event guests);
-  `lib/api.ts` calls the API server-side; `lib/roles.ts`, `lib/lesson-phase.ts`,
+  `app/practice/texts`, `app/practice/cards` (FSRS review cards), public `app/join/[token]` for
+  event guests); `lib/api.ts` calls the API server-side; `lib/roles.ts`, `lib/lesson-phase.ts`,
   `lib/lesson-title.ts`, `lib/review-session.ts`. Every text renders through
   `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
   functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr

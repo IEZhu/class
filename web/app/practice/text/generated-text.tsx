@@ -1,8 +1,8 @@
 import type { GeneratedText } from "../../../lib/api";
+import ClickableText from "../../clickable-text";
 
 // Сгенерированный текст абзацами и итог валидатора покрытия (S5-6).
-// Пока простыми абзацами: кликабельным материалом его сделает
-// <ClickableText> (волна C), и замена — только в renderParagraph.
+// Абзацы — через <ClickableText> (S5-7): текст кликается, как материал.
 
 const percent = new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractionDigits: 0 });
 
@@ -20,11 +20,18 @@ export function genreLabel(genre: string): string {
 
 export const genres = Object.keys(genreLabels);
 
-function renderParagraph(text: string, key: number) {
+// GeneratedParagraphs — тело текста: абзацы через пустую строку, каждый
+// через <ClickableText>. Общий рендер истории (/practice/text) и выдачи
+// тексто-практики (/practice/texts).
+export function GeneratedParagraphs({ body }: { body: string }) {
   return (
-    <p key={key} style={{ lineHeight: 1.6 }}>
-      {text}
-    </p>
+    <>
+      {body.split(/\n{2,}/).map((p, i) => (
+        <p key={i} style={{ lineHeight: 1.6 }}>
+          <ClickableText text={p} />
+        </p>
+      ))}
+    </>
   );
 }
 
@@ -34,7 +41,7 @@ export default function GeneratedTextView({ text }: { text: GeneratedText }) {
       <p style={{ color: "#666", margin: 0 }}>
         {text.level} · {genreLabel(text.genre)} · {text.word_count} слов
       </p>
-      {text.body.split(/\n{2,}/).map(renderParagraph)}
+      <GeneratedParagraphs body={text.body} />
       <p style={{ color: "#666", fontSize: "0.9rem", margin: 0 }}>
         Покрытие слов: {percent.format(text.coverage)} (
         {text.target_lemmas.map((l) => `${l} ×${text.occurrences[l] ?? 0}`).join(", ")}) · вне словаря:{" "}

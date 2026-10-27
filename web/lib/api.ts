@@ -294,6 +294,38 @@ export interface AssignResult {
   kept: number;
 }
 
+// Строка тексто-практики (GET /practice/texts/search, S5-7, ADR-035):
+// свой сгенерированный текст или предложение Tatoeba с переводом и
+// подписью. matched — слова поиска (леммы), которые есть в тексте.
+export type PracticeText =
+  | {
+      source: "generated";
+      id: number;
+      text: string;
+      matched: string[];
+      level: string;
+      genre: string;
+      word_count: number;
+      created_at: string;
+    }
+  | {
+      source: "tatoeba";
+      id: number;
+      text: string;
+      matched: string[];
+      translation: string;
+      attribution: TermExample["attribution"];
+    };
+
+// words — леммы, по которым шёл поиск; hint — почему выдача пуста, если
+// искать было не по чему (нет невыученных слов в словаре).
+export interface PracticeTextsPage {
+  words: string[];
+  items: PracticeText[];
+  next_cursor: string | null;
+  hint: string | null;
+}
+
 const API_TIMEOUT_MS = 5000;
 
 export async function apiFetch<T>(path: string): Promise<T> {

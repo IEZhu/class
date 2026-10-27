@@ -306,7 +306,8 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
 }
 
 // ExampleAuthors — подпись примера Tatoeba: авторы предложения и перевода
-// со ссылками на их страницы (условие CC BY 2.0 FR, ADR-028)
+// со ссылками на их страницы (условие CC BY 2.0 FR, ADR-028); та же
+// подпись — у предложений тексто-практики (S5-7)
 export function ExampleAuthors({ example: { attribution: a } }: { example: TermExample }) {
   const small = { ...mutedStyle, fontSize: "0.8em" };
   return (
