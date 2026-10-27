@@ -59,12 +59,29 @@ func main() {
 		registerCore(runner, st)
 		// F1: уроки, которые egress_ended сам не завершил (ADR-031)
 		worker.RegisterRecordingSweep(runner, scheduler, st)
+		backfillSRSCards(ctx, st)
 	}
 	go scheduler.Run(ctx)
 
 	log.Printf("worker: started, role %s", role)
 	runner.Run(ctx)
 	log.Printf("worker: stopped")
+}
+
+// backfillSRSCards — карточки FSRS словам словаря без карточки (S4-1,
+// долг D-3, ADR-036): словам до миграции 0021 и добавленным старым api,
+// пока шёл выкат. Идемпотентно, поэтому на каждом старте; сбой (миграция
+// ещё не применена) — строка в журнале, остальные джобы работают.
+// Ненулевое число после первого выката — путь записи слов в обход
+// store.SaveUserTerm.
+func backfillSRSCards(ctx context.Context, st *store.Store) {
+	n, err := st.BackfillSRSCards(ctx)
+	switch {
+	case err != nil:
+		log.Printf("worker: карточки FSRS не заведены: %v", err)
+	case n > 0:
+		log.Printf("worker: заведено карточек FSRS для слов без карточки: %d", n)
+	}
 }
 
 // registerCore — джобы стенда (роль core). Ключи интеграций читает только

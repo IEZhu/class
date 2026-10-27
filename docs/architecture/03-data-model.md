@@ -57,10 +57,14 @@ definitions(id, word, lemma /*lemma.Normalize(word), индекс*/, pos, etymol
 definition_imports(id, source, source_version, lines_done /*контрольная точка*/,
                    entries, finished_at, abandoned_at /*брошен -restart*/, created_at)
 
--- SRS (FSRS)
+-- SRS (FSRS, 0021, ADR-036): карточка — часть слова словаря, FK на
+-- user_terms с каскадом; поля — карточка go-fsrs
 srs_cards(user_id, term_id, due_at, stability, difficulty,
-          reps, lapses, state, last_review_at, PRIMARY KEY(user_id, term_id))
-srs_reviews(id, user_id, term_id, rating /*again|hard|good|easy*/, reviewed_at, source /*card|cloze*/)
+          scheduled_days /*0 — шаг обучения в минутах*/, reps, lapses,
+          state /*new|learning|review|relearning*/, remaining_steps,
+          last_review_at, created_at, PRIMARY KEY(user_id, term_id))
+srs_reviews(id, user_id, term_id, client_id /*uuid клиента, UNIQUE(user_id, client_id)*/,
+            rating /*again|hard|good|easy*/, reviewed_at, source /*card|cloze*/)
 
 -- транскрипты (0008, ADR-015): один на урок; external_id — id у провайдера,
 -- error — причина сбоя (ADR-016)
@@ -119,7 +123,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | колонки utterances.edited_at, edited_by (миграция `0014_utterance_edits`) | 2 | S2-4 |
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
 | user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
-| srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
+| srs_cards, srs_reviews (миграция `0021_srs`, ADR-036) | 4 | S4-1…S4-3 |
+| cloze_tests, cloze_items, cloze_attempts | 4 | S4-4, S4-5 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
 | tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
 | generated_texts, llm_usage (миграция `0017_generated_texts`) | 5 | S5-6 |
@@ -147,6 +152,10 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   подтверждения преподавателем из `lesson_term_candidates`).
 - `srs_cards` — по одной карточке на пару (user, term); cloze-результаты
   пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS.
+  Карточка заводится в одной транзакции со строкой `user_terms`
+  (`store.SaveUserTerm`) и удаляется вместе со словом; слова без карточки
+  (до 0021) добирает бэкфилл worker при старте. Оценка ставит
+  `user_terms.status` по карточке (ADR-036).
 - FTS: `subtitle_segments.tsv` — GENERATED tsvector + GIN-индекс; поиск
   для видео-практики только по нему.
 - Корпус Tatoeba (ADR-028): у английского предложения `lemmas` непустой,

@@ -67,8 +67,8 @@
 | `GET /lessons/{id}/whiteboard/scene` | сцена файлом `.excalidraw` (элементы как есть, с удалёнными), и после урока; 404 — доску не открывали | участники | 3 |
 | `PUT /lessons/{id}/whiteboard/scene` | `{elements: [...]}` → поэлементное слияние с сохранённой, `{version}`; снимок в S3 не чаще раза в минуту; 409/503 — как у входа, 413 — тело или сцена после слияния больше 1 MiB (сохранённая не меняется) | участники | 3 |
 | `GET /whiteboard/auth` | решение forward_auth caddy для `/whiteboard/lesson-{id}/socket.io/` (урок — из `X-Forwarded-Uri`): 204 участнику незавершённого урока, 401/403/409 иначе | участники | 3 |
-| `GET /practice/queue` | due-карточки по FSRS | student | 4 |
-| `POST /reviews` | рейтинг карточки (again/hard/good/easy) | student | 4 |
+| `GET /practice/queue` | `?limit=` (20, до 50) → `{items[{term_id, lemma, surface, translation \| null, definitions[], examples[], status, card: {state, due_at, scheduled_days, reps, lapses, last_review_at}}], due_total, next_due_at}`; свои карточки с `due_at <= сейчас`, самые просроченные первыми; `definitions`/`examples` — как у `POST /terms/click` (до 2), перевод — только из кэша; `due_total` — всех к показу, `next_due_at` — ближайший будущий показ или `null` (ADR-036) | student | 4 |
+| `POST /reviews` | `{review_id: uuid, term_id, rating: again\|hard\|good\|easy}` → 201 `{term_id, rating, duplicate: false, status, card}`: пересчёт FSRS, запись `srs_reviews`, статус слова по карточке; время — часы api. Повтор того же `review_id` с той же оценкой того же слова — 200 `duplicate: true` без пересчёта; 409 `review_conflict` — `review_id` занят другой оценкой, 409 `not_due` — показ ещё не наступил; 404 — у вызывающего нет карточки этого слова (чужие недостижимы); 400 — `review_id` не uuid, `term_id` ≤ 0, оценка не из четырёх (ADR-036) | student | 4 |
 | `POST /cloze/{id}/attempt` | ответы cloze-теста → счёт → FSRS | student | 4 |
 | `GET /practice/videos?words=…` | подбор видео по FTS субтитров | student | 5 |
 | `GET /practice/texts` | свои сгенерированные тексты, новые первыми (до 50); поиск по словам среди generated/Tatoeba (`?words=…`) — S5-7 | student, teacher | 5 |

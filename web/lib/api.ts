@@ -3,6 +3,7 @@
 // Клиентские компоненты используют относительный /api (через caddy).
 import { cookies } from "next/headers";
 
+import type { Rating } from "./review-session";
 import type { Role } from "./roles";
 import type { TermStatus } from "./term-status";
 
@@ -203,6 +204,49 @@ export interface GeneratedText {
   provider: string;
   model: string;
   created_at: string;
+}
+
+// Карточка FSRS (S4-2/S4-3, ADR-036): этап, следующий показ, интервал
+// в днях (0 — шаг обучения в минутах) и счётчики.
+export interface SrsCard {
+  state: "new" | "learning" | "review" | "relearning";
+  due_at: string;
+  scheduled_days: number;
+  reps: number;
+  lapses: number;
+  // null — карточку ещё не повторяли
+  last_review_at: string | null;
+}
+
+// Карточка очереди GET /practice/queue: лицо — лемма, оборот — перевод
+// из кэша, статьи словаря и примеры Tatoeba, как в попапе слова.
+export interface PracticeCard {
+  term_id: number;
+  lemma: string;
+  surface: string;
+  translation: string | null;
+  definitions: TermClick["definitions"];
+  examples: TermExample[];
+  status: TermStatus;
+  card: SrsCard;
+}
+
+export interface PracticeQueue {
+  items: PracticeCard[];
+  // Карточек к показу сейчас всего, не только в выдаче
+  due_total: number;
+  // Ближайший показ после сейчас; null — будущих нет
+  next_due_at: string | null;
+}
+
+// Ответ POST /reviews: карточка и статус слова после оценки; duplicate —
+// оценку с этим review_id уже засчитали.
+export interface ReviewResult {
+  term_id: number;
+  rating: Rating;
+  duplicate: boolean;
+  status: TermStatus;
+  card: SrsCard;
 }
 
 const API_TIMEOUT_MS = 5000;

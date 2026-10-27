@@ -16,6 +16,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/llm"
+	"github.com/IEZhu/class/backend/internal/srs"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/translate"
@@ -81,6 +82,10 @@ type API struct {
 	// llm — nil, если ключ LLM не задан (S5-6)
 	llm           llm.Provider
 	llmDailyLimit int
+	// srs — планировщик FSRS карточек (S4-3, ADR-036); now — часы оценок
+	// и очереди, тесты подставляют свои
+	srs *srs.Scheduler
+	now func() time.Time
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -106,6 +111,8 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		livekit:    livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
 		google:     google,
 		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
+		srs:        srs.NewScheduler(),
+		now:        time.Now,
 	}
 	a.llm, a.llmDailyLimit = cfg.LLM, cfg.LLMDailyLimit
 	if a.llmDailyLimit <= 0 {
@@ -243,6 +250,11 @@ func (a *API) Router() http.Handler {
 	}
 	mux.Handle("POST /practice/generate-text", learner(a.handleGenerateText))
 	mux.Handle("GET /practice/texts", learner(a.handleListGeneratedTexts))
+
+	// S4-2/S4-3: очередь повторений и оценка карточек FSRS (ADR-036) —
+	// у студента: карточки заводятся по словам личного словаря
+	mux.Handle("GET /practice/queue", student(a.handlePracticeQueue))
+	mux.Handle("POST /reviews", student(a.handleReview))
 	return mux
 }
 

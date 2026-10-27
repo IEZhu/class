@@ -458,6 +458,8 @@ func TestUserTermsMigrationReversible(t *testing.T) {
 	if got := state(); got != want {
 		t.Fatalf("схема 0015: %s", got)
 	}
+	// Карточки FSRS (0021) ссылаются на user_terms: сначала их откат
+	testdb.Apply(t, conn, "0021_srs.down.sql")
 	testdb.Apply(t, conn, "0015_user_terms.down.sql")
 	if got := state(); got != " " {
 		t.Fatalf("down оставил %q", got)
@@ -467,6 +469,7 @@ func TestUserTermsMigrationReversible(t *testing.T) {
 		t.Fatalf("откат 0015 задел terms: %v", err)
 	}
 	testdb.Apply(t, conn, "0015_user_terms.up.sql")
+	testdb.Apply(t, conn, "0021_srs.up.sql")
 	if got := state(); got != want {
 		t.Fatalf("повторный up: %s", got)
 	}
