@@ -156,7 +156,12 @@ services:
       # Cookies YouTube по необходимости (файл Netscape на хосте, читаемый
       # uid 10001 контейнера); без HARVESTER_COOKIES_FILE монтируется
       # пустой /dev/null — без cookies
-      - ${HARVESTER_COOKIES_FILE:-/dev/null}:/run/secrets/youtube-cookies.txt:ro
+      # длинная форма: короткая с ${...:-...} не разбирается при
+      # `docker compose config --no-interpolate` (скан ADR-011)
+      - type: bind
+        source: ${HARVESTER_COOKIES_FILE:-/dev/null}
+        target: /run/secrets/youtube-cookies.txt
+        read_only: true
     # Корень только на чтение, без capabilities и повышения прав: писать
     # можно лишь в каталог вызова yt-dlp (/tmp) и его кэш в HOME
     # (пользователь app образа, uid 10001)
