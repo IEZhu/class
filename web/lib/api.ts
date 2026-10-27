@@ -386,6 +386,58 @@ export interface PracticeVideoDetail extends VideoTargets {
   video: PracticeVideo;
 }
 
+// Пункт cloze (GET /practice/cloze, S4-4/S4-5, ADR-037): предложение
+// вокруг пропуска и перемешанные варианты в нижнем регистре; ни слова,
+// ни перевода до ответа в нём нет. Варианты словаря — словарные формы,
+// от LLM — в форме пропуска. due — ответ сдвинет карточку слова (иначе
+// засчитается только промах).
+export interface ClozeItem {
+  id: number;
+  before: string;
+  after: string;
+  options: string[];
+  distractor_source: "list" | "llm";
+  source: "lesson" | "material" | "generated" | "tatoeba";
+  // Урок реплики или материала; null у остальных
+  lesson_id: number | null;
+  // Подпись предложения Tatoeba (CC BY); null у остальных
+  attribution: TermExample["attribution"] | null;
+  due: boolean;
+}
+
+export interface ClozePage {
+  items: ClozeItem[];
+  // Карточек к повторению сейчас всего
+  due_total: number;
+  // Можно просить LLM-дистракторы (POST /practice/cloze/distractors)
+  llm_available: boolean;
+}
+
+// Ответ POST /practice/cloze/distractors: варианты пунктов после LLM
+// (distractor_source "list" — ответ модели не прошёл проверку).
+export interface ClozeOptions {
+  items: Pick<ClozeItem, "id" | "options" | "distractor_source">[];
+}
+
+// Ответ POST /practice/cloze/{id}/attempts: answer — форма слова
+// в предложении, exact — введена именно она; counted — ответ ушёл
+// в график FSRS; translation — перевод предложения Tatoeba.
+export interface ClozeAttemptResult {
+  item_id: number;
+  term_id: number;
+  lemma: string;
+  answer: string;
+  sentence: string;
+  correct: boolean;
+  exact: boolean;
+  rating: Exclude<Rating, "hard">;
+  counted: boolean;
+  duplicate: boolean;
+  status: TermStatus;
+  card: SrsCard;
+  translation: string | null;
+}
+
 const API_TIMEOUT_MS = 5000;
 
 export async function apiFetch<T>(path: string): Promise<T> {
