@@ -102,6 +102,7 @@ export interface GoogleCalendarStatus {
 
 // Ответ POST /terms/click (S3-2) — содержимое попапа <ClickableText>.
 export interface TermClick {
+  // 0 — слово api не знает и термина не заводил: попап без «в мой словарь»
   term_id: number;
   lemma: string;
   surface: string;

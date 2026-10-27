@@ -141,6 +141,12 @@ export default function ClickableText({
 
 const POPUP_WIDTH = 340;
 
+// hasTerm — у слова есть термин: term_id 0 api отдаёт незнакомому слову,
+// термина не заводя, — в словарь его не добавить и статуса у него нет
+function hasTerm(d: TermClick): boolean {
+  return d.term_id > 0;
+}
+
 const sectionStyle = { margin: "0.5rem 0 0", fontSize: "0.9em" } as const;
 const mutedStyle = { color: "#666" } as const;
 
@@ -164,7 +170,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
       .then((d) => {
         if (cancelled) return;
         termStatuses.learn(word.key, d.lemma);
-        if (scope.dictionary) termStatuses.setStatus(d.lemma, d.status);
+        if (scope.dictionary && hasTerm(d)) termStatuses.setStatus(d.lemma, d.status);
         setData(d);
       })
       .catch((e: unknown) => {
@@ -232,7 +238,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
           <p style={{ margin: "0.25rem 0 0.5rem" }}>
             {data.translation ? data.translation.text : <span style={mutedStyle}>перевода пока нет</span>}
           </p>
-          {scope.dictionary && (
+          {scope.dictionary && hasTerm(data) && (
             <TermStatusControl termId={data.term_id} lemma={data.lemma} status={status} lessonId={scope.lessonId} />
           )}
           {data.definitions.length > 0 && (

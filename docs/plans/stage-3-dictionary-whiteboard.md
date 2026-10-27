@@ -233,7 +233,8 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   `ClickableTextScope` (`lessonId`, `dictionary`); попап — лемма и форма,
   перевод, статус, дефиниции с подписью «Wiktionary, CC BY-SA», примеры
   `examples[{text, translation}]`, если есть. `web/app/term-status-control.tsx`
-  — `TermStatusControl` и общий кэш `termStatuses`.
+  — `TermStatusControl` и общий кэш `termStatuses`. `term_id` 0 (слово
+  api не знает, термин не заведён) — попап без «в мой словарь» и статуса.
 - Обёрнуты: тексты материалов и домашки (`body_md`) на странице урока —
   её видят и гости события. Контекст урока —
   `web/app/lesson/[id]/layout.tsx` (раскраска и статус — у студента).
