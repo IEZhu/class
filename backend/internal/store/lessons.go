@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/IEZhu/class/backend/internal/jobs"
 )
 
 type Lesson struct {
@@ -34,7 +36,8 @@ type LessonDetail struct {
 }
 
 // CreateLesson создаёт урок и в той же транзакции снапшотит участников
-// из текущего состава группы (lesson_participants; нужен и календарю S1-2).
+// из текущего состава группы (lesson_participants — они же приглашённые
+// в событие календаря) и ставит calendar_sync (S1-1).
 // Без группы это открытое событие (ADR-010): снапшотить некого, участники
 // появятся по гостевой ссылке.
 func (s *Store) CreateLesson(ctx context.Context, groupID *int64, title string, teacherID int64, startsAt, endsAt time.Time) (*Lesson, error) {
@@ -44,6 +47,10 @@ func (s *Store) CreateLesson(ctx context.Context, groupID *int64, title string, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	calendar, err := calendarConnected(ctx, tx, teacherID)
+	if err != nil {
+		return nil, err
+	}
 	l := &Lesson{GroupID: groupID, Title: title, TeacherID: teacherID, StartsAt: startsAt, EndsAt: endsAt}
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO lessons (group_id, title, teacher_id, starts_at, ends_at)
@@ -52,10 +59,18 @@ func (s *Store) CreateLesson(ctx context.Context, groupID *int64, title string, 
 		return nil, err
 	}
 	if groupID != nil {
+		// Учётки в архиве (ADR-024) в новые уроки не попадают
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO lesson_participants (lesson_id, user_id)
-			 SELECT $1, user_id FROM group_members WHERE group_id = $2`,
+			 SELECT $1, gm.user_id FROM group_members gm
+			 JOIN users u ON u.id = gm.user_id
+			 WHERE gm.group_id = $2 AND u.deactivated_at IS NULL`,
 			l.ID, *groupID); err != nil {
+			return nil, err
+		}
+	}
+	if calendar {
+		if err := queueCalendarSync(ctx, tx, l.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -120,7 +135,7 @@ func (s *Store) GetLessonDetail(ctx context.Context, lessonID int64) (*LessonDet
 	}
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT u.id, u.email, u.name, u.role
+		`SELECT u.id, u.email, u.name, u.role, u.deactivated_at IS NOT NULL
 		 FROM lesson_participants lp JOIN users u ON u.id = lp.user_id
 		 WHERE lp.lesson_id = $1 ORDER BY u.id`, lessonID)
 	if err != nil {
@@ -130,7 +145,7 @@ func (s *Store) GetLessonDetail(ctx context.Context, lessonID int64) (*LessonDet
 	d.Participants = []GroupMember{}
 	for rows.Next() {
 		m := GroupMember{}
-		if err := rows.Scan(&m.UserID, &m.Email, &m.Name, &m.Role); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Email, &m.Name, &m.Role, &m.Archived); err != nil {
 			return nil, err
 		}
 		d.Participants = append(d.Participants, m)
@@ -209,6 +224,10 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	calendar, err := calendarConnected(ctx, tx, teacherID)
+	if err != nil {
+		return nil, err
+	}
 	if err := lessonForUpdate(ctx, tx, lessonID, teacherID); err != nil {
 		return nil, err
 	}
@@ -219,11 +238,21 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 		lessonID, startsAt, endsAt).Scan(&l.GroupID, &l.Title, &l.StartsAt, &l.EndsAt, &l.Status); err != nil {
 		return nil, err
 	}
+	if calendar {
+		if err := queueCalendarSync(ctx, tx, lessonID); err != nil {
+			return nil, err
+		}
+	}
 	return l, tx.Commit(ctx)
 }
 
-// CancelLesson удаляет запланированный урок (материалы и участники — каскадом).
-// Отдельного статуса cancelled в статус-машине нет (03-data-model.md).
+// CancelLesson удаляет запланированный урок. Отдельного статуса cancelled
+// в статус-машине нет (03-data-model.md). Материалы с файлами удаляются
+// явным DELETE … RETURNING s3_key: их объекты в той же транзакции уходят
+// в джобу JobMaterialFilesDelete (ADR-024) — каскад до бакета не достаёт.
+// Остальные материалы и участники удаляются каскадом. Событие в календаре
+// удаляет джоба calendar_sync: строки урока к её запуску уже нет, поэтому
+// id события и организатор уходят в payload (ADR-023).
 func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -234,8 +263,31 @@ func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) err
 	if err := lessonForUpdate(ctx, tx, lessonID, teacherID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM lessons WHERE id = $1`, lessonID); err != nil {
+	rows, err := tx.Query(ctx,
+		`DELETE FROM materials WHERE lesson_id = $1 AND s3_key IS NOT NULL RETURNING s3_key`, lessonID)
+	if err != nil {
 		return err
+	}
+	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	if err := queueMaterialFilesDelete(ctx, tx, keys); err != nil {
+		return err
+	}
+	var eventID *string
+	if err := tx.QueryRow(ctx,
+		`DELETE FROM lessons WHERE id = $1 RETURNING gcal_event_id`, lessonID).Scan(&eventID); err != nil {
+		return err
+	}
+	// Без id событие в календарь не ставилось: удалять нечего. С id
+	// удаление ставится и без подключения: событие могло появиться раньше,
+	// и джоба дождётся нового токена (ADR-023)
+	if eventID != nil {
+		if _, err := jobs.Enqueue(ctx, tx, JobCalendarSync,
+			CalendarSync{LessonID: lessonID, TeacherID: teacherID, EventID: *eventID}); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

@@ -11,7 +11,7 @@
 
 | Метод и путь | Назначение | Роль | Этап |
 |---|---|---|---|
-| `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006) | все | 0 |
+| `POST /auth/login` | вход (email+пароль → cookie `sid`, ADR-006); учётка в архиве — 403 `account_deactivated` после верного пароля (ADR-024) | все | 0 |
 | `POST /auth/logout` | выход (удаление сессии) | все | 0 |
 | `GET /auth/me` | текущий пользователь (для web-каркаса S0-5) | все | 0 |
 | `POST /groups` | создать группу (name, level) | admin | 0 |
@@ -21,9 +21,12 @@
 | `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние | участники | 0 |
 | `PATCH /lessons/{id}` | перенос (starts_at/ends_at), только `scheduled` | teacher урока | 0 |
-| `DELETE /lessons/{id}` | отмена урока, только `scheduled` | teacher урока | 0 |
-| `POST /lessons/{id}/materials` | прикрепить материал | teacher | 0 |
-| `POST /lessons/{id}/homework` | прикрепить домашку | teacher | 0 |
+| `DELETE /lessons/{id}` | отмена урока, только `scheduled`; файлы материалов удаляет worker (`material_files_delete`, ADR-024) | teacher урока | 0 |
+| `POST /lessons/{id}/materials` | прикрепить материал; с `file: {name, content_type, size}` — заготовка файла и presigned PUT на 10 мин под `materials-pending/` (тип по белому списку, до 50 MiB, ключ выбирает api, расширение имени — по типу, ADR-024) | teacher | 0 |
+| `POST /lessons/{id}/homework` | прикрепить домашку; `file` — как у материала | teacher | 0 |
+| `POST /materials/{id}/confirm` | подтвердить загрузку файла: объекта нет — 409, размер или тип не совпали — объект и материал удаляются, 422; годный объект копируется в хранилище на постоянный ключ, ETag запоминается; повтор — 200 | teacher урока | 1 |
+| `GET /materials/{id}/url` | presigned GET на файл материала, TTL 30 мин; не подтверждён, пропал или изменён после подтверждения (ETag, размер, тип) — 409, у материала нет файла — 404 | участники | 1 |
+| `DELETE /materials/{id}` | удалить материал вместе с его файлом в хранилище; хранилище не ответило — объект удалит worker (джоба `material_files_delete`) | teacher урока | 1 |
 | `GET /join/{token}` | предпросмотр события по гостевой ссылке; 404 — нет/отозвана/перевыпущена, 410 — событие прошло | без входа | 1 |
 | `POST /join/{token}` | войти гостем: имя → участник события + сессия; 400 — имя пустое или длиннее 60, 404/410 — как у `GET` | без входа | 1 |
 | `POST /lessons/{id}/guest-link` | выпустить/перевыпустить гостевую ссылку; только у события без группы (409 у урока с группой) | admin, teacher события | 1 |
@@ -35,20 +38,30 @@
 | `DELETE /invites/{id}` | отозвать приглашение | admin, teacher | 1 |
 | `PATCH /auth/me` | своё имя (email и роль себе не меняют) | все | 1 |
 | `POST /auth/password` | смена своего пароля (current+new); прочие сессии гасятся | все | 1 |
-| `GET /users` | люди: admin — все, teacher — из своих групп | admin, teacher | 1 |
+| `GET /users` | люди: admin — все, teacher — из своих групп; без архива, `?archived=1` — только архив (ADR-024) | admin, teacher | 1 |
 | `POST /users` | завести учётку со стартовым паролем; teacher — только student | admin, teacher | 1 |
 | `PATCH /users/{id}` | имя; роль — только admin | admin, teacher | 1 |
 | `POST /users/{id}/password` | сброс пароля, все сессии владельца гасятся | admin, teacher | 1 |
+| `POST /users/{id}/deactivate` | в архив вместо удаления: вход закрыт, все сессии гасятся той же транзакцией, из комнат идущих уроков LiveKit выставляет; себя — 403 (ADR-024) | admin, teacher (только студенты своих групп) | 1 |
+| `POST /users/{id}/reactivate` | вернуть из архива, вход по прежнему паролю | admin, teacher (только студенты своих групп) | 1 |
 | `DELETE /groups/{id}/members/{user_id}` | убрать из группы (идемпотентно) | admin | 1 |
-| `POST /auth/google/callback` | OAuth2 callback подключения календаря | teacher | 1 |
+| `GET /auth/google` | статус Google Calendar: `available` (ключи на стенде), `connected` (ADR-023) | teacher | 1 |
+| `POST /auth/google/start` | `{url}` экрана согласия Google; state, PKCE-verifier и срок — в cookie `__Host-google_oauth`, запечатанном для этого преподавателя (ADR-023); 503 без ключей | teacher | 1 |
+| `GET /auth/google/callback` | возврат с Google (`code`, `state`): обмен кода, шифрованный refresh token, джобы calendar_sync будущих уроков; ответ — всегда 303: на `/account?google=connected\|denied\|scope\|failed\|unavailable`, без сессии — на `/login`, не преподавателю — `failed`; cookie подключения гасится | сессию проверяет хендлер (teacher) | 1 |
+| `DELETE /auth/google` | отключить календарь: токен стирается и отзывается в Google; `200 {revoked}`, `false` — отозвать не вышло (снять доступ в аккаунте Google); повтор без подключения — `{revoked:true}` | teacher | 1 |
 | `GET /lessons/{id}/room-token` | LiveKit access token, комната `lesson-{id}` | участники | 1 |
 | `POST /lessons/{id}/finish` | ручное завершение урока | teacher | 1 |
-| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=done (с S2-1 — processing и джоба ASR) | LiveKit | 1 |
+| `POST /webhooks/livekit` | `room_started`/`participant_joined` → Egress и status=live, сбой запуска → 503 и повтор (ADR-012); `egress_ended` → recording_s3_key, status=processing и джоба recording_ready (без ASR — сразу done), сбой БД → 503 и повтор (ADR-013); `room_finished` → снимок доски сразу (S3-6) | LiveKit | 1 |
 | `GET /media/{lesson_id}/url` | presigned GET на запись, TTL 30 мин | участники | 1 |
-| `POST /webhooks/assemblyai` | `completed` → utterances, VTT | AssemblyAI | 2 |
-| `POST /terms/click` | `{surface, context_sentence}` → перевод/дефиниция | все | 3 |
+| `POST /webhooks/assemblyai` | `{transcript_id, status: completed\|error}` → транскрипт `fetching` + джоба `asr_result` (реплики, затем VTT — в worker, ADR-015); секрет в `X-Lingua-Webhook-Secret`, иначе 401; без секрета в api — 503; неизвестный транскрипт — 503 `unknown_transcript` (AssemblyAI повторит: вебхук мог обогнать запись `external_id`; потерянный итог подберёт сверка `asr_poll`, ADR-016); повтор — 200 без новой джобы | AssemblyAI | 2 |
+| `GET /lessons/{id}/transcript` | `{status, utterances[{idx, speaker_label, user_id, start_ms, end_ms, text}], vtt_url, vtt_expires_at}`; VTT — presigned на 30 мин, `null` до выкладки; нет транскрипта — 404 `no_transcript` | участники | 2 |
+| `POST /terms/click` | `{surface, context_sentence, lesson_id?}` → `{term_id, lemma, surface, translation: {text, source} \| null, definitions[{word, pos, glosses[], translations_ru[]}], examples: []}`; источники: кэш → датасет → LibreTranslate (без него `translation: null`, 200); незнакомое слово (нет ни в OEWN, ни в датасете) — `term_id: 0`, `translation: null`, термин не заводится (ADR-017); 400 — не одно слово, контекст > 1000 символов; 403/404 — чужой/нет урока в `lesson_id` | все, включая гостя | 3 |
 | `POST /user-terms` | «в мой словарь» / смена статуса | student | 3 |
 | `POST /lessons/{id}/terms/confirm` | `{term_ids[], assign_to[]}` — словарь урока | teacher | 3 |
+| `GET /lessons/{id}/whiteboard` | вход на доску: `{room, key, socket_path}` — случайное имя комнаты ретранслятора (из id урока не выводится), ключ AES-GCM, путь ретранслятора; доска заводится при первом входе; 409 — урок в processing/done, 503 — доска не включена (ADR-020) | участники | 3 |
+| `GET /lessons/{id}/whiteboard/scene` | сцена файлом `.excalidraw` (элементы как есть, с удалёнными), и после урока; 404 — доску не открывали | участники | 3 |
+| `PUT /lessons/{id}/whiteboard/scene` | `{elements: [...]}` → поэлементное слияние с сохранённой, `{version}`; снимок в S3 не чаще раза в минуту; 409/503 — как у входа, 413 — тело или сцена после слияния больше 1 MiB (сохранённая не меняется) | участники | 3 |
+| `GET /whiteboard/auth` | решение forward_auth caddy для `/whiteboard/lesson-{id}/socket.io/` (урок — из `X-Forwarded-Uri`): 204 участнику незавершённого урока, 401/403/409 иначе | участники | 3 |
 | `GET /practice/queue` | due-карточки по FSRS | student | 4 |
 | `POST /reviews` | рейтинг карточки (again/hard/good/easy) | student | 4 |
 | `POST /cloze/{id}/attempt` | ответы cloze-теста → счёт → FSRS | student | 4 |
@@ -63,8 +76,9 @@
   идемпотентны (повторная доставка не дублирует utterances/джобы).
 - Webhook-обработчики только меняют состояние и ставят джобу в `jobs` —
   тяжёлая работа в worker.
-- Presigned URL выдаёт только api после проверки доступа (участник урока);
-  TTL ~30 мин.
+- Presigned GET выдаёт только api после проверки участия в уроке, TTL
+  ~30 мин; presigned PUT на файл материала — только преподавателю урока,
+  TTL 10 мин ([ADR-024](decisions.md)).
 - Ошибки — JSON `{error, code}`; коды HTTP честные (403 для чужого урока,
   409 для конфликтов состояния).
 

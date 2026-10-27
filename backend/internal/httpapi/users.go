@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -19,6 +20,8 @@ const minPasswordLen = 8
 type userWithGroupsResponse struct {
 	userResponse
 	Groups []string `json:"groups"`
+	// null у действующей учётки, момент архивации — у архивной (ADR-024)
+	DeactivatedAt *time.Time `json:"deactivated_at"`
 }
 
 // canManage — может ли актор править учётку target (ADR-007): admin — любую,
@@ -34,17 +37,27 @@ func (a *API) canManage(r *http.Request, actor *store.User, targetID int64) (boo
 	}
 }
 
+// handleListUsers — по умолчанию действующие учётки; ?archived=1 — архив
+// (ADR-024). Границы видимости те же: преподаватель видит только своих.
 func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	actor := userFrom(r.Context())
+	archived := false
+	if v := r.URL.Query().Get("archived"); v != "" {
+		var err error
+		if archived, err = strconv.ParseBool(v); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "archived — 1/0 или true/false")
+			return
+		}
+	}
 
 	var (
 		users []store.UserWithGroups
 		err   error
 	)
 	if actor.Role == store.RoleAdmin {
-		users, err = a.store.ListUsers(r.Context())
+		users, err = a.store.ListUsers(r.Context(), archived)
 	} else {
-		users, err = a.store.ListUsersOfTeacherGroups(r.Context(), actor.ID)
+		users, err = a.store.ListUsersOfTeacherGroups(r.Context(), actor.ID, archived)
 	}
 	if err != nil {
 		internalError(w, "list users", err)
@@ -54,8 +67,9 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	out := make([]userWithGroupsResponse, 0, len(users))
 	for _, u := range users {
 		out = append(out, userWithGroupsResponse{
-			userResponse: userResponse{ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name},
-			Groups:       u.Groups,
+			userResponse:  userResponse{ID: u.ID, Email: u.Email, Role: u.Role, Name: u.Name},
+			Groups:        u.Groups,
+			DeactivatedAt: u.DeactivatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -195,6 +209,67 @@ func (a *API) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setPassword(w, r, id, req.Password, "reset password")
+}
+
+// handleSetUserArchived — архивация (true) и возврат из архива (false)
+// вместо удаления учётки (ADR-024, долг D-5). Права те же, что на правку:
+// админ — любого, преподаватель — студента своих групп, staff ему не
+// по зубам. Себя в архив не отправить: админ запер бы сам себя.
+func (a *API) handleSetUserArchived(archived bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor := userFrom(r.Context())
+		id, ok := pathID(w, r)
+		if !ok {
+			return
+		}
+		if id == actor.ID {
+			writeError(w, http.StatusForbidden, "forbidden", "свою учётку в архив не отправить")
+			return
+		}
+		if !a.authorizeManage(w, r, actor, id) {
+			return
+		}
+		set, op := a.store.ReactivateUser, "reactivate user"
+		if archived {
+			set, op = a.store.DeactivateUser, "deactivate user"
+		}
+		switch err := set(r.Context(), id); {
+		case errors.Is(err, store.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "пользователь не найден")
+		case err != nil:
+			internalError(w, op, err)
+		default:
+			if archived {
+				a.removeFromLiveRooms(r.Context(), id)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+}
+
+// removeFromLiveRooms — после архивации выставить человека из комнат
+// идущих уроков: сессий у него уже нет, но выданный раньше токен LiveKit
+// живёт до roomTokenTTL. RemoveParticipant заодно гасит прежние токены
+// в эту комнату (revoke_token_ts). Архивация уже зафиксирована, поэтому
+// сбой LiveKit — только строка в журнале (ADR-024).
+func (a *API) removeFromLiveRooms(ctx context.Context, userID int64) {
+	if !a.cfg.liveKitConfigured() {
+		logf("архив %d: LiveKit не настроен — из комнат не выставляем", userID)
+		return
+	}
+	// Ответ уже решён: клиент, закрывший запрос, не должен оборвать вызовы
+	ctx = context.WithoutCancel(ctx)
+	lessons, err := a.store.LiveLessonsOf(ctx, userID)
+	if err != nil {
+		logf("архив %d: идущие уроки не прочитаны: %v", userID, err)
+		return
+	}
+	identity := strconv.FormatInt(userID, 10)
+	for _, lessonID := range lessons {
+		if err := a.livekit.RemoveParticipant(ctx, roomName(lessonID), identity); err != nil {
+			logf("архив %d: из комнаты %s не выставлен: %v", userID, roomName(lessonID), err)
+		}
+	}
 }
 
 // handleChangeOwnPassword — смена своего пароля: старый обязателен, иначе

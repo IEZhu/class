@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Настройка бакета для записей уроков (S1-3): CORS и lifecycle.
+# Настройка бакета для записей уроков (S1-3) и файлов материалов (D-4):
+# CORS и lifecycle.
 # Провайдер — Cloudflare R2 (ADR-009), API S3-совместимый, поэтому работаем
 # обычным aws cli с --endpoint-url. Раскладка и политика хранения —
 # docs/architecture/05-storage-s3.md.
@@ -44,23 +45,40 @@ else
     r2 create-bucket --bucket "$BUCKET"
 fi
 
-say "2/4 CORS: только GET и HEAD, только с домена платформы"
-# Нужен плееру: запись отдаётся браузеру по presigned GET напрямую из R2,
-# минуя VPS. ExposeHeaders — чтобы работала перемотка по Range.
+say "2/4 CORS: GET/HEAD и PUT, только с домена платформы"
+# GET/HEAD нужен плееру и скачиванию: запись и файлы материалов отдаются
+# браузеру по presigned GET напрямую из R2, минуя VPS. Range — перемотка,
+# ExposeHeaders — чтобы плеер видел длину и диапазон ответа.
+# PUT — загрузка файлов материалов браузером по presigned PUT (ADR-024):
+# Content-Type и Content-Disposition api вносит в подпись, длину браузер
+# ставит сам. Набор заголовков сверяет TestPresignPutShape
+# (backend/internal/storage/s3_test.go) — менять вместе.
+# Правило одно на все методы: с двумя (GET/HEAD и отдельно PUT) SeaweedFS
+# отвечал на preflight PUT без Access-Control-Allow-Methods, и браузер
+# загрузку блокировал (ревью D-4). PUT появился с долгом D-4 — бакет,
+# настроенный раньше, надо перенастроить повторным запуском (долг D-14).
 r2 put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
   \"CORSRules\": [{
     \"AllowedOrigins\": [\"$ORIGIN\"],
-    \"AllowedMethods\": [\"GET\", \"HEAD\"],
-    \"AllowedHeaders\": [\"*\"],
+    \"AllowedMethods\": [\"GET\", \"HEAD\", \"PUT\"],
+    \"AllowedHeaders\": [\"Content-Type\", \"Content-Disposition\", \"Range\"],
     \"ExposeHeaders\": [\"Content-Length\", \"Content-Range\", \"Accept-Ranges\", \"ETag\"],
     \"MaxAgeSeconds\": 3000
   }]
 }"
 
-say "3/4 lifecycle: записи дешевеют, транскрипты не трогаем"
+say "3/4 lifecycle: записи дешевеют, незавершённые загрузки исчезают"
 # У R2 только Standard и Infrequent Access, архивного класса нет (ADR-009).
 # Удаление старого видео с сохранением аудио и VTT — отдельное решение,
 # когда накопится статистика просмотров; сейчас только переход в IA.
+# Бэкапы Postgres (backups/pg/, S1-7) правилом не покрыты намеренно:
+# «одну копию в неделю после 7 суток» lifecycle не выразить, а истечение
+# по возрасту стёрло бы последние копии, если бэкапы перестанут делаться.
+# Чистит сам deploy/backup-pg.sh (ADR-014); в IA они тоже не уходят.
+# materials-pending/ — загрузки файлов материалов до подтверждения
+# (ADR-024): confirm копирует годный файл на постоянный ключ, остальное
+# (отвергнутое, брошенное, догруженное после удаления материала или
+# отмены урока) стирается через сутки — ссылка на загрузку живёт 10 минут.
 r2 put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration "{
   \"Rules\": [
     {
@@ -68,6 +86,12 @@ r2 put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configurati
       \"Status\": \"Enabled\",
       \"Filter\": {\"Prefix\": \"recordings/\"},
       \"Transitions\": [{\"Days\": $IA_AFTER_DAYS, \"StorageClass\": \"STANDARD_IA\"}]
+    },
+    {
+      \"ID\": \"materials-pending-expire\",
+      \"Status\": \"Enabled\",
+      \"Filter\": {\"Prefix\": \"materials-pending/\"},
+      \"Expiration\": {\"Days\": 1}
     },
     {
       \"ID\": \"abort-incomplete-uploads\",
@@ -96,6 +120,9 @@ S3_SECRET_ACCESS_KEY=<Secret Access Key, показывается один ра�
 Проверить рабочий токен:
   AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \\
     aws s3 ls "s3://$BUCKET" --endpoint-url $ENDPOINT --region auto
+
+Бэкапам Postgres нужен отдельный бакет и свой токен (ADR-014,
+BACKUP_S3_* в deploy/.env) — см. deploy/README.md.
 
 Временный Admin-токен после этого удалите — он больше не нужен.
 EOF

@@ -57,3 +57,18 @@ seed: migrate
 	else \
 		echo "seed: файла backend/migrations/seed.sql нет"; \
 	fi
+
+# S3-3/S3-4: перевод и словарь (deploy/README.md, ADR-018, ADR-019).
+# translate-models — разовая установка моделей en↔ru для профиля translate.
+# dict-import — импорт дефиниций из образа worker'а; повторный запуск
+# продолжает оборванный прогон. Локальный файл: DICT_DIR — каталог
+# на хосте (монтируется в /data), DICT_SOURCE=/data/<файл>.
+DICT_SOURCE ?= https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz
+
+.PHONY: translate-models dict-import
+
+translate-models: check-env
+	$(COMPOSE) --profile translate-setup run --rm libretranslate-models
+
+dict-import: check-env
+	$(COMPOSE) run --rm --entrypoint dictimport $(if $(DICT_DIR),-v $(abspath $(DICT_DIR)):/data:ro) worker -source "$(DICT_SOURCE)"

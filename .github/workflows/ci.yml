@@ -42,7 +42,7 @@ jobs:
       - run: go mod verify
       - run: go vet ./...
       - run: go test -race -count=1 ./...
-      - run: go build ./cmd/api
+      - run: go build ./cmd/...
 
   web:
     name: Web types and production build
@@ -64,3 +64,18 @@ jobs:
       - run: npm ci --no-audit
       - run: npx --no-install tsc --noEmit
       - run: npm run build
+
+  shell:
+    name: Deploy shell scripts (shellcheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # S1-7: бэкап и восстановление Postgres; backup-lib.sh проверяется
+      # через source (-x) вместе со скриптами, которые его подключают
+      - run: >-
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt
+          koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb
+          -x deploy/backup-pg.sh deploy/restore-pg.sh deploy/s3-bootstrap.sh

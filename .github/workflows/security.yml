@@ -68,7 +68,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, web, caddy, postgres]
+        image: [api, worker, web, caddy, postgres]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -90,7 +90,7 @@ jobs:
           python3 - <<'PY'
           import json, os, pathlib, subprocess
           service = os.environ['IMAGE']
-          assert service in ('api', 'web', 'caddy', 'postgres')
+          assert service in ('api', 'worker', 'web', 'caddy', 'postgres')
           config = json.loads(subprocess.check_output(['docker', 'compose', '-f', 'deploy/docker-compose.yml', 'config', '--format', 'json', '--no-interpolate']))
           build = config['services'][service]['build']
           assert set(build) <= {'context', 'dockerfile', 'target'}, 'New Compose build options must be scanned explicitly'
@@ -130,3 +130,18 @@ jobs:
       - name: Remove the isolated local registry
         if: always()
         run: docker rm -f -v class-ci-registry
+
+  harvester:
+    # The subtitle harvester image is outside the blocking runtime scan
+    # (ADR-022, debt D-12); its yt-dlp pins are in the source scan above.
+    name: Harvester image (runtime contracts only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build the harvester runtime image
+        run: docker build --pull --no-cache --target harvester -t security-scan:harvester backend
+      - name: Verify runtime contracts without production access
+        run: scripts/security/smoke_runtime.sh harvester security-scan:harvester

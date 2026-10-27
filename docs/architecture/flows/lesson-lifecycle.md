@@ -32,17 +32,22 @@ stateDiagram-v2
 3. Преподаватель прикрепляет домашку/материалы; до старта страница показывает
    их. *(этап 0)*
 4. В момент урока — кнопка «Войти в класс»: api выдаёт LiveKit access token,
-   комната `lesson-{id}`. Рядом — вкладка доски
-   (`excalidraw?room=lesson-{id}`) и панель «словарь урока»: клики по словам
+   комната `lesson-{id}`. Рядом — вкладка доски: редактор Excalidraw,
+   комната ретранслятора со случайным именем, имя и ключ комнаты — от api
+   только участникам (ADR-020), — и панель «словарь урока»: клики по словам
    из материалов летят в `lesson_term_candidates`. *(этапы 1, 3)*
 5. При старте комнаты api запускает LiveKit Egress: room composite →
    `s3://…/recordings/{id}/room.mp4`; экономный вариант — audio-only. *(этап 1)*
-6. Урок кончился → webhook `egress_ended` → `status=processing` → worker:
+6. Урок кончился → webhook `egress_ended` → `status=processing` + джоба
+   `recording_ready` → worker: строка `transcripts` и джоба `asr_submit` →
    presigned GET на запись → AssemblyAI (`speaker_labels: true`,
-   `language_code: en`, webhook). *(этапы 1–2; на этапе 1, пока ASR нет,
-   сразу `done`)*
-7. Webhook AssemblyAI → сохраняем `utterances` → рендерим WebVTT (`<v A>…`)
-   в S3 → `status=done`. *(этап 2)*
+   `language_code: en`, webhook). *(этапы 1–2; без `ASSEMBLYAI_API_KEY`
+   `recording_ready` сразу ставит `done`, ADR-013, ADR-015)*
+7. Webhook AssemblyAI (потерян — через 2 ч сверка `asr_poll` спросит итог
+   сама, ADR-016) → джоба `asr_result` сохраняет `utterances` → джоба
+   `vtt_render` рендерит WebVTT (`<v A>…`) в S3 → `status=done`. Сбой
+   транскрибации — урок всё равно `done`, транскрипт `error` (ADR-016).
+   *(этап 2)*
 8. **Post-lesson flow (выбор слов).** Преподавателю — чеклист кандидатов:
    клики за урок + текст-элементы из JSON-сцены Excalidraw (`type: "text"`) +
    ручной ввод. Отмеченные → `lesson_terms` → назначение всем/выборочно:

@@ -87,7 +87,88 @@ LLM с контекстом предложения — **закрывает до
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S5-1 Источники и RSS (2026-10-26)
+
+- Миграция `backend/migrations/0011_subtitles.up.sql` (откат — `.down.sql`):
+  `subtitle_sources` (+ `polled_at`, `last_error`, `created_at`; UNIQUE
+  `(kind, external_id)`) с seed из четырёх каналов — TED
+  `UCAuUUnT6oDeKwE6v1NGQxug`, TED-Ed `UCsooa4yRKGN_zEE8iknghZA`, BBC Learning
+  English `UCHaHD477h-FeBbVh9Sh7syA`, VOA Learning English
+  `UCKyTokYo0nK2OA-az-sDijA` (id сверены с их RSS-фидами); `videos`
+  (+ состояние сборщика, UNIQUE `(source, external_id)`); `subtitle_segments`
+  (PK `(video_id, idx)`, `tsv` GENERATED `to_tsvector('english', text)`
+  STORED + GIN `subtitle_segments_tsv_idx`); `job_schedules` (ADR-021).
+- Первый планировщик периодических джоб — `backend/internal/jobs/schedule.go`
+  (`jobs.NewScheduler`, `Every`, `Tick`, `Run`; ADR-021).
+- Джоба `rss_poll` (раз в час) — `harvester.PollFeeds`, фид —
+  `backend/internal/harvester/rss.go` (Atom YouTube, Shorts пропускаются).
+  Store (`backend/internal/store/subtitles.go`): `EnabledSubtitleSources`,
+  `AddFeedVideos` (`ON CONFLICT DO NOTHING`), `SetSourcePolled`.
+- Проверено живьём на одноразовой базе: роль harvester по расписанию
+  опросила четыре seed-фида и добавила 51 видео (60 записей минус 9 Shorts).
+
+### S5-2 Сборщик субтитров yt-dlp (2026-10-26) — ◐
+
+- Джоба `subtitles_fetch` (раз в 5 мин; пакет, пока хватает потолка джобы
+  15 мин) — `harvester.FetchSubtitles`: темп 15–30 с и backoff
+  30 мин → сутки — `pace.go`; вызов yt-dlp — `ytdlp.go` (`YTDLP`,
+  `ErrBlocked`, `ErrNoRunner`; manual/auto — по `info.json`, урезанное
+  окружение); VTT → сегменты — `vtt.go` (`ParseVTT`, без повторов
+  катящихся автосубтитров). Store: `NextVideoToHarvest`, `SaveSubtitles`
+  (замена сегментов одной транзакцией), `FailHarvest`, поиск для S5-5 —
+  `SearchSubtitles(words, limit)` (FTS по `tsv`, слова через `english`).
+- Регистрация — `worker.RegisterHarvester` (`backend/internal/worker/worker.go`);
+  роль процесса — `WORKER_ROLE` в `backend/cmd/worker/main.go`
+  (`core` по умолчанию | `harvester`).
+- Образ — target `harvester` в `backend/Dockerfile`: yt-dlp 2026.10.21 и
+  yt-dlp-ejs 0.8.0 по sha256 из `backend/ytdlp/requirements.txt`, Node.js
+  из Alpine 3.24, пользователь 10001, `WORKER_ROLE=harvester`. Compose —
+  сервис `harvester` под профилем `harvester` (включается явно).
+  `scripts/security/smoke_runtime.sh harvester` и джоба `harvester`
+  в `.github/workflows/security.yml`; в блокирующий скан образ не входит
+  (ADR-022, долг D-12).
+- Окружение: в контейнере `WORKER_ROLE`, `HARVESTER_COOKIES` (путь к cookies;
+  пусто или пустой файл — без cookies); новый ключ `deploy/.env` —
+  `HARVESTER_COOKIES_FILE` (файл на хосте, по умолчанию `/dev/null`).
+  Нечитаемый файл cookies — `ErrNoRunner`: попытки видео не тратятся.
+- Правки ревью волны A (ADR-022): ключ `deploy/.env`
+  `HARVESTER_DATABASE_URL` — DSN своей роли сборщика, compose отдаёт его
+  в `DATABASE_URL` (пусто — DSN владельца); роль создаёт идемпотентный
+  `deploy/harvester-db-role.sh` (только `subtitle_sources`, `videos`,
+  `subtitle_segments`, `jobs`, `job_schedules`). Проверено на одноразовом
+  Postgres 16 с миграциями 0001–0013: два запуска подряд, роли закрыты
+  `users`, `sessions`, `lessons`, `transcripts`, а настоящий worker
+  с `WORKER_ROLE=harvester` под ней поставил джобы расписания, собрал
+  видео поддельным yt-dlp и записал сбой второго. Сервис `harvester` —
+  `read_only`, tmpfs `/tmp` и `/home/app`, `cap_drop: [ALL]`,
+  `no-new-privileges`, `mem_limit: 512m`, `cpus: 1` (потолки до замера);
+  образ под этими флагами запускает yt-dlp и Node.js.
+- Тесты: `backend/internal/harvester/*_test.go` (VTT, RSS, темп и backoff
+  на поддельных часах, `YTDLP` поверх `testdata/fake-yt-dlp`),
+  `backend/internal/jobs/schedule_test.go`,
+  `backend/internal/httpapi/subtitles_test.go` (миграция, FTS, обе джобы
+  на общей тестовой базе; нечитаемые cookies не трогают `harvest_attempts`).
+  Харнесс тестовой базы: накат миграций
+  сериализован advisory-блокировкой — параллельные пакеты тестов падали
+  на одновременном `CREATE EXTENSION pgcrypto`.
+- **Не подтверждено живьём.** Единственный пробный вызов с VPS (видео TED
+  `cTHwSER_l-8`, одноразовая база) упёрся в таймаут yt-dlp 2 мин; JS-движком
+  тогда был quickjs-ng 0.11, которому, по вики yt-dlp, нужны минуты.
+  Образ переведён на Node.js, потолок вызова — 5 мин, в ошибку таймаута
+  теперь попадает хвост вывода yt-dlp. Без сети образ проходит полный
+  цикл: джобы по расписанию, сбои фидов и видео записаны в базу.
+  Осталось для ☑: включить профиль (или прогнать образ на одноразовой
+  базе) и убедиться, что по seed-каналу собраны сегменты и FTS их находит.
+
+### S5-3 TED-дампы — не сделано (ADR-022)
+
+- Открытого дампа транскриптов TED с таймкодами под плеер практики нет:
+  TED-LIUM 3 (CC BY-NC-ND 3.0) — автоматически выровненные STM одним
+  архивом ~50 ГБ со звуком и без id видео YouTube; остальные корпуса —
+  по регистрации или без таймкодов. Видео TED и TED-Ed собирает S5-2
+  (каналы в seed). DoD «без обращения к YouTube» без источника недостижим:
+  решение владельца — бэкфилл каналов TED/TED-Ed тем же сборщиком
+  или другой источник.
 
 ## Риски этапа
 

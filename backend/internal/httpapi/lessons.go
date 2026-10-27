@@ -117,7 +117,7 @@ func (a *API) handleGetLesson(w http.ResponseWriter, r *http.Request) {
 	resp := lessonDetailResponse{
 		lessonResponse: lessonToResponse(&d.Lesson, d.GroupName),
 		TeacherName:    d.TeacherName,
-		Materials:      toMaterialResponses(d.Materials),
+		Materials:      toMaterialResponses(visibleMaterials(d.Materials, u.ID == d.TeacherID)),
 		Participants:   toMemberResponses(d.Participants),
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -152,6 +152,8 @@ func (a *API) handleCancelLesson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
+	// Объекты файлов материалов удалит worker: джоба ставится той же
+	// транзакцией, что удаляет урок (ADR-024)
 	if err := a.store.CancelLesson(r.Context(), lessonID, u.ID); err != nil {
 		writeLessonUpdateError(w, "cancel lesson", err)
 		return

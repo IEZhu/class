@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -16,67 +13,24 @@ import (
 	"time"
 
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/testdb"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Every test owns a schema in a disposable test database. CI requires the
-// database rather than silently skipping the authorization boundary tests.
+// Every test owns a schema in a disposable test database (internal/testdb).
+// CI requires the database rather than silently skipping the authorization
+// boundary tests.
 func securityDB(t *testing.T) (*API, *pgx.Conn) {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL is required in CI")
-		}
-		t.Skip("set TEST_DATABASE_URL to a disposable Postgres database")
-	}
 	ctx := context.Background()
-	admin, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, _, err := newToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema := "security_" + token[:16]
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
-			t.Errorf("clean test schema: %v", err)
-		}
-		_ = admin.Close(ctx)
-	})
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := u.Query()
-	q.Set("search_path", schema)
-	u.RawQuery = q.Encode()
-	conn, err := pgx.Connect(ctx, u.String())
+	dsn := testdb.DSN(t)
+	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(ctx) })
-	files, err := filepath.Glob("../../migrations/*.up.sql")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("migration inventory: %v (%d files)", err, len(files))
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		sql, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := conn.Exec(ctx, string(sql)); err != nil {
-			t.Fatalf("migration %s: %v", file, err)
-		}
-	}
-	s, err := store.New(ctx, u.String())
+	s, err := store.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

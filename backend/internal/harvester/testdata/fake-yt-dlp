@@ -1,0 +1,56 @@
+#!/bin/sh
+# Подделка yt-dlp для ytdlp_test.go: в YouTube не ходит, а пишет файлы
+# и печатает сообщения, как настоящий yt-dlp. Сценарий выбирается по id
+# видео; аргументы каждого вызова построчно дописываются в $HOME/yt-dlp.args
+# (окружение worker'а до yt-dlp не доходит, HOME — доходит).
+set -eu
+printf '%s\n' "$@" >> "$HOME/yt-dlp.args"
+dir='' cookies='' url=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) dir=$2; shift ;;
+    --cookies) cookies=$2; shift ;;
+    --) url=$2; shift ;;
+  esac
+  shift
+done
+id=${url##*v=}
+fixtures=$(dirname "$0")
+info() { printf '%s\n' "$1" > "$dir/$id.info.json"; }
+case "$id" in
+  manualSubs1)
+    # Есть и ручные en, и автосубтитры: yt-dlp пишет ручные
+    cp "$fixtures/manual.en.vtt" "$dir/$id.en.vtt"
+    info '{"id": "manualSubs1", "duration": 754.4, "subtitles": {"en": [{"ext": "vtt"}]}, "automatic_captions": {"en": [{"ext": "vtt"}]}}' ;;
+  autoSubs001)
+    # Ручные только en-GB, под --sub-langs en не подходят: пишутся auto
+    cp "$fixtures/auto.en.vtt" "$dir/$id.en.vtt"
+    info '{"id": "autoSubs001", "duration": 61, "subtitles": {"en-GB": [{"ext": "vtt"}]}, "automatic_captions": {"en": [{"ext": "vtt"}]}}' ;;
+  noSubtitle1)
+    echo "[info] $id: There are no subtitles for the requested languages"
+    info '{"id": "noSubtitle1", "duration": 30, "subtitles": {}, "automatic_captions": {}}' ;;
+  cookieJar01)
+    test "$cookies" = "$dir/cookies.txt"
+    grep -q 'youtube.com' "$cookies"
+    info '{"id": "cookieJar01"}' ;;
+  envCheck001)
+    if [ -n "${DATABASE_URL:-}" ]; then
+      echo "ERROR: worker environment leaked into yt-dlp" >&2
+      exit 1
+    fi
+    info '{"id": "envCheck001"}' ;;
+  tooMany4291)
+    echo "ERROR: [youtube] $id: Unable to download API page: HTTP Error 429: Too Many Requests" >&2
+    exit 1 ;;
+  botCheck001)
+    echo "ERROR: [youtube] $id: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." >&2
+    exit 1 ;;
+  private0001)
+    echo "ERROR: [youtube] $id: Private video. Sign in if you've been granted access to this video" >&2
+    exit 1 ;;
+  slowVideo01)
+    exec sleep 10 ;;
+  *)
+    echo "ERROR: unexpected video $id" >&2
+    exit 2 ;;
+esac

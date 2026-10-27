@@ -10,13 +10,21 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 ## Layout
 
 - `backend/`: Go module `github.com/IEZhu/class/backend` (Go 1.26). `cmd/api/main.go` (HTTP API),
-  `internal/httpapi/` (routes, auth, middleware, groups, lessons, invites, rooms, users),
-  `internal/store/` (Postgres via pgx), `migrations/` (golang-migrate `NNNN_*.up.sql` /
-  `.down.sql`, plus `seed.sql`, which is not a migration). `cmd/worker` is planned for S1-2.
+  `cmd/worker/main.go` (background jobs), `cmd/dictimport/` (one-off dictionary import shipped in
+  the worker image, ADR-019), `internal/httpapi/` (routes, auth, middleware, groups,
+  lessons, invites, rooms, users, LiveKit webhook), `internal/store/` (Postgres via pgx),
+  `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
+  retries, ADR-013), `internal/worker/` (job handlers by kind), `migrations/` (golang-migrate
+  `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.
-- `deploy/`: `docker-compose.yml` (caddy, web, api, postgres; `migrate` under the `tools`
-  profile), `Caddyfile`, `.env.example`.
+- `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
+  `tools` profile; `libretranslate` under the `translate` profile and its one-off model installer
+  `libretranslate-models` under `translate-setup`, ADR-018; the whiteboard relay `whiteboard`
+  under the `whiteboard` profile, ADR-020;
+  the subtitle `harvester` under the `harvester` profile, ADR-022), `Caddyfile`, `.env.example`;
+  `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`, `systemd/` timer): nightly pg_dump to S3
+  and restore (S1-7, ADR-014).
 - `Makefile`: operations for the compose stack.
 - `docs/architecture/`: topology, services, data model, API, S3, integrations, flows, ADR log
   (`decisions.md`); `00-source-variant-c.md` is a frozen snapshot.
@@ -37,14 +45,35 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
 - Required keys in `deploy/.env` (checked by `make check-env`): `DOMAIN`, `POSTGRES_DB`,
   `POSTGRES_USER`, `POSTGRES_PASSWORD`. Optional: `HTTP_PORT` (default 8090), `SEED_PASSWORD`,
   `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (without them the lesson room returns
-  503). The api also reads `DATABASE_URL` and `API_ADDR` (default `:8080`); web reads
+  503), `BACKUP_S3_*` for `deploy/backup-pg.sh` (all empty → the recordings bucket and token
+  with a journal warning, debt D-8; any one set → `BACKUP_S3_BUCKET` is required),
+  `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (all three or the
+  Google Calendar connection is unavailable and `calendar_sync` skips lesson creates and
+  reschedules while event deletes wait in the queue, ADR-023),
+  `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
+  goes straight to `done` without a transcript; ADR-015), `LIBRETRANSLATE_URL` with
+  `COMPOSE_PROFILES=translate` (word translation; without them `POST /terms/click` answers
+  `translation: null`, ADR-018), `COMPOSE_PROFILES=whiteboard` with
+  `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503; several profiles
+  are comma-separated: `translate,whiteboard`),
+  `HARVESTER_COOKIES_FILE` (YouTube cookies for the `harvester` profile, readable by uid 10001),
+  `HARVESTER_DATABASE_URL` (the harvester's own least-privilege role, created by
+  `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022). The api also
+  reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
+  `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
+  `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots and `material_files_delete`
+  wait in the queue without storage, ADR-024), plus `DOMAIN` and `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
+  secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
-- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`).
+- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`; `predev`
+  and `prebuild` copy the Excalidraw fonts into the git-ignored `public/excalidraw/`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
-  to a disposable Postgres database for the HTTP/SQL security suite; it creates isolated
-  schemas and applies the real migrations. CI requires this database and does not skip
-  those tests. `.github/workflows/ci.yml` also verifies modules, runs vet, checks web
-  types and builds Next.js. `.github/workflows/security.yml` blocks all known dependency
+  to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`
+  queue tests; they create isolated schemas and apply the real migrations through the one
+  shared harness `internal/testdb` (advisory lock, `pgcrypto` in `public`). CI requires this
+  database and does not skip those tests. `.github/workflows/ci.yml` also verifies modules,
+  runs vet, builds every `cmd`, checks web types and builds Next.js.
+  `.github/workflows/security.yml` blocks all known dependency
   and runtime vulnerabilities, unfixed findings, source secrets, and missing inventories.
   Package-level Go absence proofs must match the exact source snapshot or every
   inventoried binary in the exact OCI image; affected imports and incomplete,
@@ -68,7 +97,10 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `deploy/.env.example` and to the stage plan's «Факт» section first.
 - TLS terminates at the host's nginx (ADR-004); caddy is HTTP-only and published on
   `127.0.0.1:${HTTP_PORT}`. Caddy strips `/api`, so API routes have no `/api` prefix inside Go.
-- The api Docker image has only the `api` target; a `worker` target arrives with S1-2.
+- `backend/Dockerfile` has three targets, `worker`, `harvester` (worker + pinned yt-dlp, compose
+  profile `harvester`, outside the blocking image scan: debt D-12) and `api`; `api` is the last
+  stage, so a build without `--target` still yields the api. Apply migrations before deploying an api that
+  enqueues a new job: `egress_ended` fails without the `jobs` table.
 - `README.md` also links here; `docs/README.md` and `docs/plans/00-flow.md` still link to
   `CLAUDE.md`, which imports this file.
 

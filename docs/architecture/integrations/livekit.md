@@ -14,6 +14,9 @@
   фиксируется только вместе с успешным запуском ([ADR-012](../decisions.md)).
 - Webhook `egress_ended` → `POST /webhooks/livekit` (проверка подписи по
   API key/secret) → `lessons.recording_s3_key`, `status=processing`.
+- Архивация учётки (D-5) выставляет человека из комнат идущих уроков:
+  `RoomService/RemoveParticipant`, прежние токены в эту комнату
+  гасятся ([ADR-024](../decisions.md)).
 
 ## Ёмкость и пороги
 

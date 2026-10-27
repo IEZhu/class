@@ -286,6 +286,249 @@ teacher — только студенты своих групп (состав г
 - `web/lib/lesson-title.ts` — подпись урока в одном месте: событие берёт
   `title`, урок — имя группы.
 
+### S1-2 Worker и очередь jobs (2026-10-26)
+
+- Миграция `backend/migrations/0007_jobs.up.sql` — таблица `jobs` по модели
+  данных плюс `failed_at` (попытки исчерпаны) и `created_at`; частичный
+  индекс `jobs_ready_idx (run_at, id) WHERE failed_at IS NULL` под запрос
+  захвата. Номер 0006 занят параллельной веткой S1-11.
+- `backend/internal/jobs/` — `Enqueue(ctx, db, kind, payload)` в пуле или
+  транзакции вызывающего; `Runner` (`NewRunner`, `Handle`, `Run`,
+  `RunOnce`): захват `FOR UPDATE SKIP LOCKED`, ретраи 1 мин → удвоение →
+  1 ч, 8 попыток, подбор захватов старше 10 мин, паника хендлера —
+  обычная неудачная попытка. Семантика — [ADR-013](../architecture/decisions.md).
+- `backend/internal/worker/` — хендлеры по kind; `backend/cmd/worker` —
+  бинарь: `DATABASE_URL`, SIGTERM — новые джобы не берутся, текущей 20 с,
+  потом она возвращается в очередь.
+- Джоба `recording_ready` (`store.JobRecordingReady`, payload
+  `{"lesson_id": N}`) — **точка вставки ASR для S2-1**: `onEgressEnded`
+  через `store.FinishLessonRecording` пишет `recording_s3_key`,
+  `status=processing` и ставит джобу одной транзакцией (условие на статус
+  гасит повторную доставку вебхука); хендлер `FinishLessonProcessing`
+  переводит урок в `done`. Строка S1-5 «урок сразу done» больше не верна.
+- `backend/Dockerfile` — target `worker` (api остаётся последней стадией);
+  сервис `worker` в `deploy/docker-compose.yml` без портов и healthcheck,
+  `stop_grace_period: 30s`. Новых ключей `.env` нет.
+- CI: `ci.yml` собирает все `cmd`; `security.yml` сканирует образ worker
+  (матрица, `smoke_runtime.sh worker` — uid 10001 и отказ без
+  `DATABASE_URL`, `check_scan_inventory.py`).
+- Сбой транзакции `egress_ended` — ответ 503, LiveKit повторяет доставку;
+  200 остаётся для чужой комнаты, `EGRESS_FAILED`, пустого результата
+  и уже принятой записи (ADR-013).
+- Порядок выката: `make migrate` до api — без таблицы `jobs` вебхук
+  `egress_ended` откатывает транзакцию, а повторы LiveKit ограничены:
+  исчерпав их, путь записи теряется.
+- Тесты на базе — общий harness `backend/internal/testdb` (httpapi и jobs):
+  миграции под `pg_advisory_lock`, `pgcrypto` один раз в `public`, иначе
+  параллельные пакеты `go test ./...` падали на `CREATE EXTENSION` (23505).
+- calendar_sync не сделан — долг D-7, закрывает S1-1 (вне MVP).
+- Глобальная уборка протухших сессий (ADR-006) не сделана — нет
+  периодических джоб, долг D-15.
+
+### S1-7 Бэкапы Postgres (2026-10-26)
+
+- `deploy/backup-pg.sh` — `pg_dump --format=custom --compress=0` внутри
+  контейнера postgres (локальный сокет, без пароля) → `zstd` на хосте →
+  `s3://<бакет>/backups/pg/<дата UTC>.dump.zst`. До выгрузки — `zstd -t`
+  и оглавление `pg_restore --list`; выгрузка — во временный
+  `backups/pg/incoming/<дата>.<pid>.dump.zst`, затем скачивание обратно
+  и сверка sha256 (он же в метаданных объекта, `sha256`); только после
+  неё `s3api copy-object` в ночной ключ и строка `<ключ> <sha256> <размер>`
+  в манифест `/var/lib/lingua-backup/manifest` (root, `0600`), временный
+  объект удаляется и при сбое. Затем чистка по retention;
+  `--prune-only [--dry-run]` — только чистка. Любой сбой — код ≠ 0.
+- Retention 7/30 ([ADR-014](../architecture/decisions.md)): все копии
+  за 7 суток, дальше по одной на ISO-неделю (самая свежая) до 30 суток,
+  старше — удаляются; ~11 копий. Lifecycle на `backups/pg/` не ставится
+  (комментарий в `deploy/s3-bootstrap.sh`), ручные копии с другими
+  именами чистка не трогает, без копии моложе 7 суток — не чистит;
+  ночные ключи с датой позже сегодняшней не удаляет, но называет
+  и завершается с кодом 1. Решение — чистая функция `retention_plan`
+  в `deploy/backup-lib.sh`, тесты — `scripts/test_backup_retention.py`
+  (в `unittest discover` security CI).
+- `deploy/restore-pg.sh` — `--list`; `--db БАЗА [--date | --key] [--force]
+  [--insecure-no-verify]`: без `--date`/`--key` — самая свежая ночная
+  копия не позже сегодня (UTC), в `POSTGRES_DB` — только явная; копия
+  скачивается, сверяется по sha256 и размеру с манифестом (манифеста
+  нет — с метаданными; ключа нет в манифесте или sha256 нет — отказ без
+  `--insecure-no-verify`), разворачивается `pg_restore
+  --single-transaction --exit-on-error --no-owner --no-privileges`;
+  базы нет — создаётся, непустая — только с `--force` (`--clean`).
+- `deploy/backup-lib.sh` — общая часть: чтение `deploy/.env` без
+  исполнения, `BACKUP_S3_*` → `S3_*`, aws cli из `amazon/aws-cli:2.32.7`
+  (закреплён digest'ом) с ключами только через окружение; манифест;
+  переменная процесса `BACKUP_MANIFEST` (по умолчанию
+  `/var/lib/lingua-backup/manifest`).
+- `deploy/systemd/lingua-backup-pg.service` + `.timer` — ежедневно
+  03:30 UTC, `Persistent=true`, `StateDirectory=lingua-backup` (`0700`);
+  установка и восстановление —
+  [deploy/README.md](../../deploy/README.md). **На VPS не установлены.**
+- Ключи `.env` (опциональны, все пусты — из `S3_*` с предупреждением):
+  `BACKUP_S3_BUCKET`, `BACKUP_S3_REGION`, `BACKUP_S3_ENDPOINT`,
+  `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`. Задан хоть
+  один — обязателен `BACKUP_S3_BUCKET`, не равный `S3_BUCKET` на том же
+  эндпоинте; пара ключей — только целиком.
+- Безопасность: токен `S3_*` уходит в LiveKit Egress и читает и удаляет
+  дампы (хэши паролей, email). Решение — свой бакет и свой токен через
+  `BACKUP_S3_*`; до этого — работа под общим токеном с предупреждением
+  в журнале, долг D-8. Клиентское шифрование отложено (ADR-014).
+- Проверено на одноразовом стенде (postgres:16-alpine с миграциями
+  0001–0005, seed и выборкой ~2000 строк; SeaweedFS 3.97 как
+  S3-совместимое хранилище — образы MinIO с Docker Hub и quay.io больше
+  не раздаются): копия появляется в `backups/pg/2026-10-26.dump.zst`
+  с `sha256` в метаданных; восстановление в новую базу того же сервера,
+  повтор с `--force` поверх испорченной копии и разворот в пустой
+  `POSTGRES_DB` второго сервера дают те же число строк и md5 содержимого
+  всех 9 таблиц, расширения, последовательности, индексы и ограничения.
+  Чистка на 45 датированных объектах оставила ровно 7 дневных и 4 недельных
+  (2026-10-18, -11, -04, 09-27), ручную копию и чужие префиксы; при
+  пропущенном воскресенье недельной стала суббота. Неверный секрет, остановленный
+  контейнер, ошибка pg_dump, порча скачанного объекта и неполная пара
+  `BACKUP_S3_*` завершаются кодом 1; секретов нет ни в журнале, ни
+  в аргументах docker. Первый прогон на R2 стенда — после ревью.
+- Правки ревью (раунд 1) проверены так же (SeaweedFS 3.97 с двумя
+  токенами, два postgres:16-alpine): только ключи или только регион
+  в `BACKUP_S3_*` и `BACKUP_S3_BUCKET` = бакет записей — отказ, полная
+  замена — без предупреждения, все пусты — общий режим с предупреждением;
+  подложенная копия `2099-12-31` с «своим» sha256 restore не выбирает,
+  чистка называет её и завершается кодом 1, удалив устаревшие; подмена
+  копии дня с «верным» sha256 в метаданных отвергнута по манифесту (даже
+  с `--insecure-no-verify`); ручная копия без sha256 — только
+  с `--insecure-no-verify`; `--db lingua` без `--date` — отказ, с `--date`
+  на пустой `POSTGRES_DB` второго сервера — данные совпали; сбой сверки
+  выгрузки не трогает ночной ключ и не оставляет `incoming/`.
+  CI: job `shell` (shellcheck) в `ci.yml`.
+
+### S1-1 Google OAuth2 и calendar_sync (2026-10-26)
+
+- Миграция `backend/migrations/0012_google_calendar.up.sql` — колонка
+  `users.google_refresh_token bytea` (только шифртекст); откат удаляет
+  её и ожидающие `calendar_sync`. Номера 0008–0011 и 0013 заняты
+  параллельными ветками.
+- `backend/internal/gcal/` — `gcal.New` (nil без любого ключа, ошибка
+  на битый ключ), `AuthCodeURL` (state, PKCE S256, `access_type=offline`,
+  `prompt=consent`), `Exchange` (проверка выданного scope), `Seal`/`Open`
+  (AES-256-GCM, id пользователя в associated data), `SealFlow`/`OpenFlow`
+  (cookie подключения: state, verifier и срок, тот же AES-GCM с
+  `google_oauth:<id>` в associated data), `Revoke`, `Calendar` →
+  `Insert`/`Update`/`Delete` (Calendar API v3, календарь `primary`,
+  `sendUpdates=all`, у каждого вызова свой таймаут 15 с; у клиента API
+  нет `http.Client.Timeout`). Зависимость — `golang.org/x/oauth2` v0.37.0
+  ([ADR-023](../architecture/decisions.md)).
+- Эндпоинты (`httpapi/google.go`; в [04-api.md](../architecture/04-api.md)):
+  `GET /auth/google`, `POST /auth/google/start`, `DELETE /auth/google` —
+  под teacher; `GET /auth/google/callback` (вместо `POST` из плана: Google
+  возвращает браузер GET-ом) — без middleware: сессию проверяет сам
+  (`sessionUser` в `httpapi/middleware.go`) и всегда отвечает 303, без
+  сессии — на `/login`. Cookie `__Host-google_oauth` (запечатанный
+  `SealFlow`, 10 мин, Path `/`, Secure, HttpOnly, SameSite=Lax).
+  `DELETE /auth/google` отвечает `200 {"revoked": bool}`, отзыв — на
+  `context.WithoutCancel`. Redirect URI —
+  `https://<DOMAIN>/api/auth/google/callback`.
+- Джоба `calendar_sync` (`backend/internal/store/calendar.go`:
+  `store.JobCalendarSync`, payload `{"lesson_id": N}`, у отмены ещё
+  `"teacher_id"` и `"event_id"`) — в транзакциях `CreateLesson`,
+  `RescheduleLesson` при подключённом календаре организатора,
+  в `CancelLesson` всегда, когда у урока есть `gcal_event_id`, и
+  в `SetGoogleToken` для его будущих уроков; там же `SetGoogleToken`
+  возвращает в работу ждавшие удаления этого преподавателя (`attempts = 0`,
+  `failed_at = NULL`). `lessons.gcal_event_id` назначается там же (32 hex
+  из `gen_random_uuid()`); хендлер — `worker.RegisterCalendar`
+  (`internal/worker/calendar.go`): insert, при 409 — update, удаление —
+  404/410 тоже успех. Без рабочего токена (нет ключей, не подключён, токен
+  не расшифровался или отозван — `invalid_grant` снимает подключение)
+  создание и перенос пропускаются со строкой в журнале, а удаление
+  возвращает ошибку «ждёт повторного подключения календаря» и остаётся
+  в очереди.
+- Web: `web/app/account/google-calendar.tsx` — раздел «Google Календарь»
+  на `/account` только у преподавателя: подключить/отключить, итог
+  возврата из `?google=` (и `not_revoked`, если отключение не отозвало
+  токен в Google), без ключей — «недоступно». Типы `GoogleCalendarStatus`
+  и `GoogleDisconnectResult` в `web/lib/api.ts`.
+- Ключи `.env` (опциональны, только все три вместе): `GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (`openssl rand -base64 32`);
+  проброс в api и worker, worker получает ещё `DOMAIN` (ссылка на урок
+  в описании события). Создание OAuth-клиента и перевод в Production —
+  [deploy/README.md](../../deploy/README.md#google-calendar-s1-1).
+- Тесты на httptest-фейке Google и схеме `security_test`:
+  `httpapi/google_test.go` (роли, state/PKCE/отказ/снятый scope, в колонке
+  нет открытого токена, отключение с отзывом и `revoked:false` при сбое,
+  смене ключа и отменённом запросе, подложенный, чужой и истёкший cookie
+  без обмена кода, callback без сессии и не преподавателем, без ключей,
+  откат 0012), `httpapi/calendar_sync_test.go` (insert/update/delete,
+  повторы, сбой Google, отмена до синхронизации, отключённый и отозванный
+  календарь, отмена после отключения, `invalid_grant` и смены ключа
+  удаляет событие после переподключения, отмена посреди insert,
+  CAS `ClearGoogleToken`), `gcal/gcal_test.go` (в том числе cookie
+  подключения и таймаут вызова API).
+- Порядок выката: `make migrate` до api — `CreateLesson`/`RescheduleLesson`
+  читают `users.google_refresh_token` и без ключей Google; без `0012`
+  создание и перенос урока отвечают 500.
+- Долг D-7 закрыт. С настоящим Google не проверено — OAuth-клиента нет,
+  долг D-13; DoD «токен переживает неделю» и «отражается в календарях
+  студентов» — после его создания.
+
+### Долги D-4 и D-5: файлы материалов и архив учёток (2026-10-26)
+
+- Миграция `backend/migrations/0013_material_files_archive.up.sql` (номер
+  из резерва параллельных веток): рядом с `materials.s3_key` —
+  `file_name`, `file_content_type`, `file_size`, `file_uploaded_at`,
+  `file_etag`; `CHECK` `materials_file_complete` (с явными `IS NOT NULL`,
+  подтверждение и ETag вместе) и `materials_file_key_layout` (ключ только
+  под `materials/{lesson_id}/`), уникальный `materials_s3_key_idx`;
+  `users.deactivated_at`. Откат обнуляет `s3_key`, объекты в бакете
+  остаются. Решения — [ADR-024](../architecture/decisions.md).
+- `backend/internal/storage/s3.go` — `PresignPut` (тип, длина и
+  `Content-Disposition` в подписи; `Host` и `Content-Length` браузеру
+  не отдаются), `Stat` (размер, тип, ETag; заменил неиспользуемый
+  `Exists`), `Copy` (CopyObject внутри бакета), `Delete`,
+  `NewMaterialKey` → `materials/{lesson_id}/<32 hex>.<ext>`,
+  `PendingMaterialKey` → `materials-pending/{lesson_id}/<32 hex>.<ext>`,
+  `MaterialFileKeys`.
+- `backend/internal/httpapi/materials.go` — `POST /lessons/{id}/materials`
+  и `/homework` с полем `file` (PUT подписывается на `materials-pending/`,
+  расширение имени — по типу, Unicode Cc/Cf в имени — 400),
+  `POST /materials/{id}/confirm` (сверка, копия на постоянный ключ, ETag),
+  `GET /materials/{id}/url` (HEAD и сверка с ETag перед подписью, 409),
+  `DELETE /materials/{id}`; белый список `materialFileTypes`,
+  `maxMaterialFileBytes` = 50 MiB, `uploadURLTTL` = 10 мин. Хранилище
+  в api — за интерфейсом `objectStore` (`api.go`). `GET /lessons/{id}`
+  прячет неподтверждённые файлы от участников.
+- Джоба `material_files_delete` (`store.JobMaterialFilesDelete`, payload
+  `{"keys": [постоянные ключи]}`): ставят `store.CancelLesson` в транзакции
+  отмены урока и `store.DeleteMaterial`, когда api не удалось удалить
+  объект; хендлер — `worker.RegisterMaterialFiles` в
+  `backend/internal/worker/worker.go` (оба объекта каждого ключа),
+  подключается в `backend/cmd/worker/main.go`, только если заданы `S3_*`;
+  `deploy/docker-compose.yml` передаёт worker'у те же `S3_*`.
+- Архив: `store.DeactivateUser` (отметка и `DELETE FROM sessions` одной
+  транзакцией), `ReactivateUser`; `UserBySessionTokenHash` отсекает
+  архивных. `POST /users/{id}/deactivate` и `/reactivate` (права —
+  `authorizeManage`, себя — 403), `GET /users?archived=1`, логин
+  архивного — 403 `account_deactivated`. `CreateLesson` архивных
+  в участники не берёт; в составе групп и участниках урока — флаг `archived`.
+  После архивации — `RemoveParticipant` из комнат идущих уроков
+  (`store.LiveLessonsOf`, `backend/internal/livekitapi/room.go`), без
+  ключей LiveKit — строка в журнале.
+- Web: `web/app/lesson/[id]/material-files.tsx` — «Прикрепить файл»
+  в материалы или домашку (заявка → PUT в R2 → confirm; сбой — заготовка
+  удаляется), «Скачать», «Удалить»; `/admin` — «В архив» у человека,
+  секция «Архив» с возвратом, отметка «в архиве» в составе групп.
+- `deploy/s3-bootstrap.sh` — одно CORS-правило на `GET`, `HEAD`, `PUT`
+  с заголовками `Content-Type`, `Content-Disposition`, `Range` и
+  lifecycle-правило `materials-pending-expire` (сутки). **На бакете стенда
+  не применено** — долг D-14, порядок — [deploy/README.md](../../deploy/README.md).
+- S3: префиксы `materials/{lesson_id}/` и `materials-pending/{lesson_id}/`.
+  Новых ключей `.env` и зависимостей нет.
+- Тесты на схеме `security_test`: `httpapi/materials_test.go` (фейк
+  хранилища: лимиты, права, имя для скачивания, 409/422, равенство
+  размера, charset, копия на постоянный ключ, подмена после подтверждения,
+  гонка отказа с удалением, 503 без хранилища, `CHECK` 0013, джоба
+  уборки с повтором после сбоя), `httpapi/archive_test.go` (сессии, логин,
+  списки, снапшот, `RemoveParticipant` на httptest-фейке LiveKit,
+  обратимость 0013); `storage/s3_test.go` — точный набор заголовков
+  подписи PUT, `Stat`/`Copy`/`Delete` на httptest.
+
 ## Риски этапа
 
 GCP Testing mode (лечится сразу Production); free tier LiveKit ≈ 20 уроков/мес —

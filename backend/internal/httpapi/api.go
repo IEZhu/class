@@ -3,16 +3,21 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
+	"github.com/IEZhu/class/backend/internal/assemblyai"
+	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/translate"
 )
 
 // Config — внешние параметры api, не выводимые из БД.
@@ -29,6 +34,18 @@ type Config struct {
 	// для транскрипта этого достаточно (05-storage-s3.md).
 	EgressAudioOnly bool
 	Storage         storage.Config
+	// Google (S1-1): без ключей подключение календаря отвечает 503,
+	// RedirectURL собирает New из PublicBaseURL.
+	Google gcal.Config
+	// AssemblyAIWebhookSecret (S2-2) — секрет, который AssemblyAI
+	// возвращает в заголовке вебхука; пусто — вебхук отвечает 503.
+	AssemblyAIWebhookSecret string
+	// LibreTranslateURL — внутренний адрес LibreTranslate (S3-3, ADR-018).
+	// Пусто — клик по слову отвечает дефинициями без перевода.
+	LibreTranslateURL string
+	// WhiteboardEnabled — в compose поднят ретранслятор доски (профиль
+	// whiteboard, S3-6). Без него доска отвечает 503, остальное работает.
+	WhiteboardEnabled bool
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -37,11 +54,24 @@ func (c Config) liveKitConfigured() bool {
 	return c.LiveKitURL != "" && c.LiveKitAPIKey != "" && c.LiveKitAPISecret != ""
 }
 
+// objectStore — то, что api нужно от хранилища (storage.Client). Через
+// интерфейс тесты подставляют фейк вместо R2.
+type objectStore interface {
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignPut(ctx context.Context, key, contentType, contentDisposition string, size int64, ttl time.Duration) (storage.PresignedPut, error)
+	Stat(ctx context.Context, key string) (storage.ObjectInfo, error)
+	Copy(ctx context.Context, src, dst string) error
+	Delete(ctx context.Context, key string) error
+}
+
 type API struct {
 	store   *store.Store
 	cfg     Config
-	storage *storage.Client // nil, если хранилище не настроено
+	storage objectStore // nil, если хранилище не настроено
 	livekit *livekitapi.Client
+	google  *gcal.Client // nil, если Google Calendar не настроен
+	// translator — nil, если LibreTranslate не настроен
+	translator *translate.LibreTranslate
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -51,13 +81,34 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &API{
-		store:   s,
-		cfg:     cfg,
-		storage: st,
-		livekit: livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
-	}, nil
+	if cfg.AssemblyAIWebhookSecret != "" {
+		if err := assemblyai.CheckWebhookSecret(cfg.AssemblyAIWebhookSecret); err != nil {
+			return nil, err
+		}
+	}
+	cfg.Google.RedirectURL = cfg.PublicBaseURL + googleCallbackPath
+	google, err := gcal.New(cfg.Google)
+	if err != nil {
+		return nil, err
+	}
+	a := &API{
+		store:      s,
+		cfg:        cfg,
+		livekit:    livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
+		google:     google,
+		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
+	}
+	// Без ключей storage.New отдаёт nil-указатель; в интерфейс его класть
+	// нельзя — проверка a.storage == nil перестала бы его видеть
+	if st != nil {
+		a.storage = st
+	}
+	return a, nil
 }
+
+// GoogleConfigured — заданы ли ключи Google: cmd/api пишет в журнал,
+// что календарь выключен.
+func (a *API) GoogleConfigured() bool { return a.google != nil }
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -121,6 +172,39 @@ func (a *API) Router() http.Handler {
 
 	mux.Handle("POST /lessons/{id}/materials", teacher(a.handleCreateMaterial("material")))
 	mux.Handle("POST /lessons/{id}/homework", teacher(a.handleCreateMaterial("homework")))
+
+	// S1-1: Google Calendar преподавателя (ADR-023). Callback — GET:
+	// сюда браузер возвращается со страницы согласия Google. Он без
+	// teacher(): сессию проверяет сам и отвечает редиректом, а не JSON
+	mux.Handle("GET /auth/google", teacher(a.handleGoogleStatus))
+	mux.Handle("POST /auth/google/start", teacher(a.handleGoogleStart))
+	mux.HandleFunc("GET /auth/google/callback", a.handleGoogleCallback)
+	mux.Handle("DELETE /auth/google", teacher(a.handleGoogleDisconnect))
+
+	// Долги D-4 и D-5 (ADR-024): файлы материалов в R2 и архивация учёток.
+	// Файл грузит браузер по presigned PUT, api только выдаёт ссылку,
+	// сверяет объект и подписывает скачивание.
+	mux.Handle("POST /materials/{id}/confirm", teacher(a.handleConfirmMaterialFile))
+	mux.Handle("GET /materials/{id}/url", user(a.handleMaterialFileURL))
+	mux.Handle("DELETE /materials/{id}", teacher(a.handleDeleteMaterial))
+	mux.Handle("POST /users/{id}/deactivate", staff(a.handleSetUserArchived(true)))
+	mux.Handle("POST /users/{id}/reactivate", staff(a.handleSetUserArchived(false)))
+
+	// S2-2/S2-3: транскрипт урока. Вебхук AssemblyAI без auth-middleware:
+	// он аутентифицируется секретным заголовком
+	mux.HandleFunc("POST /webhooks/assemblyai", a.handleAssemblyAIWebhook)
+	mux.Handle("GET /lessons/{id}/transcript", user(a.handleGetTranscript))
+
+	// S3-2: клик по слову — лемма, перевод, дефиниции (flows/word-click.md).
+	// Любой вошедший, включая гостя события: попап есть во всех текстах
+	mux.Handle("POST /terms/click", user(a.handleTermClick))
+
+	// S3-6: доска урока (ADR-020). /whiteboard/auth зовёт caddy (forward_auth)
+	// перед каждым запросом к ретранслятору
+	mux.Handle("GET /lessons/{id}/whiteboard", user(a.handleWhiteboard))
+	mux.Handle("GET /lessons/{id}/whiteboard/scene", user(a.handleWhiteboardScene))
+	mux.Handle("PUT /lessons/{id}/whiteboard/scene", user(a.handleSaveWhiteboardScene))
+	mux.Handle("GET /whiteboard/auth", user(a.handleWhiteboardAuth))
 	return mux
 }
 

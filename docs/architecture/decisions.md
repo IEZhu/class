@@ -1,11 +1,5 @@
 # Журнал решений (ADR-lite)
 
-## ADR-011 · 2026-10-24 · proposed: security validation in CI
-
-Run real HTTP/SQL security tests against disposable Postgres, retain the LiveKit signing contract tests, and build/typecheck the web application. Audit complete Go/npm dependency inventories and the actual Compose runtime images, including every severity and unfixed findings. Source secrets, missing inventories, and scanner errors block. Pin actions and scanner versions. PR checks do not access production services or credentials. Package-scoped Go advisories require artifact-specific applicability evidence; a blanket ignore or reduced severity threshold is unacceptable.
-
-Bind fresh package-level source analysis to exact source and lockfile contents, and binary analysis to all Go executables in the exact scanned OCI image. Require actual affected-code controls, retain complete raw inventories and proof artifacts, and reject stale, incomplete or mismatched evidence. Rebuild the complete standard Caddy distribution and PostgreSQL 16's gosu with patched dependencies while preserving upstream module-version metadata, the existing entrypoints, API nonroot user and health checks. Keep Node 22 with Alpine 3.22's versioned `nodejs~22` runtime package; keep npm/Yarn in build stages only. Keep all built-in secret rules active, disable the Markdown allow rule, and require a generated README token control to fail; redact secret values in retained artifacts without dropping findings.
-
 > Формат: `ADR-NNN · дата · статус (accepted/superseded)` → Контекст →
 > Решение → Последствия. Новая запись — при любом выборе, которого нет
 > в доках, и при любом отступлении от них.
@@ -92,7 +86,8 @@ stateless-выгоды на одном процессе отсутствуют. 
 в [04-api.md](04-api.md).
 **Последствия.** Каждый авторизованный запрос — один SELECT сессии
 (на нашем масштабе незаметно); протухшие сессии чистятся лениво при
-логине владельца, глобальная уборка — с появлением worker (S1-2).
+логине владельца, глобальная уборка — периодической джобой worker'а
+(долг D-15: в S1-2 периодических джоб нет, ADR-013).
 Ключ `.env` `SESSION_SECRET`, заложенный планом на S0-1, удалён: при
 серверных сессиях подпись не нужна. Первые Go-зависимости:
 `jackc/pgx/v5`, `golang.org/x/crypto`.
@@ -131,7 +126,7 @@ stateless-выгоды на одном процессе отсутствуют. 
 существующему аккаунту через `make psql`.
 **Последствия.** Удаления пользователей нет — при `lessons.teacher_id`
 и накопленной истории это отдельное решение (архивация vs каскад),
-оформлено долгом D-5. Роли проверяются `requireAnyRole`, эндпоинты
+оформлено долгом D-5 (закрыт архивацией, [ADR-024](#adr-024--2026-10-26--accepted--файлы-материалов-в-r2-и-архивация-учёток-долги-d-4-d-5)). Роли проверяются `requireAnyRole`, эндпоинты
 `/users` и `/auth/password` добавлены в [04-api.md](04-api.md), состав
 ролей — в [03-data-model.md](03-data-model.md).
 
@@ -249,7 +244,11 @@ Egress, запись в R2, плеер и будущий транскрипт �
 у урока без группы. Вход гостя читает урок `FOR SHARE`, поэтому отзыв
 и перевыпуск отключают старую ссылку строго, без окна гонки.
 
-<!-- Следующие ADR добавлять ниже по мере реализации. -->
+## ADR-011 · 2026-10-24 · accepted — security validation in CI
+
+Run real HTTP/SQL security tests against disposable Postgres, retain the LiveKit signing contract tests, and build/typecheck the web application. Audit complete Go/npm dependency inventories and the actual Compose runtime images, including every severity and unfixed findings. Source secrets, missing inventories, and scanner errors block. Pin actions and scanner versions. PR checks do not access production services or credentials. Package-scoped Go advisories require artifact-specific applicability evidence; a blanket ignore or reduced severity threshold is unacceptable.
+
+Bind fresh package-level source analysis to exact source and lockfile contents, and binary analysis to all Go executables in the exact scanned OCI image. Require actual affected-code controls, retain complete raw inventories and proof artifacts, and reject stale, incomplete or mismatched evidence. Rebuild the complete standard Caddy distribution and PostgreSQL 16's gosu with patched dependencies while preserving upstream module-version metadata, the existing entrypoints, API nonroot user and health checks. Keep Node 22 with Alpine 3.22's versioned `nodejs~22` runtime package; keep npm/Yarn in build stages only. Keep all built-in secret rules active, disable the Markdown allow rule, and require a generated README token control to fail; redact secret values in retained artifacts without dropping findings.
 
 ## ADR-012 · 2026-10-26 · accepted — Запуск записи: статус live только вместе с Egress
 
@@ -279,3 +278,894 @@ Egress, но ответ потерялся или транзакция не за
 минуты Egress. На hobby-масштабе это дешевле сверки через `ListEgress`.
 Сбой уже идущей записи (`egress_ended` с `EGRESS_FAILED`) по-прежнему
 только логируется.
+
+## ADR-013 · 2026-10-26 · accepted — Очередь jobs: S1-2 без calendar_sync, джоба-плейсхолдер
+
+**Контекст.** S1-2 по плану — worker, очередь `jobs` и первая джоба
+`calendar_sync`. Но calendar_sync держится на OAuth-токенах преподавателей
+(S1-1), а S1-1 уехал за MVP (порядок этапа в [INDEX](../tasks/README.md)).
+Модель данных задаёт колонки `jobs`, но не семантику: что такое захват,
+что делать с выполненной джобой и с исчерпанными попытками.
+**Решение.** S1-2 закрывается без calendar_sync — долг D-7, закрывает S1-1.
+Первая джоба — плейсхолдер `recording_ready`, явная точка вставки ASR
+из S1-5: `egress_ended` пишет путь записи, `status=processing` и ставит
+джобу одной транзакцией, хендлер переводит урок в `done`. S2-1 заменит её
+джобой `asr_submit`. Семантика очереди (`internal/jobs`):
+- захват — аренда: один `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP
+  LOCKED)` ставит `locked_at`/`locked_by` и `attempts + 1`, хендлер
+  работает вне транзакции. Захват старше двух таймаутов хендлера (2 × 5 мин)
+  брошен упавшим worker'ом и подбирается снова; итог попытки пишется
+  только при совпадении `locked_by` и `attempts`, поэтому запоздавший
+  владелец чужой захват не испортит;
+- выполненная джоба удаляется; ошибка — `last_error` и повтор через
+  1 мин с удвоением до 1 ч; после 8 попыток (≈ 2 ч) ставится `failed_at`:
+  джоба остаётся для разбора и больше не берётся. `failed_at` и служебный
+  `created_at` (ADR-005) — две колонки сверх модели данных;
+- доставка at-least-once, хендлеры идемпотентны; worker берёт только
+  известные ему kind — джоба нового kind ждёт выката своего хендлера;
+- SIGTERM: новые джобы не берутся, текущей даётся 20 с, затем её прерывают
+  и возвращают в очередь без списания попытки (`stop_grace_period: 30s`);
+- пустая очередь опрашивается раз в секунду; LISTEN/NOTIFY на нашем
+  масштабе не нужен. Новых зависимостей нет — только pgx.
+**Последствия.** Урок без работающего worker'а застревает в `processing`:
+worker в compose обязателен. Сбой транзакции `egress_ended` (БД
+недоступна, нет таблицы `jobs`) api отвечает LiveKit 503, и тот повторяет
+доставку; условие на статус урока делает повтор безопасным. Повторы
+у LiveKit ограничены, поэтому миграция `0007_jobs` всё равно выкатывается
+раньше api: иначе, исчерпав их, путь записи теряется. Мёртвые джобы видны
+запросом `failed_at IS NOT NULL`; оживить — обнулить `failed_at` и
+`attempts`. Healthcheck у worker'а не заведён: HTTP у него нет, упавший
+процесс поднимает `restart`. Глобальная уборка протухших сессий
+из ADR-006 не сделана: ей нужны периодические джобы, а их в S1-2 нет —
+долг D-15.
+
+## ADR-014 · 2026-10-26 · accepted — Бэкапы Postgres: retention 7/30 и свой токен хранилища
+
+**Контекст.** S1-7 и [05-storage-s3.md](05-storage-s3.md) задают ночной
+`pg_dump | zstd` → `backups/pg/{date}.dump.zst` с «retention 7 дневных /
+30 дней», не говоря, что хранится между 7-м и 30-м днём. Второй вопрос —
+доступ. Токен R2 `S3_*` ([ADR-009](#adr-009--2026-08-03--accepted--объектное-хранилище-cloudflare-r2))
+api передаёт LiveKit в каждом egress-запросе, то есть копия лежит у третьей
+стороны и умеет читать и удалять всё в бакете. В дампе — bcrypt-хэши
+паролей и email всех учёток, sha256-дайджесты сессий и ссылок, позже —
+зашифрованные refresh-токены Google (S1-1).
+**Решение.** Retention: все копии последних 7 суток (дата в имени — UTC);
+от 7 до 30 суток — по одной на ISO-неделю, самая свежая в неделе (обычно
+воскресная, при пропуске — последняя из имеющихся); старше 30 суток —
+удаляются. В устоявшемся режиме это ~11 копий. Чистит сам
+`deploy/backup-pg.sh` после проверенной выгрузки; объекты с другими
+именами под `backups/pg/` (ручные копии) не трогает; если копии моложе
+7 суток нет, чистку не делает и падает. Lifecycle-правило для
+`backups/pg/` не ставим: «одну в неделю» им не выразить, а истечение
+по возрасту продолжает работать, когда бэкапы перестали делаться, —
+через 30 дней не осталось бы ни одной копии.
+
+Доступ: ключи `BACKUP_S3_*` перекрывают `S3_*`, целевая схема — отдельный
+бакет и отдельный токен Object Read & Write только на него. Тогда копия
+токена у LiveKit не видит дампов, а скрипт бэкапа — записей. Пока все
+`BACKUP_S3_*` пусты, скрипт работает под `S3_*` и пишет предупреждение
+в журнал: бэкап под общим токеном лучше, чем никакого. Задан хоть один
+`BACKUP_S3_*` — обязателен свой `BACKUP_S3_BUCKET`, и общим местом
+считается тот же бакет на том же эндпоинте, а не только тот же ключ:
+иначе ключи без бакета молча писали бы дампы в бакет записей. Клиентское
+шифрование (age/gpg) отложено: оно закрывает чтение дампа держателем
+токена, но не удаление, а ключ расшифровки — ещё одна точка отказа
+для RTO «за час»: потерян ключ — потеряны все копии. Вернуться к нему,
+если отдельный токен невозможен или в БД появятся секреты в открытом виде.
+
+Инструменты: aws cli — одноразовый контейнер из закреплённого digest'ом
+`amazon/aws-cli:2.32.7` (им уже работали с R2 стенда), ключи — через
+окружение, не в командной строке; zstd — на хосте; pg_dump и pg_restore —
+внутри контейнера postgres по локальному сокету, пароль БД скриптам
+не нужен. Новых сервисов и runtime-образов в compose нет, сканирование
+ADR-011 не меняется. Скрипты в CI проверяет shellcheck
+(`koalaman/shellcheck:v0.10.0`, закреплён digest'ом, job `shell`
+в `ci.yml`), решение retention — `scripts/test_backup_retention.py`.
+
+Целостность: держатель токена хранилища может подложить объект вместе
+с метаданными, поэтому sha256 в метаданных — защита от порчи, не от
+подмены. Проверенные выгрузки записываются в манифест на VPS вне бакета
+(`/var/lib/lingua-backup/manifest`, только root: ключ, sha256, размер),
+и `deploy/restore-pg.sh` сверяет копию с ним; копию без записи
+в манифесте (или без sha256 вовсе, когда манифеста нет) разворачивает
+только с `--insecure-no-verify`. Без `--date`/`--key` берётся самая
+свежая ночная копия не позже сегодняшней даты, а в рабочую базу
+(`POSTGRES_DB`) — только явно названная.
+**Последствия.** Выгрузка идёт во временный `backups/pg/incoming/…`,
+скачивается обратно и сверяется по sha256 и только потом копируется
+внутри хранилища в ночной ключ; у R2 исходящий трафик бесплатен, на
+объёме дампа hobby-базы это копейки. Повторный прогон в тот же день
+заменяет копию дня только проверенной. Ночные копии с датой позже
+сегодняшней чистка не удаляет, но называет и завершается с ошибкой.
+Манифест живёт на VPS: при переезде на новую машину его копию нужно
+держать рядом с `deploy/.env`, иначе сверка — только по метаданным.
+Восстановление — одной транзакцией; непустую базу скрипт перезаписывает
+только с `--force`.
+Роли и гранты из дампа не переносятся — объекты получает учётка контейнера
+(`POSTGRES_USER`), других ролей у стенда нет. Расписание — systemd-таймер
+на VPS, 03:30 UTC; провал виден как `failed`-юнит, оповещения нет. Пока
+владелец не завёл бакет и токен для бэкапов — долг D-8.
+
+## ADR-015 · 2026-10-26 · accepted — Транскрибация AssemblyAI: свой клиент, цепочка из трёх джоб
+
+**Контекст.** S2-1…S2-3 по плану: `asr_submit` вместо плейсхолдера
+`recording_ready`, вебхук `completed` → `utterances`, VTT → S3, урок
+`done`. Доки не задают ни клиента, ни решающего «ASR включён», ни того,
+кто забирает результат, ни статусов `transcripts`. По документации
+AssemblyAI v2 (сверено 2026-10-26): вебхук несёт только `transcript_id`
+и `status` (`completed` | `error`), результат забирается
+`GET /v2/transcript/{id}`; ответ 2xx ждут не дольше 10 с, на прочее —
+до 10 попыток раз в 10 с, а 4xx повторы прекращает; модель советуют
+задавать явно — умолчание зависит от тарифа.
+**Решение.**
+- Клиент свой (`internal/assemblyai`, `net/http`): Go-SDK у AssemblyAI нет,
+  а вызовов два — `POST /v2/transcript` и `GET /v2/transcript/{id}`.
+  Новых зависимостей нет.
+- Запрос: `audio_url` — presigned GET записи на **24 ч** (AssemblyAI
+  качает файл в начале обработки, сутки — запас на его очередь; ссылка
+  уходит только ему), `speech_models: ["universal-2"]` ($0.15/ч, как
+  в бюджете; `universal-3-5-pro` — $0.21/ч, смена — одна константа),
+  `language_code: en`, `punctuate` и `speaker_labels: true`,
+  `webhook_url` = `https://<DOMAIN>/api/webhooks/assemblyai` с секретом
+  в заголовке `X-Lingua-Webhook-Secret` (`webhook_auth_header_*`).
+  `speakers_expected` не задаём: снапшот участников не говорит, сколько
+  человек реально говорило, а неверное число вредит сильнее
+  автоопределения.
+- Решает worker: api по-прежнему ставит `recording_ready`, хендлер без
+  `ASSEMBLYAI_API_KEY` сразу ставит `done` (плейсхолдер ADR-013 остаётся),
+  с ключом — заводит строку `transcripts` и ставит `asr_submit` одной
+  транзакцией. Ключ API есть только у worker'а; api знает лишь секрет
+  вебхука (`ASSEMBLYAI_WEBHOOK_SECRET`, ≥ 32 символов, сверка за
+  постоянное время). Ключ без секрета, хранилища или `DOMAIN` — ошибка
+  старта worker'а, как неполный конфиг хранилища у api.
+- Вебхук только двигает статус и ставит джобу (правило 04-api.md, лимит
+  10 с): результат забирает отдельная джоба `asr_result`. Цепочка:
+  `recording_ready` → `asr_submit` → вебхук (или сверка `asr_poll`,
+  ADR-016) → `asr_result` → `vtt_render` → `done`. `vtt_render` отдельна,
+  чтобы S2-4 перерендерил VTT после правки реплик той же джобой.
+- Статусы `transcripts.status`: `queued` → `submitted` (есть
+  `external_id`) → `fetching` (вебхук принят) → `completed` (реплики
+  в базе; VTT — `vtt_s3_key`) | `error`. Каждый шаг — условный `UPDATE`
+  по ожидаемому статусу в одной транзакции с постановкой следующей джобы:
+  повторная доставка вебхука и повтор любой джобы ничего не задваивают.
+  Схема держит то же сама: транскрипт один на урок (`UNIQUE lesson_id`),
+  реплика одна на `(transcript_id, idx)` (PK), `external_id` уникален
+  у провайдера. `lessons.transcript_id` получает FK и заполняется вместе
+  с транскриптом — зеркало `transcripts.lesson_id` из модели данных.
+- Неизвестный `transcript_id` → 503 (AssemblyAI повторит: вебхук мог
+  обогнать запись `external_id`), неверный секрет → 401, сбой базы → 500
+  (повторит).
+- VTT: свой рендер (`internal/webvtt`), cue на реплику, `<v A>`, тайминг
+  `HH:MM:SS.mmm`, экранирование `& < >`, переводы строк — пробел;
+  `text/vtt; charset=utf-8` в `transcripts/{lesson_id}.vtt`
+  (`storage.Client.PutObject`, общий со снимками досок S3-6). Чтение —
+  `GET /lessons/{id}/transcript`
+  (участники и teacher урока, как `GET /lessons/{id}`): реплики
+  и presigned VTT на 30 мин; причину сбоя наружу не отдаём.
+**Последствия.** Без ключа стенд ведёт себя как в S1-5. Потерянный
+вебхук (api лежал дольше ~100 с повторов AssemblyAI) подбирает отложенная
+сверка `asr_poll` (ADR-016; долг D-9 закрыт ею при ревью волны A).
+Падение worker'а между отправкой и записью `external_id` отправит запись
+повторно — вторая оплата, а вебхук первой отправки получает 503, пока
+AssemblyAI не перестанет повторять; на hobby-масштабе это дешевле
+дедупликации.
+
+## ADR-016 · 2026-10-26 · accepted — Сбой транскрибации: урок всё равно done
+
+**Контекст.** Урок без транскрипта ценнее урока, навсегда застрявшего
+в `processing`: страница показывает плеер только в `done`. Очередь
+(ADR-013) после исчерпания попыток оставляет джобу мёртвой, и урок
+никто не выводит из `processing`.
+**Решение.** Транскрибация сдаётся, но урок доходит до `done`:
+- ошибка шага (`asr_submit`, `asr_poll`, `asr_result`, `vtt_render`: сеть,
+  5xx/4xx AssemblyAI, отказ хранилища) — обычный повтор очереди:
+  8 попыток с backoff 1 мин → 1 ч, ≈ 2 ч. Очередь сообщает хендлеру
+  последнюю попытку (`jobs.Job.LastAttempt`); на ней хендлер вместо
+  ошибки пишет итог (`store.FailTranscript`) и завершает джобу. Попытку,
+  оборванную остановкой worker'а по истечении `ShutdownGrace`, очередь
+  не засчитывает: причина отмены контекста хендлера —
+  `jobs.ErrInterrupted` (`context.Cause`), и на ней последняя попытка
+  итог не пишет, а возвращает ошибку — джоба вернётся в очередь;
+- потерянный вебхук: вместе с `submitted` ставится отложенная джоба
+  `asr_poll` (`jobs.EnqueueOnce`, через `store.ASRPollAfter` = 2 ч).
+  Если транскрипт к тому времени всё ещё `submitted`, она сама
+  запрашивает `GET /v2/transcript/{id}`: `completed`/`error` — тот же
+  переход, что от вебхука (`fetching` + `asr_result` одной транзакцией;
+  лишний GET — цена редкого пути), `queued`/`processing` — ошибка
+  и повтор с backoff, на последней попытке — итог, как выше. Принятый
+  вебхук снимает ждущую сверку (`jobs.Cancel`), запоздалая ничего
+  не делает. Вебхук на ещё неизвестный `external_id` получает 503,
+  и AssemblyAI повторяет доставку;
+- `status=error` у AssemblyAI — итог сразу, без повторов: та же запись
+  упадёт так же. Повторная отправка — вручную;
+- итог: `transcripts.status=error`, причина в `transcripts.error`, урок
+  `done`. Если реплики уже сохранены (сорвался только VTT), статус
+  остаётся `completed`, реплики видны вьюеру, VTT нет, причина в `error`;
+  удачный перерендер её стирает;
+- ключ убрали при транскрипте в очереди — хендлеры зарегистрированы
+  и без ключа и сразу пишут итог «AssemblyAI не настроен»; `vtt_render`
+  проверяет для этого хранилище (без ключа его у ASR нет).
+**Последствия.** Причину видно запросом
+`SELECT lesson_id, status, error FROM transcripts WHERE error IS NOT NULL`.
+Ручной повтор транскрибации: `UPDATE transcripts SET status='queued',
+external_id=NULL, error=NULL, vtt_s3_key=NULL WHERE lesson_id=…` (VTT
+допускается только у `completed`, CHECK `transcripts_vtt_after_completed`),
+`DELETE FROM utterances` этого транскрипта, `UPDATE lessons SET
+status='processing'` и джоба `asr_submit` с `{"transcript_id": …}`
+(`INSERT INTO jobs`). Брошенные захваты (worker падал на каждой попытке)
+очередь хоронит, не вызывая хендлер, — такой урок остаётся
+в `processing`, как и прежде.
+
+## ADR-017 · 2026-10-26 · accepted — Лемматизация: morphy поверх Open English WordNet 2025
+
+**Контекст.** S3-2 требует английской лемматизации в Go с выбором через
+ADR. Лемма — ключ `terms`: от неё зависят кэш перевода, дефиниции, позже
+личный словарь и карточки FSRS; риск этапа — «слипание/дребезг терминов».
+Части речи в клике нет, а POS-теггера на Go без тяжёлых моделей нет.
+Варианты замерены на одной выборке —
+`backend/internal/lemma/testdata/inflections.tsv`, 119 словоформ
+(111 однозначных: регулярные и неправильные глаголы и существительные,
+степени сравнения, притяжательные, регистр; 8 неоднозначных: building,
+tired, bit…):
+- `aaaton/golem` v4.0.2 + `dicts/en` v1.0.1 — таблица «форма → лемма»
+  из lemmatization-lists; код MIT, данные ODbL (share-alike для базы);
+  с 2020 года один фикс (2025-04). **108/119 (90.8%)**: felt, found, left
+  не приводятся к feel, find, leave; best, worst остаются собой; worse → wrong.
+- `kljensen/snowball` v0.10.0 — стеммер Porter2: основы, а не слова
+  (studi, happi), **43/119 (36%)**; леммой термина быть не может.
+- Формы из самой выгрузки Wiktionary (поле `forms` у kaikki.org) —
+  лемматизатор зависел бы от прогона импорта и базы, а лемматизация
+  нужна и без словаря (S5-2, S5-6).
+- **Выбрано:** своя реализация morphy (правила отсечения окончаний и
+  списки исключений WordNet, morphy(7WN)) поверх данных Open English
+  WordNet 2025 (`globalwordnet/english-wordnet`, релиз 2025-edition;
+  проект живой, обновляется ежегодно; CC BY 4.0 + лицензия WordNet —
+  разрешительные, с атрибуцией). **114/119 (95.8%)**, все 111 однозначных
+  форм верны.
+
+**Решение.** Пакет `backend/internal/lemma`: встроенные (`go:embed`)
+однословные леммы OEWN с частями речи и суммой синсетов (74 441 лемма,
+290 KB gzip) и 4 473 неправильные формы (22 KB); пересборка —
+`go generate` (генератор `internal/lemma/gen` читает zip релиза).
+Кандидаты — само слово, исключения и правила каждой части речи;
+кандидат принимается, только если такая лемма с этой частью речи есть
+в OEWN. Из кандидатов берётся самый многозначный (OEWN обнулил счётчики
+употреблений, многозначность — доступная замена частотности), при
+равенстве — само слово. Сверх morphy: короткая основа CVC перед
+-ed/-ing/-er/-est удваивает согласную, поэтому hoped/hoping → hope,
+а не hop (правило орфографическое, добавлено после этого промаха на
+выборке). Нормализация: нижний регистр, `’` → `'`, притяжательные `'s`
+и `s'` отрезаются, кроме it's, let's и других сокращений. Лемма зависит
+только от слова, не от контекста: одна форма — всегда один термин.
+`lemma.IsWord` — общее правило «это слово» для клика и импорта (буквы,
+внутренние апостроф и дефис, до 64 байт). Термин в общем `terms`
+заводится и переводится только для знакомого слова: лемма есть в OEWN
+(`lemma.Known`) или у слова есть статьи датасета (S3-4); незнакомое
+отвечается с `term_id: 0`, без перевода и записи в базу — иначе любой
+вошедший (и гость) засорял бы общий словарь и занимал LibreTranslate
+(ревью волны A). Новых Go-зависимостей нет.
+
+**Последствия.** Неоднозначные формы без части речи не развести:
+building → build, meeting → meet, interested → interest, tired → tire,
+bit → bite (3/8 в этой группе). Смягчение — клик ищет статьи и по лемме,
+и по самой форме: у building в попапе есть и build, и building. Если
+промахи начнут мешать (раскраска в S3-1, индексация S5-2), — часть речи
+по предложению, отдельным ADR. Служебных слов (the, you) в OEWN нет:
+до импорта датасета клик по ним — без термина и перевода. Атрибуция
+OEWN и WordNet — `backend/internal/lemma/oewn/LICENSE`.
+
+## ADR-018 · 2026-10-26 · accepted — LibreTranslate вне блокирующего скана: профиль translate
+
+**Контекст.** S3-3 добавляет LibreTranslate в compose. ADR-011 требует
+сканировать каждый runtime-образ compose по всем severity, включая
+неисправленные находки; новый сервис со своим образом идёт либо
+в матрицу `security.yml` и `scripts/security/smoke_runtime.sh`, либо
+в опциональный профиль с ADR. Последний релиз
+`libretranslate/libretranslate:v1.9.6` (2026-05-26, база
+`python:3.11.14-slim-bookworm`, Debian 12.13) Trivy 0.75.0 оценивает
+в 435 находок: CRITICAL 11, HIGH 101, MEDIUM 171, LOW 140, UNKNOWN 12;
+270 без исправления; 396 — пакеты Debian, 39 — Python. Блокирующий скан
+такой образ не пропустит, а ослаблять политику (ignore, порог severity)
+ADR-011 запрещает. Своя пересборка LibreTranslate на свежей базе
+(как caddy и postgres в ADR-011) — отдельная работа с torch-подобным
+стеком (ctranslate2, argos-translate), не S3-3.
+**Решение.** Сервис `libretranslate` — в профиле `translate`: по
+умолчанию не стартует, включается `COMPOSE_PROFILES=translate`.
+Образ закреплён тегом и digest'ом индекса
+(`v1.9.6@sha256:1de2d705…bb32`). Вместо скана — изоляция: сеть
+`translate` с `internal: true` (выхода в интернет нет, портов наружу
+нет, достучаться может только api), веб-интерфейс и перевод файлов
+выключены, `LT_CHAR_LIMIT=500`. Ресурсы: `LT_LOAD_ONLY=en,ru`,
+`LT_THREADS=1` (число процессов gunicorn — каждый держит свою копию
+моделей), `cpus: 1.5`, `mem_limit: 2g`; healthcheck — штатный
+`scripts/healthcheck.py`. Модели en↔ru ставит разовый сервис
+`libretranslate-models` (профиль `translate-setup`, сеть по умолчанию)
+в том `lt_models`; сам сервис моделей при старте не обновляет. api
+переводит только лемму (одно слово) знакомого слова (ADR-017), таймаут
+3 с, без ответа — клик отдаёт `translation: null`, кэшируется только
+успешный перевод.
+**Последствия.** Долг D-10: образ вне блокирующего скана, на стенде
+профиль не включён; закрывается своей сборкой образа на актуальной базе
+(или релизом upstream, который проходит скан) с добавлением в матрицу
+и smoke-проверку. До того включение профиля — решение владельца стенда.
+Остаточный риск ограничен: вход — только запросы api со словом до
+64 байт, выход в сеть перекрыт. Лицензия AGPL-3.0: образ используется
+без изменений отдельным сервисом. Замер на одноразовом стенде на этом
+же VPS: установка моделей 22 с, том 373 MB; перевод незнакомого слова
+медиана 301 мс, максимум 620 мс на 20 словах; RAM после прогрева
+~376 MiB — ниже оценки 1–1.5 GB из 02-services.md.
+
+## ADR-019 · 2026-10-26 · accepted — Словарный датасет: Wiktextract, фильтр по OEWN, cmd/dictimport
+
+**Контекст.** S3-4: импорт открытых дампов (kaikki.org, Wiktionary)
+в PG, «worker-джоба или разовый скрипт»; попапу нужны лемма, часть речи,
+первые значения, по возможности русские переводы. kaikki.org публикует
+выгрузки Wiktextract английского Wiktionary, обновляет еженедельно
+(сейчас — дамп enwiktionary от 2026-10-01). Файлы «postprocessed» по
+языкам (`kaikki.org-dictionary-English.jsonl`, 3.2 GB, 534 MB gzip)
+помечены DEPRECATED (wiktextract#1178); рекомендован полный
+`raw-wiktextract-data.jsonl.gz` (2.9 GB gzip, 24.8 GB, все языки,
+отбор по `lang_code`). Лицензия данных — как у Wiktionary: CC BY-SA
+и GFDL.
+**Решение.**
+- Источник по умолчанию — `https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz`
+  (ссылка стабильна); английский файл тоже читается, пока его не убрали:
+  формат один, gzip распознаётся по сигнатуре; источник — только https
+  или локальный файл.
+- Отбор: `lang_code = en`; заголовок — одно слово (`lemma.IsWord`);
+  слово есть в OEWN (достижимо из `lemma.Lemma`) или часть речи
+  служебная (article, det, pron, prep, conj, particle, contraction,
+  intj, num): их нет в WordNet, а это самые частотные слова. Значения
+  с тегами form-of, alt-of, obsolete, archaic, misspelling отбрасываются,
+  статья без значений — целиком. На статью — до 3 значений (у подзначения
+  — последний, самый конкретный gloss; длиннее 300 символов — обрезка)
+  и до 5 русских переводов без знаков ударения.
+- Таблица `definitions` (word, lemma, pos, etymology, glosses[],
+  translations_ru[], source_line, import_id): уникальность
+  (word, pos, etymology), индекс по lemma; прогоны — `definition_imports`.
+- Импорт — команда `cmd/dictimport` в образе worker'а, не джоба: полный
+  дамп разбирается дольше таймаута хендлера очереди (ADR-013). Пачка
+  в 20 000 строк источника — одна транзакция вместе с контрольной
+  точкой. Повторный запуск того же источника той же версии (ETag или
+  Last-Modified у URL, размер и mtime у файла) продолжает с неё; другая
+  версия — только с `-restart`: он помечает незавершённый прогон брошенным
+  (`definition_imports.abandoned_at`) и начинает новый, поэтому статьи
+  брошенного новый прогон перезаписывает, а не попавшие в него удаляет
+  при завершении — словарь как после чистого импорта новой версии.
+  Повтор того же дампа даёт тот же словарь
+  (upsert; дубль секции внутри дампа — побеждает первая). Статьи прошлых
+  импортов, которых нет в новом, удаляются только при успешном
+  завершении; источник без статей и файл, оборванный посреди строки,
+  прогон не завершают. Одновременно идёт один импорт (advisory lock).
+**Последствия.** Клик за дефинициями во внешнюю сеть не ходит. Замер на
+первых 20 000 строках raw-дампа (141 MB, 4 541 английская статья):
+2 915 статей, 1 427 лемм, 2.2 MB с индексами (~0.8 KB на статью), 2 с.
+Оценка полного импорта — 80–150 тыс. статей, 60–120 MB в PG: потолок
+задают 74 тыс. лемм OEWN и служебные слова, а начало дампа — частотные
+слова с многими частями речи, поэтому линейная экстраполяция выборки
+завышает. Разбор полного дампа — порядка 5–10 мин CPU плюс загрузка
+2.9 GB; точные числа dictimport печатает по завершении. Словарь попадает
+в ночные дампы (S1-7). CC BY-SA требует атрибуции: попап (S3-1)
+подписывает дефиниции «Wiktionary, CC BY-SA».
+
+## ADR-020 · 2026-10-26 · accepted — Доска: Excalidraw в web, ретранслятор excalidraw-room, сцена в Postgres
+
+**Контекст.** [ADR-001](#adr-001--2026-07-31--accepted--вариант-c-гибрид) и
+[02-services.md](02-services.md) закладывали для S3-6 excalidraw-complete
+(PatWie): один Go-бинарь с фронтом Excalidraw, хранилищем сцен и realtime,
+интеграция — `?room=lesson-{id}` плюс бэкап JSON-сцены в S3. Проверено
+по GitHub 2026-10-26: автор закрыл проект (объявление о retirement
+2025-12-03, последний код — 2024-06-10), репозиторий
+`PatWie/excalidraw-complete` переименован в `PatWie/drafft-ink` — это уже
+другая доска на Rust/WebGPU под AGPL-3.0, релизов и образов
+excalidraw-complete нет. Сопровождаемой замены «всё в одном» тоже нет:
+excalidraw-full (BetterAndBetterII) требует GitHub OAuth и не указывает
+лицензию; стек alswl/excalidraw-collaboration — три образа (фронт на
+nginx:1.27, storage-backend 2023 года), а его Go-ретранслятор
+excalidraw-room-go без лицензии. Совместная работа Excalidraw устроена
+одинаково везде: сервер комнаты только пересылает сообщения клиентов,
+содержимое шифруют сами клиенты ключом комнаты.
+
+**Решение.** Доска собирается из трёх частей, каждая — из сопровождаемого
+MIT-кода Excalidraw или нашего:
+- **Редактор** — npm-пакет `@excalidraw/excalidraw` **0.18.1** (MIT,
+  2026-04-20, peer React 19) во вкладке «Доска» страницы `/lesson/{id}`
+  живого урока; грузится только в браузере. Версия закреплена точно:
+  от неё зависит формат JSON-сцены, который разбирает S3-7. Шрифты — со
+  своего домена (`/excalidraw/fonts/`, копия из пакета при сборке web;
+  иероглифический Xiaolai не копируем — понадобится, Excalidraw возьмёт
+  его с esm.sh). Картинки выключены (`UIOptions.tools.image = false`):
+  их файлы не синхронизируются. Обмен — `socket.io-client` 4.8 (MIT).
+  Уязвимые транзитивные зависимости редактора подняты `overrides`
+  (nanoid 3.3.20 и 5.1.16, lodash-es 4.18.1, katex 0.19.1): `npm audit`
+  и trivy по `web/package-lock.json` — ноль находок.
+- **Realtime** — официальный ретранслятор `excalidraw/excalidraw-room`
+  (MIT), сервис `whiteboard`, образ
+  `excalidraw/excalidraw-room:sha-03ff435@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70`
+  (сборка 2023-12-15 из коммита 03ff435). Протокол из его исходника:
+  `join-room` → `first-in-room` / `new-user`, `server-broadcast` и
+  `server-volatile-broadcast` → `client-broadcast` остальным в комнате,
+  `room-user-change`. Состояния не хранит. Комната — случайное имя
+  (`whiteboards.room_id`, ниже), сообщения — `{type: SCENE_INIT |
+  SCENE_UPDATE | MOUSE_LOCATION, payload}`, как у excalidraw.com,
+  зашифрованы AES-GCM-128 ключом комнаты.
+- **URL** — `/whiteboard/lesson-{id}/socket.io/` на том же домене: cookie
+  сессии и TLS даёт host-nginx (ADR-004), поддомен с отдельными
+  сертификатом и cookie не нужен. Проброс WebSocket host-nginx требует:
+  в его vhost для `/whiteboard/` нужны `proxy_http_version 1.1` и
+  заголовки `Upgrade`/`Connection` ([deploy/README.md](../../deploy/README.md),
+  «Доска»), без них socket.io работает long-polling'ом. caddy пропускает
+  запрос только после `forward_auth` в api `GET /whiteboard/auth`: пользователь —
+  из cookie `sid`, урок — из исходного пути в `X-Forwarded-Uri`; участник
+  незавершённого урока — 204, аноним — 401, не участник — 403, урок
+  в processing/done — 409. Затем путь урока срезается до `/socket.io/`.
+- **Доступ к комнате и содержимому.** Ретранслятор не знает, кто в какую
+  комнату вошёл: комнату сокет называет сообщением `join-room` внутри
+  соединения (caddy его не видит), а `server-broadcast` уходит в любую
+  названную комнату. Поэтому и имя комнаты (`room_id`), и её ключ — по
+  16 независимых случайных байт, base64url (для ключа это формат JWK
+  WebCrypto) — выдаёт только `GET /lessons/{id}/whiteboard` участникам.
+  Имя из id урока не выводится: участник одного урока не найдёт комнату
+  другого — не увидит присутствие и не вызовет рассылку чужой сцены.
+  Без ключа сообщения не прочесть, подделку отбросит тег GCM. Привязать
+  комнату к уроку из пути forward_auth нельзя без своего ретранслятора
+  (вместе с D-11). Остаётся узкий случай: выбывший из урока участник,
+  запомнивший имя и ключ, войдёт в комнату того же урока, пока тот
+  не завершён, через путь своего открытого урока. На `new-user`
+  (приходит на любой `join-room`, и повторный) клиент отвечает всей
+  сценой не чаще раза в 10 с одному сокету и одной рассылкой через 1 с
+  на всех новичков.
+- **Сцена — в Postgres** (`whiteboards`, миграция 0010): каждый, кто
+  рисовал, через 2 с тишины сохраняет свою сцену `PUT
+  /lessons/{id}/whiteboard/scene` (пока прошлое сохранение в полёте —
+  сразу после него; при уходе со страницы — `pagehide` и
+  `visibilitychange` → hidden — сразу, запросом `keepalive` до 64 КБ,
+  который браузер доводит и после закрытия вкладки), а api под
+  блокировкой строки сливает её
+  с сохранённой поэлементно по правилу `reconcileElements` Excalidraw:
+  бо́льшая `version`, при равных — меньший `versionNonce`, удаление — тоже
+  версия; порядок — по дробному `index`. Чтение `GET
+  /lessons/{id}/whiteboard/scene` — файл `.excalidraw`, участникам, в том
+  числе после урока. Ретранслятор перезапускается без потерь: вошедший
+  заново берёт сцену из api, остальные досылают свежее при `new-user`.
+- **Снимок в хранилище** — джоба worker'а `whiteboard_snapshot`:
+  `whiteboards/{lesson_id}.json` (тот же файл `.excalidraw`, элементы как
+  есть, с удалёнными), путь — в `whiteboards.scene_s3_key`. Ставится
+  сохранением сцены не чаще раза в минуту — `jobs.EnqueueOnce` держит одну
+  ждущую джобу на доску — и сразу вебхуком LiveKit `room_finished`.
+  Планировщика не нужно. Идемпотентна: снимок, уже унёсший текущую
+  `scene_version`, ничего не пишет.
+- **Скан образа (ADR-011).** Образ ретранслятора — Node 12.22.12 на
+  Alpine 3.15, express 4.17.1, socket.io 4.6.1, ws 8.11.0, процесс от root:
+  блокирующий скан он не пройдёт. Сервис поэтому в профиле compose
+  `whiteboard`, вне матрицы `security.yml`, и включается владельцем стенда
+  явно (`COMPOSE_PROFILES=whiteboard`, `WHITEBOARD_ENABLED=1`). Риск
+  сужен: процесс от `node`, `read_only`, `cap_drop: ALL`,
+  `no-new-privileges`, портов нет, а через caddy до него доходят только
+  запросы socket.io, прошедшие forward_auth. Пересборка ретранслятора
+  из исходника с актуальными зависимостями (как caddy и gosu) или его
+  замена и перенос в матрицу — долг D-11.
+
+**Последствия.** Отступление от доков: вместо одного контейнера и
+`?room=` — редактор в web, ретранслятор и хранение в api;
+[02-services.md](02-services.md), [01-topology.md](01-topology.md),
+[03-data-model.md](03-data-model.md), [05-storage-s3.md](05-storage-s3.md)
+и [поток урока](flows/lesson-lifecycle.md) обновлены. Колонки сверх модели
+данных: `room_id`, `room_key`, `scene`, `scene_version`, `snapshot_version`,
+`created_at` (ADR-005). Предел сцены — 1 MiB (`maxSceneBytes`), и на тело
+сохранения, и на итог слияния: слияние элементы только добавляет
+(удаление — тоже версия), и без предела на итог сохранения по частям
+растили бы сцену без конца. Больше — 413 `scene_too_large`, сохранённая
+сцена не меняется. Предел только в байтах: число элементов он тоже
+ограничивает. 1 MiB — `client_max_body_size` host-nginx по умолчанию;
+ретранслятор принимает до 1 000 000 байт (`maxHttpBufferSize`
+socket.io), поэтому сцена больше `MAX_RELAY_BYTES` клиента сохраняется,
+но целиком не рассылается: клиент пропускает рассылку с предупреждением,
+новички берут сцену из api. Сохранённую сцену любой участник может
+прислать обратно целиком. Удалённые элементы место занимают: доска,
+дошедшая до предела, новое не сохраняет до конца урока. Поднять предел —
+`client_max_body_size`, `maxHttpBufferSize` и `maxSceneBytes` вместе.
+Без хранилища worker не регистрирует `whiteboard_snapshot`: джобы ждут
+в очереди по одной на доску, сцена остаётся в БД. Без профиля доска
+отвечает 503, остальной стенд работает. Курсоры участников —
+`MOUSE_LOCATION` по volatile-каналу; картинок на доске нет.
+
+## ADR-021 · 2026-10-26 · accepted — Периодические джобы: расписание в Postgres
+
+**Контекст.** Сборщику субтитров (S5-1, S5-2) нужны джобы по расписанию:
+опрос RSS раз в час, сбор субтитров каждые 5 минут. В очереди `jobs`
+(ADR-013) периодических джоб нет, а worker'ов с этими джобами может быть
+несколько — на VPS и на домашней машине
+([поток](flows/subtitle-harvester.md)), с разными часами. cron в контейнере
+или отдельный сервис-планировщик — лишняя движущаяся часть.
+**Решение.** `jobs.Scheduler` (`internal/jobs/schedule.go`) и таблица
+`job_schedules (kind PK, slot)` (миграция `0011_subtitles`):
+- период — отрезок времени **Postgres**, выровненный по эпохе:
+  `floor(epoch(now()) / период) * период`; часы worker'ов не участвуют;
+- один SQL-запрос занимает текущий слот условным upsert'ом
+  (`ON CONFLICT … DO UPDATE … WHERE slot < новый`) и в том же запросе
+  ставит джобу. Конкурент на той же строке ждёт коммита, видит занятый
+  слот и ничего не ставит: за период — не больше одной джобы, сколько бы
+  планировщиков ни тикало, и перезапуск этого не меняет;
+- джоба не ставится, пока прошлая того же kind жива (ждёт или выполняется):
+  иначе застрявший worker копил бы их по одной за период. Мёртвая
+  (`failed_at`) новую не держит. Пропущенные периоды (worker лежал)
+  не наверстываются: после простоя ставится одна джоба;
+- тик — при старте и каждые 30 с; payload периодической джобы — `{}`;
+- расписание регистрирует тот процесс, что выполняет kind
+  (`Scheduler.Every` рядом с `Runner.Handle`, `worker.RegisterHarvester`):
+  без него джобы копились бы для отсутствующего worker'а.
+**Последствия.** Точность — до тика (30 с), для периодов от минуты
+достаточно. Смена периода сдвигает выравнивание: ближайшая джоба может
+прийти позже. Расписание видно запросом `SELECT * FROM job_schedules`;
+«выполнить сейчас» — удалить строку kind. Новых зависимостей нет.
+
+## ADR-022 · 2026-10-26 · accepted — Сборщик субтитров: роль harvester, yt-dlp, TED-дампы
+
+**Контекст.** S5-1…S5-3 и [поток](flows/subtitle-harvester.md) задают
+RSS-фиды, yt-dlp в темпе 1 видео / 15–30 с, manual > auto, разбор VTT и
+запуск того же worker'а с домашней машины. Не заданы: где живёт yt-dlp,
+как процессы делят джобы, где держать backoff, что делать с Shorts, как
+отличить ручные субтитры от авто, из чего импортировать «дампы TED» (S5-3).
+**Решение.**
+- **Роль процесса** — `WORKER_ROLE`: `core` (по умолчанию) — джобы стенда,
+  `harvester` — только `rss_poll`, `subtitles_fetch` и их расписание
+  (ADR-021). Бинарь один (`cmd/worker`); образ — target `harvester`
+  в `backend/Dockerfile` (worker + Python 3 + yt-dlp + Node.js), в compose —
+  сервис `harvester` под профилем `harvester`: на VPS он включается явно,
+  потому что ходит в YouTube с IP стенда. С другой машины запускается тот же
+  образ с `DATABASE_URL` базы стенда (доступ — VPN/Tailscale).
+- **Права сборщика.** yt-dlp разбирает ответы YouTube в контейнере worker'а
+  и прочтёт его окружение (`/proc/1/environ` того же uid), поэтому DSN
+  сборщику — своей роли: `deploy/harvester-db-role.sh` (идемпотентный,
+  запускает владелец стенда) создаёт её с `SELECT, INSERT, UPDATE, DELETE`
+  только на `subtitle_sources`, `videos`, `subtitle_segments`, `jobs`,
+  `job_schedules`; имя и пароль — из `HARVESTER_DATABASE_URL` в
+  `deploy/.env`, в репозиторий и в аргументы процессов пароль не попадает.
+  compose отдаёт сервису `harvester` в `DATABASE_URL` этот DSN, а пока он
+  пуст — DSN владельца, как раньше; с другой машины передают тот же DSN.
+  Сервис — `read_only` с tmpfs `/tmp` и `HOME` (`/home/app`, кэш yt-dlp),
+  `cap_drop: [ALL]`, `no-new-privileges`, потолки `mem_limit: 512m`,
+  `cpus: 1` до замера S5-2.
+- **yt-dlp** и **yt-dlp-ejs** (решатель JS-задач, которые YouTube ставит
+  клиенту) — колёса PyPI, закреплённые версией и sha256 в
+  `backend/ytdlp/requirements.txt`, ставятся `pip --require-hashes`
+  в отдельной стадии; pip в рантайм не попадает. JS-движок — `nodejs`
+  из Alpine 3.24: yt-dlp запускает его с `--permission` (без доступа
+  к файлам и процессам). Отвергнуты: deno из Alpine 3.24 (2.7.4) — с
+  известными уязвимостями по trivy; `quickjs-ng` 0.11 — без оптимизаций,
+  по вики yt-dlp задача решается минутами (вероятно, поэтому единственный
+  пробный вызов с VPS упёрся в таймаут 2 мин); `quickjs` — ложное
+  срабатывание сканера из-за смены схемы версий пакета. yt-dlp
+  запускается с урезанным окружением (PATH, HOME, локаль, прокси) — лишь
+  слой защиты: процесс того же uid прочтёт окружение worker'а из `/proc`.
+  Настоящие барьеры — `node --permission`, закреплённое колесо и своя роль
+  базы (выше).
+- **Вызов** — один на видео:
+  `--skip-download --write-subs --write-auto-subs --sub-langs en --sub-format vtt --write-info-json`.
+  Для одного языка yt-dlp сам берёт ручные субтитры и только без них —
+  авто (`YoutubeDL.process_subtitles`); какие вышли, видно по `info.json`
+  (ручные `en` есть в `subtitles`), оттуда же длительность — RSS её не даёт.
+  Ручные дорожки только под `en-GB`/`en-US` под `--sub-langs en`
+  не попадают: берутся авто `en`. Потолок вызова — 5 мин: каждый вызов
+  решает JS-задачи плеера.
+- **Темп** — `subtitles_fetch` собирает пакет: видео за видео, пока есть
+  очередь и на следующее хватает времени джобы (потолок джоб процесса
+  harvester — 15 мин). Пауза 15–30 с (равномерный jitter) от начала
+  прошлого обращения. Признаки блокировки в выводе yt-dlp (HTTP 429,
+  «not a bot», rate limit сессии) — пауза процесса 30 мин с удвоением
+  до суток; пока она идёт, джобы расписания завершаются, не обращаясь
+  к YouTube. Состояние паузы — в памяти процесса: блокируют IP, а у каждого
+  сборщика он свой.
+- **VTT → сегменты**: ручные — сегмент на реплику; авто — «катящиеся»
+  строки YouTube без повторов: сегмент — строка, которой не было в прошлой
+  реплике, с таймингом реплики, где она появилась. Теги, словные таймкоды,
+  `[Music]`, реплики-пометки вроде `(Laughter)` убираются.
+- **Очередь и сбои**: Shorts из фидов пропускаются — текста мало, а каждый
+  вызов yt-dlp — риск блокировки. Неудача по видео (не блокировка) —
+  `harvest_attempts + 1` и повтор не раньше чем через 6 ч × попытки,
+  после 3 видео выпадает из очереди. Сбой фида пишется в
+  `subtitle_sources.last_error`, джоба не падает.
+- **Cookies** — по необходимости: `HARVESTER_COOKIES` (путь в контейнере),
+  в compose — файл хоста `HARVESTER_COOKIES_FILE`; yt-dlp получает копию
+  в каталоге вызова (он дописывает jar при выходе, а оригинал смонтирован
+  только на чтение). Пустой файл — как без cookies. Файл должен читаться
+  uid 10001 контейнера; не читается (нет прав, на хосте нет файла и docker
+  смонтировал каталог) — это `ErrNoRunner`, беда окружения: джоба падает
+  и повторяется, попытки видео не тратятся.
+- **Сверх модели данных**: `subtitle_sources.polled_at/last_error/created_at`,
+  `videos.source_id/published_at/subtitles/harvest_attempts/harvest_error/harvested_at`.
+- **S5-3 не делается.** Открытого дампа транскриптов TED с таймкодами,
+  пригодного для плеера практики, нет. TED-LIUM 3 (OpenSLR SLR51,
+  CC BY-NC-ND 3.0) — единственный открытый корпус с таймкодами, но это
+  автоматически выровненные транскрипты (STM) одним архивом на ~50 ГБ
+  вместе со звуком, без id видео YouTube; MuST-C выдаётся по регистрации;
+  Kaggle-выгрузки, IWSLT/TED2020 — без таймкодов. Корпус TED пополняет тот
+  же сборщик: каналы TED и TED-Ed — в seed, у их видео ручные английские
+  субтитры. DoD S5-3 («без обращения к YouTube») без такого источника
+  недостижим, задача остаётся ☐; варианты — бэкфилл всего канала TED/TED-Ed
+  тем же сборщиком (через YouTube, в его темпе) или иной источник —
+  решение владельца.
+**Последствия.**
+- Образ harvester не входит в блокирующий скан рантайм-образов (ADR-011):
+  trivy 0.76.1 уязвимостей в нём не нашёл (пакеты Alpine, yt-dlp,
+  yt-dlp-ejs, Go-бинарь), но секрет-сканер находит публичные клиентские
+  ключи сторонних сайтов внутри экстракторов yt-dlp (43 находки
+  `jwt-token`/`aws-access-key-id` в 10 модулях `yt_dlp/extractor/` и их
+  байткоде), а исключений из правил ADR-011 не допускает. Поэтому сервис под профилем; в
+  `security.yml` отдельная джоба собирает образ и гоняет
+  `smoke_runtime.sh harvester` (не root, ровно закреплённый yt-dlp, нет pip,
+  найден Node.js); версии yt-dlp — в блокирующем скане исходников (trivy
+  читает requirements.txt). Долг D-12 — вернуть образ в блокирующий скан,
+  привязав находки секрет-сканера к неизменённым файлам закреплённого
+  колеса (по его RECORD), как `go_package_proof` привязывает Go-находки.
+- yt-dlp отстаёт от YouTube: сломался сбор — поднять обе версии
+  в requirements.txt (sha256 — с PyPI) и пересобрать образ.
+- Корпус из RSS растёт медленно: фид отдаёт 15 последних видео канала.
+
+## ADR-023 · 2026-10-26 · accepted — Google Calendar: OAuth2 с PKCE, AES-GCM для токена, свой id события
+
+**Контекст.** S1-1 и джоба `calendar_sync` из S1-2 (долг D-7). Доки задают
+web flow только для преподавателей, scope `calendar.events`, шифрованный
+refresh token «примитив — в ADR», `events.insert/update/delete` и
+идемпотентность через `gcal_event_id`. Не заданы библиотека, защита flow,
+формат шифртекста и ротация ключа, способ сделать идемпотентным сам insert
+(ответ Google может потеряться после создания события) и удаление события
+при отмене — строка урока при отмене удаляется. В
+[04-api.md](04-api.md) был `POST /auth/google/callback`, а Google
+возвращает браузер на redirect URI обычным переходом (GET).
+**Решение.**
+- Зависимость — `golang.org/x/oauth2` v0.37.0, только корневой пакет:
+  обмен кода, PKCE, обновление access token. Calendar API v3 — три
+  REST-вызова своим кодом (`internal/gcal`). `google.golang.org/api`
+  не берём: ради трёх вызовов он тянет gRPC и OpenTelemetry;
+  `x/oauth2/google` — тоже, он тянет `cloud.google.com/go/compute/metadata`
+  ради двух адресов.
+- Эндпоинты (уроки создаёт только преподаватель): `GET /auth/google` —
+  статус, `POST /auth/google/start` — адрес экрана согласия,
+  `DELETE /auth/google` — отключение, все три под ролью teacher;
+  `GET /auth/google/callback` — обмен кода и редирект на
+  `/account?google=<итог>`. Callback — переход браузера, а не fetch,
+  поэтому он без middleware teacher: сессию проверяет сам и на любой исход
+  отвечает редиректом — без сессии (истекла за время согласия, вышли
+  в другой вкладке) на `/login`, не преподаватель — `failed`. Старт —
+  POST: cookie сессии SameSite=Lax не уходит в межсайтовом POST.
+- Защита flow: `state` (256 бит, Google требует защиту от CSRF) и PKCE S256
+  (RFC 9700 рекомендует его и конфиденциальным клиентам; S256 объявлен
+  в discovery-документе Google). Оба значения и срок (10 мин) — в cookie
+  `__Host-google_oauth` (HttpOnly, Secure, SameSite=Lax, Path `/`, без
+  Domain — префикс `__Host-` браузер иначе не примет, и cookie не подложит
+  соседний поддомен или HTTP-страница), запечатанные тем же AES-256-GCM
+  с ключом `GOOGLE_TOKEN_KEY`, в associated data — `google_oauth:<id
+  пользователя>`. Подложенный cookie (без ключа его не собрать) и cookie,
+  начатый в сессии другой учётки, не открываются — callback отвечает
+  `failed` до обмена кода: иначе преподавателя можно было бы привязать
+  к чужому календарю. Callback гасит cookie после любого исхода.
+  `access_type=offline` и `prompt=consent` — refresh token приходит и при
+  повторном подключении. Выданный scope проверяется: экран согласия Google
+  позволяет снять галочку календаря.
+- Хранение: `users.google_refresh_token bytea` (миграция `0012`) —
+  AES-256-GCM, ключ `GOOGLE_TOKEN_KEY` (base64 от 32 байт), формат
+  версия (1 байт) ‖ nonce (12) ‖ шифртекст с тегом, в associated data —
+  id пользователя: шифртекст из чужой строки не расшифруется.
+- Ротация ключа: замена `GOOGLE_TOKEN_KEY` делает сохранённые токены
+  нечитаемыми — `/account` показывает «не подключён», calendar_sync
+  пропускает создание и перенос со строкой в журнале (удаления ждут, см.
+  ниже), преподаватели подключаются заново. Для пяти человек это дешевле
+  схемы из двух ключей. Байт версии оставляет место для неё (id ключа,
+  старый ключ только на чтение, перешифровка при использовании), если
+  преподавателей станет много.
+- Утечка `deploy/.env` (ключ вместе с дампом или бэкапом БД): одной замены
+  `GOOGLE_TOKEN_KEY` мало — старые refresh token в бэкапах, зашифрованные
+  утёкшим ключом, остаются рабочими. Порядок: в Google Cloud console
+  добавить клиенту новый client secret и отключить старый — без секрета
+  утёкшие refresh token на access token не обменять; затем новые
+  `GOOGLE_CLIENT_SECRET` и `GOOGLE_TOKEN_KEY` в `.env`, `make up`,
+  преподаватели подключаются заново. Процедура — в
+  [deploy/README.md](../../deploy/README.md#google-calendar-s1-1).
+- Отключение стирает токен и затем отзывает его в Google
+  (`oauth2.googleapis.com/revoke`). Отзыв по возможности и на контексте,
+  отвязанном от запроса браузера (закрытая вкладка его не обрывает,
+  потолок — таймаут HTTP-клиента). Ответ — `200 {"revoked": bool}`:
+  `false`, если токен был, а отозвать не вышло (не расшифровался, ключей
+  нет, Google не ответил); тогда `/account` просит снять доступ вручную
+  в аккаунте Google. Отозванный в Google или истёкший токен
+  (`invalid_grant` при обновлении) worker снимает сам — только тот
+  шифртекст, с которым работал (CAS): свежий токен после переподключения
+  остаётся.
+- `calendar_sync` создания и переноса ставится в их транзакции и только
+  если у организатора есть токен. Проверка — `FOR SHARE` на его строке
+  users первой в транзакции: порядок блокировок users → lessons тот же,
+  что у подключения, и урок, созданный одновременно с подключением, не
+  теряется. Подключение ставит джобы для всех будущих `scheduled`-уроков
+  преподавателя — заведённые раньше тоже попадают в календарь. Без
+  рабочего токена (не подключён, не расшифровывается, отозван, ключей
+  нет) worker создание и перенос пропускает со строкой в журнале:
+  подключение синхронизирует будущие уроки заново.
+- Удаление события так не восстановить — строки урока уже нет. Поэтому
+  отмена ставит удаление всегда, когда у урока есть `gcal_event_id`,
+  с подключением или без, а worker без рабочего токена удаление не
+  снимает, а возвращает ошибку: повторы с backoff очереди (около двух
+  часов), затем джоба мёртвая с `last_error` «ждёт повторного подключения
+  календаря». Подключение (`SetGoogleToken`) в той же транзакции
+  возвращает удаления этого преподавателя в работу (`attempts = 0`,
+  `failed_at = NULL`, `run_at = now()`, поиск по `payload->>'teacher_id'`).
+  Захваченная в этот момент джоба теряет итог попытки (токен владения
+  очереди) и возвращается по истечении захвата: удаление не теряется ни при
+  каком порядке.
+- Идемпотентность: id события назначаем сами в той же транзакции —
+  `gcal_event_id` = 32 hex-символа `gen_random_uuid()` (алфавит base32hex,
+  который принимает Calendar API). Хендлер делает insert с этим id;
+  409 duplicate → update (так советует справочник ошибок Calendar API);
+  404/410 на удалении — успех. Событие строится из текущего состояния урока,
+  поэтому порядок и повторы джоб не важны. Payload — `{"lesson_id"}`,
+  у отмены ещё `teacher_id` и `event_id`: строки урока к запуску уже нет.
+  После insert/update хендлер проверяет, что урок не отменили за время
+  вызова, иначе удаляет событие сам.
+- Событие: основной календарь (`primary`) преподавателя; summary —
+  название события или имя группы; description —
+  `https://<DOMAIN>/lesson/{id}`; attendees — `lesson_participants` без
+  гостей (синтетический email, ADR-010) и без самого преподавателя;
+  `sendUpdates=all` во всех трёх вызовах.
+- Таймауты: каждый вызов Calendar API ограничен своим контекстом (15 с);
+  обмен кода, обновление access token и отзыв — `Timeout` HTTP-клиента
+  (те же 15 с). У клиента Calendar API `Timeout` нет: net/http исполняет
+  его через устаревший `oauth2.Transport.CancelRequest`, а тот пишет в
+  журнал вводящую в заблуждение строку «no longer does anything».
+- Без любого из трёх ключей интеграция выключена (`gcal.New` → nil, как
+  `storage.New`): старт — 503, `/account` пишет «недоступно», worker
+  пропускает создание и перенос со строкой в журнале, удаления ждут.
+  Битый ключ — ошибка старта api и worker, как пустой регион у storage.
+  Worker с ключами требует `DOMAIN`.
+**Последствия.** `update` перезаписывает событие целиком (patch-семантики
+у метода нет): правки руками в Google при переносе теряются. Состав группы,
+изменённый после создания урока, в календарь не попадает — участники урока
+и так снапшот. Access token обновляется в каждой джобе — лишний запрос
+к Google, на нашем масштабе незаметно. Откат `0012` удаляет токены
+и ожидающие calendar_sync.
+
+Отключение и подключение другого аккаунта не трогают уже созданные
+события: они остаются у преподавателя и участников. Перенос, сделанный без
+подключения, попадает в Google при повторном подключении (оно
+синхронизирует будущие уроки), отмена ждёт его в очереди — но только для
+того же аккаунта. При подключении другого аккаунта будущие уроки создаются
+в новом календаре заново (участники получат второе приглашение), события
+прежнего аккаунта с приглашениями остаются, а ждавшие удаления получают
+в новом календаре 404 — удалить их в прежнем уже нечем. Удаления,
+не дождавшиеся подключения (кончились попытки, а преподаватель больше не
+подключается или вернули ключи позже), лежат в `jobs` мёртвыми — для пяти
+преподавателей это единицы строк.
+
+Прежний токен при повторном подключении не отзываем, хотя ревью
+предлагало. Отзыв в Google снимает весь доступ приложения к аккаунту,
+а не один токен: «Revocation removes all OAuth 2.0 scopes previously
+granted to a project, invalidating any issued access or refresh tokens»
+([OAuth 2.0 for Web Server Applications](https://developers.google.com/identity/protocols/oauth2/web-server),
+раздел о token revocation, октябрь 2026). При подключении того же
+аккаунта погиб бы и только что выданный токен, а отличить другой аккаунт
+от того же без лишнего scope (openid/email) нельзя. Зато отключение этим
+же отзывом гасит и все прежние refresh token аккаунта.
+В интерфейсе кнопка подключения есть только у неподключённого: до неё
+либо отключение, которое отзывает, либо уже неработающий токен
+(`invalid_grant`, другой ключ — такой и отозвать нечем). Остаток —
+подключение поверх рабочего токена в обход `/account` — закрывает
+процедура при утечке выше. С настоящим Google ничего не проверено:
+OAuth-клиента у стенда нет, всё покрыто httptest-фейком (долг D-13).
+
+## ADR-024 · 2026-10-26 · accepted — Файлы материалов в R2 и архивация учёток (долги D-4, D-5)
+
+**Контекст.** D-4: материал несёт только `body_md`. S1-3 и
+[05-storage-s3.md](05-storage-s3.md) закладывают `materials.s3_key` и
+раскладку `materials/{lesson_id}/…`, но не говорят, как файл попадает
+в бакет, кто его проверяет и какие файлы принимаются. D-5:
+[ADR-007](#adr-007--2026-08-02--accepted--роль-admin-и-управление-учётными-записями)
+оставил открытым удаление учёток: на пользователя ссылаются уроки
+(`teacher_id`), участие, приглашения и вся будущая история (транскрипты,
+словарь, SRS) — каскад стёр бы её, а без каскада удалить нельзя.
+**Решение — файлы.** Один файл на материал: рядом с `s3_key` миграция
+`0013_material_files_archive` кладёт `file_name`, `file_content_type`,
+`file_size`, `file_uploaded_at`, `file_etag`; `CHECK` — метаданные целиком
+или никаких (с явными `IS NOT NULL`: сравнение NULL в `CHECK` проходит,
+и строка с одним ключом уронила бы чтение материалов), подтверждение
+и ETag — только вместе, ключ только под `materials/{lesson_id}/`.
+Отдельная таблица не нужна: несколько файлов — это несколько материалов.
+Файл идёт браузер ↔ R2 напрямую (медиа-инвариант):
+- `POST /lessons/{id}/materials` (или `/homework`) с `file: {name,
+  content_type, size}` — только преподаватель урока. api проверяет тип
+  по белому списку (PDF, DOCX, PPTX, TXT, PNG, JPEG, WebP, MP3, M4A, OGG,
+  MP4) и размер (до 50 MiB), сам выбирает постоянный ключ
+  `materials/{lesson_id}/<128 случайных бит>.<ext>` — имя от клиента
+  в путь не попадает — и подписывает PUT на 10 минут на копию под
+  `materials-pending/{lesson_id}/` с тем же именем. Имя для скачивания
+  получает расширение заявленного типа: чужое заменяется, отсутствующее
+  дописывается (`setup.exe` с типом PDF сохранится как `setup.pdf`);
+  управляющие и невидимые символы (Unicode Cc и Cf, среди них U+202E,
+  переворачивающий «…fdp.exe» в «…exe.pdf») — 400. В подпись входят
+  `Content-Type`, `Content-Length` и `Content-Disposition: attachment`
+  с именем файла (RFC 2231): другой тип или длина дают 403. Подпись типа
+  R2 документирует, про длину документации нет — поэтому её сверяет ещё
+  и подтверждение;
+- `POST /materials/{id}/confirm` — HEAD загрузки: нет — 409, заготовка
+  остаётся; размер или тип не совпали — объекты и материал удаляются, 422.
+  Годная загрузка копируется внутри бакета (CopyObject, байты мимо VPS,
+  тип и `Content-Disposition` переходят к копии) на постоянный ключ, ETag
+  копии пишется в `file_etag`, загрузка удаляется — не вышло, её сотрёт
+  lifecycle. Повтор после сбоя на любом шаге безопасен: пока строка
+  не подтверждена, загрузка лежит и копируется заново. Ссылка на загрузку
+  постоянного ключа не касается, поэтому подтверждённый файл ею
+  не перезаписать. Материал удалили во время подтверждения — 404, копию
+  уберёт worker. До подтверждения файл видит только преподаватель;
+- `GET /materials/{id}/url` — presigned GET на 30 минут с границей урока
+  (преподаватель и участники). Перед подписью — HEAD постоянного ключа:
+  объекта нет или ETag, размер, тип не те, что при подтверждении, — 409.
+  Причина — токен `S3_*` общий с LiveKit Egress ([ADR-014](#adr-014--2026-10-26--accepted--бэкапы-postgres-retention-730-и-свой-токен-хранилища)):
+  держатель его копии может перезаписать подтверждённый файл любыми
+  байтами и заголовками, и участникам ушёл бы подменённый файл. Имя для
+  сохранения хранилище отдаёт из записанного при загрузке
+  `Content-Disposition`: параметр `response-content-disposition`
+  в документации R2 не значится;
+- `DELETE /materials/{id}` — сначала объекты (постоянный и загрузка),
+  потом строка. Хранилище не ответило — строка всё равно удаляется, а ключ
+  той же транзакцией уходит в джобу `material_files_delete`. Отмена урока
+  удаляет материалы с файлами явным `DELETE … RETURNING s3_key` и ставит
+  их ключи в ту же джобу в транзакции отмены; остальные материалы
+  и участники уходят каскадом. Джобу выполняет worker под тем же `S3_*`:
+  оба объекта каждого ключа, отсутствующий ключ — не ошибка, поэтому
+  повтор с backoff доделывает прерванное. Без ключей хранилища kind
+  не регистрируется, и джобы ждут в очереди.
+
+CORS бакета — одно правило на `GET`, `HEAD`, `PUT` с заголовками
+`Content-Type`, `Content-Disposition`, `Range`. С двумя правилами
+(GET/HEAD и отдельно PUT) SeaweedFS на ревью отвечал на preflight PUT
+без `Access-Control-Allow-Methods`, и браузер загрузку блокировал;
+одно правило проверено preflight-запросами там же. Lifecycle стирает
+`materials-pending/` через сутки: туда же попадает загрузка, которая
+пришла по ещё живой ссылке после удаления заготовки или отмены урока, —
+сиротой под `materials/` она не станет. В api хранилище спрятано
+за интерфейсом `objectStore` — тесты подставляют фейк; новых
+зависимостей нет.
+**Решение — архив.** Удаления нет, есть архивация: `users.deactivated_at`.
+`POST /users/{id}/deactivate` ставит отметку и гасит все сессии одной
+транзакцией, `POST /users/{id}/reactivate` снимает её — вход по прежнему
+паролю. Права — как на правку (ADR-007): админ — любую учётку, кроме
+своей; преподаватель — только студентов своих групп, staff ему недоступен.
+Так задумано и то, что преподаватель может вернуть студента своей группы,
+которого в архив отправил админ: архив заменяет удаление, а не наказывает.
+Если решение админа понадобится закрепить — колонка `deactivated_by`
+и возврат такой учётки только админом.
+Логин архивного после верного пароля — 403 `account_deactivated`, с
+неверным — обычный 401: знающему пароль честный ответ ничего не раскрывает.
+Поиск сессии отсекает архивных, поэтому сессия, дописанная логином в гонке
+с архивацией, не пускает. `GET /users` по умолчанию без архива,
+`?archived=1` — только архив. Из групп человек не убирается (в составе
+есть отметка `archived`), но в снапшот новых уроков не попадает.
+Сессий у архивного нет, но выданный раньше токен комнаты живёт до трёх
+часов. Поэтому после фиксации архивации api выставляет его из комнат
+уроков, которые идут сейчас (`live` или `scheduled` между `starts_at`
+и `ends_at` — без записи урок идёт, оставаясь scheduled, ADR-012):
+`RoomService/RemoveParticipant` с identity = user_id. Пустой
+`revoke_token_ts` сервер заменяет на «сейчас плюс минута», и прежние
+токены в эту комнату перестают пускать (комментарий поля в
+`livekit/protocol` v1.53.0; на LiveKit Cloud не проверялось). Без ключей
+LiveKit — строка в журнале, сбой LiveKit — тоже: архивация уже
+зафиксирована.
+**Последствия.** Неподтверждённая загрузка живёт в бакете не дольше суток,
+заготовка в БД — пока её не удалят; web убирает её сам при сбое загрузки,
+заливать может только преподаватель. Откат `0013` оставляет материалы
+текстовыми и объекты в бакете. Бакет стенда настроен до D-4: PUT
+не пускает и правила для `materials-pending/` у него нет — загрузка
+заработает после повторного `deploy/s3-bootstrap.sh` (долг D-14).
+Остаточные окна: presigned GET, выданный до архивации, удаления
+материала или подмены файла, работает до 30 минут — S3 подписанные
+ссылки не отзывает, а сверка ETag идёт только при выдаче ссылки; токен
+комнаты урока, который в момент архивации не шёл, живёт до 3 часов, но
+комнату урока, начавшегося позже, он открывает только в этом окне.
+Подмену файла держателем токена Egress сверка ловит, но не предотвращает:
+корневое решение — свой токен Egress на отдельный бакет записей, чтобы
+токен файлов материалов оставался только в `deploy/.env`; это решение
+владельца стенда, как и токен бэкапов (D-8). Каждая ссылка на файл
+стоит одного HEAD к R2.
+Уроки архивного преподавателя остаются за ним, выпущенные им приглашения
+действуют — их отзывает админ; передача уроков другому — отдельная задача.
+
+<!-- Следующие ADR добавлять ниже по мере реализации. -->

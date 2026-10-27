@@ -88,7 +88,149 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S3-2 terms + лемматизация + `POST /terms/click` (☑)
+
+- Миграция `backend/migrations/0009_dictionary` (up/down): таблица
+  `terms` (id, lang `en`, lemma, surface — форма первого клика,
+  translation_cache jsonb `{"ru": {"text", "source", "at"}}`, created_at),
+  уникальность и поиск по лемме — `terms_lang_lemma_key (lang, lemma)`;
+  в той же миграции `definitions` и `definition_imports` (S3-4).
+- Лемматизация — `backend/internal/lemma` (ADR-017): morphy поверх
+  встроенных данных Open English WordNet 2025 (`oewn/*.tsv.gz`,
+  атрибуция `oewn/LICENSE`, генератор `lemma/gen`); `lemma.Lemma`,
+  `lemma.Normalize`, `lemma.IsWord`, `lemma.Known`. Точность на выборке
+  `lemma/testdata/inflections.tsv` — 114/119 (95.8%), промахи — только
+  неоднозначные формы (building, tired, bit…).
+- Эндпоинт `POST /terms/click` (`internal/httpapi/terms.go`, store —
+  `internal/store/terms.go`), любой вошедший, включая гостя события.
+  Тело `{surface, context_sentence, lesson_id?}`; ответ `{term_id, lemma,
+  surface, translation: {text, source} | null, definitions: [{word, pos,
+  glosses[], translations_ru[]}], examples: []}`. Порядок источников —
+  [translation.md](../architecture/integrations/translation.md): кэш
+  термина → `definitions` (по лемме и по самой форме) → LibreTranslate
+  при кэш-миссе (переводится лемма, таймаут 3 с) → запись в кэш.
+  Неудача перевода не кэшируется, ответ — 200 с `translation: null`.
+  Термин заводится и переводится только для знакомого слова (лемма
+  в OEWN или есть статьи датасета); незнакомое — 200 с `term_id: 0`,
+  без перевода и записи в `terms` (правка ревью волны A, ADR-017).
+  400 — не одно слово / контекст длиннее 1000 символов / плохой
+  lesson_id; 403/404 — чужой или несуществующий урок в `lesson_id`.
+- Точки расширения: `examples` всегда `[]` (долг D-1, S5-4), кнопки
+  «объясни» в ответе нет (долг D-2, S5-8, по `term_id` и
+  `context_sentence`); `lesson_id` пока только проверяется — кандидатов
+  урока пишет S3-7; статус слова (`user_terms`) добавит S3-5.
+- Тесты: `internal/httpapi/terms_test.go` (фейк LibreTranslate на
+  httptest: первый клик — один вызов и запись кэша, повторы в любой
+  форме — ноль вызовов; сервис лежит/недоступен/не настроен — 200 и
+  `translation: null`; незнакомое слово — ни строки в `terms`, ни вызова;
+  401/400/403/404), `internal/lemma/lemma_test.go`.
+
+### S3-3 LibreTranslate в compose (◐)
+
+- Клиент `backend/internal/translate` (`POST /translate`, JSON q/source/
+  target/format, таймаут 3 с, тесты на httptest); api читает
+  `LIBRETRANSLATE_URL`, пусто — перевод выключен (строка в логе на старте).
+- `deploy/docker-compose.yml`: сервис `libretranslate`
+  (`libretranslate/libretranslate:v1.9.6@sha256:1de2d705…bb32`, профиль
+  `translate`, `LT_LOAD_ONLY=en,ru`, `LT_THREADS=1`, без веб-интерфейса
+  и перевода файлов, `cpus: 1.5`, `mem_limit: 2g`, healthcheck
+  `scripts/healthcheck.py`), разовый `libretranslate-models` (профиль
+  `translate-setup`), том `lt_models`, сеть `translate` (`internal:
+  true`) — в ней api и libretranslate, портов наружу нет (ADR-018).
+- Новые ключи `.env`: `COMPOSE_PROFILES` (включить `translate`),
+  `LIBRETRANSLATE_URL` (`http://libretranslate:5000`). Make-цель
+  `translate-models`; запуск — [deploy/README.md](../../deploy/README.md).
+- Образ вне блокирующего скана ADR-011 — долг D-10. Замер на одноразовом
+  стенде на этом VPS: перевод незнакомого слова медиана 301 мс, максимум
+  620 мс (20 слов), RAM ~376 MiB. **Осталось:** включить профиль на
+  стенде (решение владельца, D-10) и повторить замер там.
+
+### S3-4 Словарный датасет (◐)
+
+- Таблицы `definitions` (word, lemma, pos, etymology, glosses[],
+  translations_ru[], source_line, import_id; уникальность
+  `definitions_entry_key (word, pos, etymology)`, индекс
+  `definitions_lemma_idx`) и `definition_imports` (source,
+  source_version, lines_done, entries, finished_at, abandoned_at) —
+  миграция 0009. `-restart` помечает незавершённый прогон брошенным
+  и начинает новый (правка ревью волны A: прежде он продолжал старый
+  прогон, и статьи старой версии источника переживали рестарт).
+- Импорт — пакет `backend/internal/dictionary` и команда
+  `backend/cmd/dictimport` (в образе worker'а, `/usr/local/bin/dictimport`;
+  make-цель `dict-import`). Источник — JSONL Wiktextract с kaikki.org
+  (по умолчанию `raw-wiktextract-data.jsonl.gz`), отбор и потолки —
+  ADR-019; продолжение с контрольной точки, `-restart`, удаление
+  устаревших статей только по успешному завершению.
+- Тесты на фикстуре `internal/dictionary/testdata/wiktextract-sample.jsonl`:
+  `internal/dictionary/entry_test.go`, `internal/httpapi/dictionary_import_test.go`
+  (повтор — тот же словарь, gzip, продолжение после обрыва, смена версии
+  источника, `-restart` с другим содержимым v2 = чистый импорт v2, пустой
+  и недокачанный источник, один импорт за раз, миграция up/down/up).
+- Ожидаемый объём — 80–150 тыс. статей, 60–120 MB в PG (оценка
+  по выборке первых 20 000 строк дампа, ADR-019). **Осталось:** полный
+  импорт на стенде (`make dict-import`), после него — проверка DoD
+  на частотных словах.
+
+### S3-6 Доска Excalidraw (2026-10-26)
+
+- Решение — [ADR-020](../architecture/decisions.md): excalidraw-complete
+  закрыт автором, доска собрана из редактора `@excalidraw/excalidraw`
+  0.18.1 в web, ретранслятора `excalidraw/excalidraw-room` (тег
+  `sha-03ff435` + digest) и хранения сцены в api. Комната — случайное
+  имя (`room_id`, из id урока не выводится), сообщения шифруются ключом
+  комнаты; имя и ключ выдаются только участникам; вместо `?room=` — путь
+  `/whiteboard/lesson-{id}/socket.io/` за forward_auth.
+- Миграция `backend/migrations/0010_whiteboards.up.sql` (откат — `.down.sql`,
+  заодно убирает ждущие снимки): таблица `whiteboards` — `lesson_id` (PK,
+  каскад с уроком), `room_id` (UNIQUE), `room_key`, `scene jsonb` (массив элементов как есть,
+  с удалёнными), `scene_version`, `snapshot_version`, `scene_s3_key`,
+  `updated_at`, `created_at`.
+- `backend/internal/store/whiteboards.go` — `OpenWhiteboard`
+  (`WhiteboardRoom`: имя и ключ комнаты), `WhiteboardScene`,
+  `SaveWhiteboardScene` (поэлементное слияние `mergeElements` по правилу
+  `reconcileElements`, порядок по `index`; итог больше предела —
+  `ErrSceneTooLarge`, сцена не меняется),
+  `ScheduleWhiteboardSnapshot`, `WhiteboardForSnapshot`,
+  `MarkWhiteboardSnapshot`, `WhiteboardFile` (формат `.excalidraw`).
+  Джоба `whiteboard_snapshot` (`store.JobWhiteboardSnapshot`, payload
+  `{"lesson_id"}`).
+- `backend/internal/jobs/jobs.go` — `EnqueueOnce`: одна ждущая джоба
+  на kind+payload, срок только приближается, ретрай не подтягивается.
+- `backend/internal/storage/s3.go` — `PutObject` (обычный подписанный PUT
+  с `ContentLength`, без необязательной контрольной суммы; после ревью
+  волны A — единственный хелпер записи объекта, им же пишется VTT S2-3),
+  `WhiteboardKey` → `whiteboards/{lesson_id}.json`.
+- `backend/internal/httpapi/whiteboard.go` — `GET /lessons/{id}/whiteboard`,
+  `GET` и `PUT /lessons/{id}/whiteboard/scene` (предел 1 MiB и на тело,
+  и на сцену после слияния — 413 `scene_too_large`),
+  `GET /whiteboard/auth` для forward_auth; `webhooks.go` — `room_finished`
+  ставит снимок сразу. Ключ `.env` api: `WHITEBOARD_ENABLED` (без `1` — 503).
+- `backend/internal/worker/whiteboard.go` + `worker.RegisterWhiteboard`;
+  `cmd/worker` читает `S3_*` и без хранилища kind не регистрирует (джобы
+  ждут в очереди).
+- deploy: сервис `whiteboard` в профиле `whiteboard` (`node`, read_only,
+  без портов), маршрут в `Caddyfile` (forward_auth → rewrite →
+  ретранслятор), worker получил `S3_*`; ключи `.env.example`:
+  `COMPOSE_PROFILES`, `WHITEBOARD_ENABLED`.
+- web: вкладки `app/lesson/[id]/live-tabs.tsx` («Класс» / «Доска», только
+  в фазе live; живая секция шире колонки), `whiteboard.tsx` (next/dynamic
+  без SSR), `whiteboard-canvas.tsx` (синхронизация, сохранение через 2 с
+  и сразу при уходе со страницы — `pagehide`/`visibilitychange`, запрос
+  `keepalive`; ответ новичкам `SCENE_INIT` не чаще раза в 10 с на сокет,
+  одной рассылкой через 1 с; курсоры), `whiteboard-sync.ts` (AES-GCM); `scripts/excalidraw-assets.mjs`
+  (`predev`/`prebuild`) кладёт шрифты в `public/excalidraw/` (в .gitignore).
+  Зависимости: `@excalidraw/excalidraw` 0.18.1, `socket.io-client` ^4.8.4,
+  `overrides` для nanoid, lodash-es, katex.
+- Для S3-7: текстовые элементы — `whiteboards.scene` (`type = 'text'`,
+  `isDeleted = false`), тот же массив — в снимке `whiteboards/{lesson_id}.json`.
+- Проверено на изолированном стенде (compose-проект `classci-a3`, S3 —
+  заглушка): двое участников в комнате через caddy и WebSocket, чужой
+  студент — 403, аноним — 401; двухбраузерная проверка (Playwright):
+  прямоугольник преподавателя доходит до студента через ретранслятор,
+  его удаление сохраняется; периодический снимок записан через минуту,
+  после перезапуска контейнера `whiteboard` сцена на месте и совпадает
+  со снимком. Ретранслятор занимает ~12 MiB RAM.
+- Долг D-11: образ ретранслятора вне блокирующего скана.
 
 ## Риски этапа
 

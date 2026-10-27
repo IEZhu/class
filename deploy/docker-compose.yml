@@ -1,4 +1,6 @@
-# Этап 0 (S0-1): caddy, web, api, postgres. Состав растёт по этапам —
+# Этап 0 (S0-1): caddy, web, api, postgres; этап 1 (S1-2): + worker;
+# этап 3 (S3-6): + whiteboard в профиле whiteboard;
+# этап 5 (S5-2): + harvester под профилем harvester. Состав растёт по этапам —
 # docs/architecture/02-services.md. TLS-край — host-nginx (ADR-004),
 # caddy опубликован только на 127.0.0.1:${HTTP_PORT}.
 
@@ -71,6 +73,20 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # 1 — писать только звук (дешевле, для транскрипта достаточно)
       EGRESS_AUDIO_ONLY: ${EGRESS_AUDIO_ONLY:-}
+      # S1-1: Google Calendar (ADR-023); без ключей подключение отвечает 503
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_TOKEN_KEY: ${GOOGLE_TOKEN_KEY:-}
+      # S2-2: секрет вебхука AssemblyAI; пусто — POST /webhooks/assemblyai
+      # отвечает 503
+      ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
+      # S3-3: перевод слова; пусто — клик отвечает без перевода (ADR-018)
+      LIBRETRANSLATE_URL: ${LIBRETRANSLATE_URL:-}
+      # S3-6: 1 — поднят ретранслятор доски (профиль whiteboard, ADR-020);
+      # пусто — доска отвечает 503
+      WHITEBOARD_ENABLED: ${WHITEBOARD_ENABLED:-}
+    # S3-3: translate — внутренняя сеть до libretranslate
+    networks: [default, translate]
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +96,89 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # S1-2: фоновые джобы из таблицы jobs (ADR-003, ADR-013). Портов нет:
+  # worker ходит в postgres, а с S2-1 — ещё в AssemblyAI и хранилище. Healthcheck
+  # не заведён — HTTP у worker'а нет, а упавший процесс поднимет restart.
+  worker:
+    build:
+      context: ../backend
+      target: worker
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # S1-1: calendar_sync (ADR-023); без ключей джобы снимаются со строкой
+      # в журнале, DOMAIN — для ссылки на урок в описании события
+      DOMAIN: ${DOMAIN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_TOKEN_KEY: ${GOOGLE_TOKEN_KEY:-}
+      # S2-1…S2-3: транскрибация AssemblyAI (ADR-015). Без ключа урок
+      # с записью сразу done; с ключом worker'у нужны секрет вебхука,
+      # хранилище (ссылка на запись, выгрузка VTT) и DOMAIN (выше) для
+      # адреса вебхука, иначе он не стартует
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
+      ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
+      # S3_* — то же хранилище, что у api: запись и VTT для S2-1…S2-3, снимки
+      # досок S3-6 (ADR-020), удаление файлов материалов material_files_delete
+      # (долг D-4, ADR-024); без ключей снимки и удаления файлов ждут в очереди
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    # После SIGTERM текущей джобе даётся 20 с (jobs.Config.ShutdownGrace);
+    # docker по умолчанию ждёт 10 — берём с запасом до SIGKILL
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # S5-1/S5-2: сборщик субтитров (ADR-022) — тот же worker с ролью harvester
+  # и yt-dlp. Под профилем: на VPS включается явно, потому что ходит
+  # в YouTube с IP стенда, а образ вне блокирующего скана (долг D-12).
+  # С другой машины тот же образ запускается с DATABASE_URL этой базы.
+  harvester:
+    build:
+      context: ../backend
+      target: harvester
+    profiles: ["harvester"]
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      # HARVESTER_DATABASE_URL — своя роль сборщика только с его таблицами
+      # (deploy/harvester-db-role.sh): yt-dlp разбирает ответы YouTube,
+      # и владельца базы ему лучше не видеть. Пусто — DSN владельца, как раньше
+      DATABASE_URL: ${HARVESTER_DATABASE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable}
+      HARVESTER_COOKIES: /run/secrets/youtube-cookies.txt
+    volumes:
+      # Cookies YouTube по необходимости (файл Netscape на хосте, читаемый
+      # uid 10001 контейнера); без HARVESTER_COOKIES_FILE монтируется
+      # пустой /dev/null — без cookies
+      # длинная форма: короткая с ${...:-...} не разбирается при
+      # `docker compose config --no-interpolate` (скан ADR-011)
+      - type: bind
+        source: ${HARVESTER_COOKIES_FILE:-/dev/null}
+        target: /run/secrets/youtube-cookies.txt
+        read_only: true
+    # Корень только на чтение, без capabilities и повышения прав: писать
+    # можно лишь в каталог вызова yt-dlp (/tmp) и его кэш в HOME
+    # (пользователь app образа, uid 10001)
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /home/app:size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Потолки до замера S5-2: worker, CPython yt-dlp и Node.js на общем VPS
+    mem_limit: 512m
+    cpus: 1
+    # Текущее видео пакета доводится за 20 с (jobs.Config.ShutdownGrace)
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     build:
@@ -100,6 +199,80 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+
+  # S3-3: LibreTranslate (ADR-018) — только en↔ru, один процесс,
+  # во внутренней сети без выхода наружу и без опубликованных портов.
+  # Профиль translate: образ не входит в блокирующий скан ADR-011 (долг
+  # D-10), поэтому сервис включается явно — COMPOSE_PROFILES=translate.
+  # Модели ставит один раз libretranslate-models (deploy/README.md).
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6@sha256:1de2d7056bb8ad607a412f4563d9abe324ff632b43b5be9428bcc8e213aebb32
+    profiles: ["translate"]
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      LT_LOAD_ONLY: en,ru
+      # Число процессов gunicorn: каждый держит свою копию моделей в RAM
+      LT_THREADS: "1"
+      LT_DISABLE_WEB_UI: "true"
+      LT_DISABLE_FILES_TRANSLATION: "true"
+      # api шлёт по слову; длинный текст — не наш запрос
+      LT_CHAR_LIMIT: "500"
+      # Внутренняя сеть без интернета: обновлять модели при старте нечем
+      LT_UPDATE_MODELS: "false"
+    volumes:
+      - lt_models:/home/libretranslate/.local
+    networks: [translate]
+    # Потолки под оценку 02-services.md: не душить api и postgres
+    cpus: 1.5
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # S3-3: разовая установка моделей en↔ru в том lt_models — ей нужен
+  # интернет, поэтому она в сети по умолчанию, а сам сервис — нет:
+  # docker compose --profile translate-setup run --rm libretranslate-models
+  libretranslate-models:
+    image: libretranslate/libretranslate:v1.9.6@sha256:1de2d7056bb8ad607a412f4563d9abe324ff632b43b5be9428bcc8e213aebb32
+    profiles: ["translate-setup"]
+    <<: *logging
+    entrypoint: ["./venv/bin/python", "scripts/install_models.py", "--load_only_lang_codes", "en,ru"]
+    volumes:
+      - lt_models:/home/libretranslate/.local
+
+  # S3-6: ретранслятор доски Excalidraw — официальный excalidraw-room,
+  # закреплён тегом и digest'ом (ADR-020). Только пересылает зашифрованные
+  # сообщения участников комнаты; сцена — в БД api, снимки — в хранилище.
+  # Образ 2023 года (Node 12) не проходит блокирующий скан ADR-011, поэтому
+  # сервис в профиле и включается явно: COMPOSE_PROFILES=whiteboard и
+  # WHITEBOARD_ENABLED=1 в deploy/.env (долг D-11). Портов нет: снаружи
+  # к нему ведёт только caddy после forward_auth в api.
+  whiteboard:
+    image: excalidraw/excalidraw-room:sha-03ff435@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70
+    profiles: ["whiteboard"]
+    restart: unless-stopped
+    <<: *logging
+    # Не root и без yarn: node напрямую на непривилегированном порту
+    user: node
+    working_dir: /excalidraw-room
+    command: ["node", "dist/index.js"]
+    environment:
+      NODE_ENV: production
+      PORT: "3002"
+      CORS_ORIGIN: https://${DOMAIN}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3002/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 10s
 
   # Инструмент миграций (S0-2+): make migrate → docker compose run --rm migrate up
@@ -123,3 +296,11 @@ volumes:
   pg_data:
   caddy_data:
   caddy_config:
+  # S3-3: модели LibreTranslate en↔ru (ставит libretranslate-models)
+  lt_models:
+
+networks:
+  default:
+  # S3-3: api ↔ libretranslate; internal — без выхода в интернет
+  translate:
+    internal: true

@@ -13,15 +13,35 @@ s3://lingua/
   recordings/{lesson_id}/room.mp4        (или audio.ogg при audio-only egress)
   transcripts/{lesson_id}.vtt
   whiteboards/{lesson_id}.json
-  materials/{lesson_id}/…
-  backups/pg/{date}.dump.zst
+  materials/{lesson_id}/{random}.{ext}  (ключ выбирает api, ADR-024)
+  materials-pending/{lesson_id}/{random}.{ext}  (загрузка до confirm, lifecycle — сутки)
+  backups/pg/{date}.dump.zst        (пока BACKUP_S3_* пусты; цель — свой бакет, ADR-014)
 ```
 
 ## Доступ
 
-- Bucket приватный; CORS — только GET для домена платформы.
+- Bucket приватный; CORS — одно правило, только с домена платформы:
+  GET/HEAD (плеер, скачивание) и PUT (загрузка файлов материалов),
+  заголовки `Content-Type`, `Content-Disposition`, `Range`
+  (`deploy/s3-bootstrap.sh`).
 - Presigned GET (TTL ~30 мин) выдаёт api после проверки прав
-  (`GET /media/{lesson_id}/url`).
+  (`GET /media/{lesson_id}/url`, `GET /materials/{id}/url`, VTT — в
+  `GET /lessons/{id}/transcript`). Исключение — ссылка на запись для
+  AssemblyAI: её подписывает worker на 24 ч, и уходит она только
+  AssemblyAI (ADR-015).
+- VTT (`transcripts/{lesson_id}.vtt`, `text/vtt; charset=utf-8`) кладёт
+  worker сам: файл маленький и текстовый, медиа-инвариант не задет.
+- Файлы материалов (ADR-024): преподаватель урока получает presigned PUT
+  на 10 мин под `materials-pending/` — тип, длина и `Content-Disposition`
+  с именем файла входят в подпись; затем `POST /materials/{id}/confirm`:
+  api сверяет объект (HEAD) с заявленным, копирует его внутри бакета
+  (CopyObject) на постоянный ключ под `materials/` и запоминает ETag.
+  Перед каждой ссылкой на скачивание объект сверяется с ним снова.
+  Lifecycle стирает `materials-pending/` через сутки: брошенные, отвергнутые
+  и догруженные после удаления загрузки там не копятся. Объекты удалённых
+  материалов и отменённых уроков убирает worker (`material_files_delete`).
+  Белый список типов и потолок 50 MiB — в
+  `backend/internal/httpapi/materials.go`.
 - S3 отдаёт HTTP Range → перемотка в плеере Plyr работает из коробки.
 - Egress LiveKit пишет в бакет сам (S3 credentials в конфиге egress-запроса);
   AssemblyAI читает запись по presigned GET.
@@ -52,6 +72,8 @@ s3://lingua/
   и словарь ценнее сырого видео.
 - Аудио + VTT храним вечно.
 - Незавершённые multipart-загрузки убираются через 7 дней.
+- `materials-pending/` — загрузки файлов материалов до подтверждения —
+  удаляются через сутки (ADR-024, долг D-14 до перенастройки бакета).
 
 ## Ротация токена R2 (долг D-6)
 
@@ -73,8 +95,23 @@ s3://lingua/
 ## Бэкапы (S1-7)
 
 - Nightly `pg_dump | zstd` → `backups/pg/{date}.dump.zst`,
-  retention 7 дневных / 30 дней.
-- Сцены досок (whiteboards) и VTT уже лежат в S3 — отдельно не бэкапим.
+  retention 7 дневных / 30 дней: все копии за 7 суток, дальше по одной
+  на неделю до 30 суток ([ADR-014](decisions.md)). Чистит скрипт
+  `deploy/backup-pg.sh`, lifecycle на `backups/pg/` не ставится.
+  Выгрузка идёт во временный `backups/pg/incoming/…` и переносится
+  в ночной ключ только после сверки sha256; ключ, sha256 и размер
+  проверенной копии пишутся в манифест на VPS
+  (`/var/lib/lingua-backup/manifest`, только root), по нему сверяет
+  `deploy/restore-pg.sh`.
+- Целевая схема — отдельные бакет и токен (`BACKUP_S3_*`): токен записей
+  уходит в LiveKit Egress, а в дампе хэши паролей и email (ADR-014).
+  Пока `BACKUP_S3_*` пусты, скрипт пишет в этот бакет под `S3_*`
+  с предупреждением в журнале — долг D-8. Задан хоть один `BACKUP_S3_*`
+  без своего `BACKUP_S3_BUCKET` (или с бакетом записей) — скрипт падает.
+- Сцены досок и VTT уже лежат в S3 — отдельно не бэкапим. Снимок доски
+  `whiteboards/{lesson_id}.json` (файл `.excalidraw`) пишет worker джобой
+  `whiteboard_snapshot`: не чаще раза в минуту, пока рисуют, и сразу
+  по `room_finished`; рабочая сцена — в Postgres (ADR-020).
 - RTO для hobby: «пересоздать compose за час» из бэкапа.
 
 Связано: [01-topology.md](01-topology.md) ·

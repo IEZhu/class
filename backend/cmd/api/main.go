@@ -5,8 +5,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/httpapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
@@ -35,24 +37,36 @@ func main() {
 	}
 	defer st.Close()
 
+	googleCfg := gcal.Config{
+		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		TokenKey:     os.Getenv("GOOGLE_TOKEN_KEY"),
+	}
 	api, err := httpapi.New(st, httpapi.Config{
 		PublicBaseURL: "https://" + domain,
 		// Ключи интеграций опциональны: без них работает всё, кроме
-		// комнаты и записи
+		// комнаты, записи и транскрипта
 		LiveKitURL:       os.Getenv("LIVEKIT_URL"),
 		LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
 		LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
 		EgressAudioOnly:  os.Getenv("EGRESS_AUDIO_ONLY") == "1",
-		Storage: storage.Config{
-			Bucket:    os.Getenv("S3_BUCKET"),
-			Region:    os.Getenv("S3_REGION"),
-			Endpoint:  os.Getenv("S3_ENDPOINT"),
-			AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
-			SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
-		},
+		// S3-6: 1 — в compose поднят ретранслятор доски (профиль whiteboard)
+		WhiteboardEnabled: os.Getenv("WHITEBOARD_ENABLED") == "1",
+		Storage:           storage.ConfigFromEnv(),
+		// S1-1: без ключей подключение календаря отвечает 503 (ADR-023)
+		Google: googleCfg,
+		// S2-2: без секрета вебхук AssemblyAI отвечает 503
+		AssemblyAIWebhookSecret: os.Getenv("ASSEMBLYAI_WEBHOOK_SECRET"),
+		LibreTranslateURL:       os.Getenv("LIBRETRANSLATE_URL"),
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)
+	}
+	if !api.GoogleConfigured() {
+		log.Printf("api: Google Calendar выключен: не заданы %s", strings.Join(googleCfg.Missing(), ", "))
+	}
+	if os.Getenv("LIBRETRANSLATE_URL") == "" {
+		log.Printf("api: LIBRETRANSLATE_URL пуст — клик по слову отвечает без перевода")
 	}
 	apiHandler := api.Router()
 

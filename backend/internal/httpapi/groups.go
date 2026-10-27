@@ -19,16 +19,21 @@ type groupResponse struct {
 }
 
 type memberResponse struct {
-	UserID int64  `json:"user_id"`
-	Email  string `json:"email"`
-	Name   string `json:"name"`
-	Role   string `json:"role"`
+	UserID   int64  `json:"user_id"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Archived bool   `json:"archived"`
+}
+
+func toMemberResponse(m store.GroupMember) memberResponse {
+	return memberResponse{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role, Archived: m.Archived}
 }
 
 func toMemberResponses(ms []store.GroupMember) []memberResponse {
 	out := make([]memberResponse, 0, len(ms))
 	for _, m := range ms {
-		out = append(out, memberResponse{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role})
+		out = append(out, toMemberResponse(m))
 	}
 	return out
 }
@@ -98,7 +103,7 @@ func (a *API) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		internalError(w, "add group member", err)
 	default:
-		writeJSON(w, http.StatusCreated, memberResponse{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role})
+		writeJSON(w, http.StatusCreated, toMemberResponse(*m))
 	}
 }
 
@@ -106,7 +111,12 @@ func (a *API) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 // JSON-значение (хвост после первого значения — ошибка, иначе он
 // обходил бы лимит MaxBytesReader).
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return decodeBodyLimit(w, r, v, maxBodyBytes)
+}
+
+// decodeBodyLimit — decodeBody со своим потолком тела (сцена доски, S3-6).
+func decodeBodyLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(v); err != nil {
 		return err
