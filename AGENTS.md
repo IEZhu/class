@@ -14,7 +14,7 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   dictionary and Tatoeba imports shipped in the worker image, ADR-019, ADR-028),
   `internal/httpapi/` (routes, auth, middleware, groups, lessons, invites, rooms, users, guests
   and `/join`, media and material URLs, transcripts, word clicks, user terms,
-  lesson dictionary (candidates, picker, assignment, ADR-033/034), practice texts,
+  lesson dictionary (candidates, picker, assignment, ADR-033/034), practice texts and videos,
   review queue and reviews,
   whiteboard, Google Calendar, LiveKit and AssemblyAI webhooks), `internal/store/` (Postgres via pgx),
   `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
@@ -33,9 +33,11 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`, `app/dictionary`, `app/practice/text`,
+  `app/practice/video` (YouTube embed and subtitle panel, ADR-038),
   `app/practice/texts`, `app/practice/cards` (FSRS review cards), public `app/join/[token]` for
   event guests); `lib/api.ts` calls the API server-side; `lib/roles.ts`, `lib/lesson-phase.ts`,
-  `lib/lesson-title.ts`, `lib/review-session.ts`. Every text renders through
+  `lib/lesson-title.ts`, `lib/review-session.ts`, `lib/timeline.ts` (player cue timing shared by
+  the transcript and video practice). Every text renders through
   `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
   functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr
   sprite into the git-ignored `public/excalidraw/` and `public/plyr/` before dev and build.

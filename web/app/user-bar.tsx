@@ -59,6 +59,12 @@ export default function UserBar({ name, role }: { name: string; role: Role }) {
             Тексты
           </Link>
         )}
+        {/* S5-5: видео-практика — студенту и преподавателю */}
+        {(role === "student" || role === "teacher") && (
+          <Link href="/practice/video" style={{ marginRight: "0.75rem" }}>
+            Видео
+          </Link>
+        )}
         <Link href="/account" style={{ marginRight: "0.75rem" }}>
           {name}
         </Link>

@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Transcript, Utterance } from "../../../lib/api";
+import { activeAt, clock } from "../../../lib/timeline";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
 import UtteranceText from "./utterance-text";
 
@@ -324,25 +325,6 @@ function SpeakerMapping({
   );
 }
 
-// activeAt — реплика, звучащая в момент ms: последняя начавшаяся. В паузе
-// между репликами подсвечена прошедшая — глаз не теряет место. timeline
-// упорядочен по start_ms.
-function activeAt(timeline: Utterance[], ms: number): number | null {
-  let lo = 0;
-  let hi = timeline.length - 1;
-  let found: number | null = null;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (timeline[mid].start_ms <= ms) {
-      found = timeline[mid].idx;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return found;
-}
-
 // Подряд идущие реплики одного спикера — один блок с его именем. Спикер —
 // человек, если метка сопоставлена: ASR иногда делит одного на две метки.
 function groupBySpeaker(utterances: Utterance[]): Utterance[][] {
@@ -358,15 +340,6 @@ function groupBySpeaker(utterances: Utterance[]): Utterance[][] {
 
 function speakerTitle(u: Utterance): string {
   return u.speaker_name ?? `Спикер ${u.speaker_label}`;
-}
-
-// clock — позиция записи: 4:05 или 1:02:05.
-function clock(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = String(total % 60).padStart(2, "0");
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
 function preview(text: string): string {

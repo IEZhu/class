@@ -86,6 +86,8 @@ type API struct {
 	// и очереди, тесты подставляют свои
 	srs *srs.Scheduler
 	now func() time.Time
+	// learningWords — слова и веса видео-практики (S5-5, ADR-038)
+	learningWords learningWordSource
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -114,6 +116,7 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		srs:        srs.NewScheduler(),
 		now:        time.Now,
 	}
+	a.learningWords = s
 	a.llm, a.llmDailyLimit = cfg.LLM, cfg.LLMDailyLimit
 	if a.llmDailyLimit <= 0 {
 		a.llmDailyLimit = DefaultLLMDailyLimit
@@ -270,6 +273,11 @@ func (a *API) Router() http.Handler {
 	// S5-7: тексто-практика — свои сгенерированные тексты и предложения
 	// Tatoeba по словам личного словаря или ?words= (ADR-035)
 	mux.Handle("GET /practice/texts/search", learner(a.handleSearchPracticeTexts))
+
+	// S5-5: видео-практика (ADR-038) — подбор видео корпуса субтитров
+	// под слова вызывающего и субтитры одного видео для плеера
+	mux.Handle("GET /practice/videos", learner(a.handlePracticeVideos))
+	mux.Handle("GET /practice/videos/{id}", learner(a.handlePracticeVideo))
 	return mux
 }
 
