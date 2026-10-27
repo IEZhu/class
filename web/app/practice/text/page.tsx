@@ -1,13 +1,16 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { GeneratedText, User } from "../../../lib/api";
+import { ClickableTextScope } from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GenerateForm from "./generate-form";
 import GeneratedTextView from "./generated-text";
 
 // S5-6: учебный текст по целевым словам от LLM и история своих текстов.
 // Генерация — студенту и преподавателю (каждый вызов стоит денег).
+// Тексты кликаются; раскраска и «в мой словарь» — у студента (S3-1).
 export default async function PracticeTextPage() {
   let me: User;
   try {
@@ -24,10 +27,11 @@ export default async function PracticeTextPage() {
       <UserBar name={me.name} role={me.role} />
       <h1>Текст по словам</h1>
       {allowed ? (
-        <>
+        <ClickableTextScope dictionary={me.role === "student"}>
           <p style={{ color: "#666" }}>
             Модель пишет текст, где каждое слово встречается хотя бы дважды; текст сохраняется, если проверка это
-            подтвердила.
+            подтвердила. Готовые тексты и предложения по вашим словам — в{" "}
+            <Link href="/practice/texts">подборке для практики</Link>.
           </p>
           <GenerateForm />
           <h2>Мои тексты</h2>
@@ -37,7 +41,7 @@ export default async function PracticeTextPage() {
               <GeneratedTextView key={t.id} text={t} />
             ))}
           </div>
-        </>
+        </ClickableTextScope>
       ) : (
         <p>Генерация текстов доступна студентам и преподавателям.</p>
       )}
