@@ -14,6 +14,7 @@ users(id, email, role /*admin|teacher|student|guest, ADR-007/010*/, name,
       google_refresh_token /*bytea, только у teachers, AES-256-GCM, ADR-023*/,
       deactivated_at /*архив вместо удаления, ADR-024*/)
 sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
+         /* индекс по expires_at — уборка session_cleanup (D-15, 0020, ADR-035) */
 invites(id, token_hash /*sha256*/, email, name, role, group_id, created_by,
         created_at, expires_at, accepted_at, accepted_user_id)        -- ADR-008
 groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)
@@ -92,6 +93,7 @@ tatoeba_imports(id, source_version, phase /*ru|en*/, lines_done /*контрол
 -- практика
 -- текст LLM по целевым словам (0017, ADR-030): только прошедший валидатор
 generated_texts(id, user_id, level, genre, max_words, target_lemmas text[] /*= terms.lemma*/,
+                lemmas text[] /*леммы всего текста для поиска S5-7 (0020, ADR-035); NULL — до 0020*/,
                 body /*абзацы без разметки*/, word_count, coverage, occurrences jsonb,
                 unknown_share, attempts, provider, model, created_at)
 llm_usage(user_id, day /*UTC*/, requests)   -- суточный лимит генераций (ADR-029)
@@ -123,6 +125,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
 | tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
 | generated_texts, llm_usage (миграция `0017_generated_texts`) | 5 | S5-6 |
+| колонка generated_texts.lemmas, индекс sessions_expires_idx (миграция `0020_text_practice`, ADR-035) | 5 | S5-7, долг D-15 |
 
 ## Инварианты модели
 

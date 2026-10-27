@@ -257,10 +257,58 @@ LLM с контекстом предложения — **закрывает до
   с сохранением, 400/422, 503/502 сбоя провайдера, 429 лимита, история
   только своя, откат 0017, `TestGenerateTextFromUserTerms` — цели
   из словаря: порядок, «знаю» и чужие слова не попадают, потолок по длине).
-- **Для ☑ не хватает.** DoD «текст кликается» — `<ClickableText>` (S3-1)
-  подключается в волне C заменой `renderParagraph`. Живой вызов
-  провайдера не проверен — ключей у стенда нет: с первым `LLM_API_KEY`
-  сгенерировать текст на стенде.
+- **Для ☑ не хватает.** DoD «текст кликается» закрыт в S5-7: абзацы
+  рисует `GeneratedParagraphs` через `<ClickableText>` (вместо
+  `renderParagraph`). Живой вызов провайдера не проверен — ключей у стенда
+  нет: с первым `LLM_API_KEY` сгенерировать текст на стенде.
+
+### S5-7 Тексто-практика (2026-10-27), заодно долг D-15
+
+- Эндпоинт `GET /practice/texts/search?words=&cursor=&limit=` (student,
+  teacher; `backend/internal/httpapi/practice.go`,
+  `handleSearchPracticeTexts`, ADR-035): свои `generated_texts` и
+  предложения Tatoeba с русским переводом и подписью CC BY 2.0 FR, где есть
+  слова поиска, по числу этих слов в тексте; при равенстве свои тексты
+  (новые первыми), затем короткие предложения. Слова — `words` (до 50,
+  леммы) или 50 невыученных слов личного словаря (`store.PracticeLemmas`);
+  нет слов — 200 с `items: []` и `hint`. Курсор keyset
+  `покрытие_источник_порядок_id`, страница 20 (до 50). Путь отдельный:
+  `GET /practice/texts` (история S5-6) не изменился.
+- Store — `SearchPracticeTexts`, `PracticeText`, `PracticeTextCursor`
+  (`backend/internal/store/practice.go`): пул Tatoeba — по 50 кандидатов
+  на слово через `tatoeba_sentences_lemmas_idx` (0016), предложения не
+  короче трёх разных слов; на синтетическом корпусе полного размера
+  (545 тыс. предложений, 2 000 своих текстов, 50 слов) — 44–73 мс.
+- Миграция `backend/migrations/0020_text_practice.up.sql` (откат —
+  `.down.sql`): `generated_texts.lemmas text[]` (леммы всего текста,
+  `tatoeba.Lemmas` при сохранении в `handleGenerateText`; NULL у текстов
+  до 0020 — поиск берёт `target_lemmas`) и `sessions_expires_idx`.
+  `make migrate` — до выката api.
+- Web — `/practice/texts` (`web/app/practice/texts/page.tsx`): поле слов,
+  выдача через `<ClickableText>` (у студента — с раскраской по словарю),
+  перевод и авторы Tatoeba (`ExampleAuthors` из `app/clickable-text.tsx`),
+  «Дальше»/«В начало», ссылка на генерацию `/practice/text`; ссылка
+  «Тексты» в шапке ведёт сюда. Абзацы сгенерированного текста —
+  `GeneratedParagraphs` (`web/app/practice/text/generated-text.tsx`)
+  через `<ClickableText>` и в истории `/practice/text`. Типы —
+  `PracticeText`, `PracticeTextsPage` в `web/lib/api.ts`.
+- Долг D-15: джоба `session_cleanup` (`store.JobSessionCleanup`,
+  `store.CleanupExpiredSessions`, `worker.RegisterSessionCleanup`, роль
+  core в `backend/cmd/worker/main.go`) раз в час через `jobs.Scheduler`
+  удаляет протухшие сессии, в том числе гостевые, пачками по 1 000, до 100
+  пачек за запуск (ADR-035, ADR-006).
+- Новых ключей `.env`, путей S3 и зависимостей нет.
+- Тесты: `backend/internal/httpapi/practice_texts_test.go` (ранжирование
+  своих текстов и Tatoeba, «знаю» и чужие тексты не в счёт, без перевода
+  и из одного слова — не в выдаче, текст до 0020 — по целям, `words` из
+  запроса, страницы по 1–3 строки без повторов и пропусков, 400 на
+  `limit`/`cursor`/`words`, пустой словарь и преподаватель — подсказка,
+  401/403, обратимость 0020), `backend/internal/httpapi/session_cleanup_test.go`
+  (удаляются только протухшие сессии, гостевые тоже, пачками от самых
+  старых и не больше заданного числа пачек; расписание — одна джоба за
+  период при четырёх планировщиках, без ожидания периода).
+- На стенде выдача Tatoeba появится после `make tatoeba-import` (S5-4),
+  свои тексты — после первого `LLM_API_KEY` (S5-6).
 
 ## Риски этапа
 
