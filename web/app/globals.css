@@ -431,7 +431,7 @@ body:has(.app-shell) .auth-top { display: none; }
   /* Колонка панели нарисована и фоном body: сплошная на любой высоте страницы */
   body:has(.app-shell) {
     --shell-inset: var(--sidebar-w); padding-left: var(--sidebar-w);
-    background: linear-gradient(to right, var(--c-sidebar) calc(var(--sidebar-w) - 1px), var(--c-border) calc(var(--sidebar-w) - 1px) var(--sidebar-w), var(--c-bg) var(--sidebar-w));
+    background-image: linear-gradient(to right, var(--c-sidebar) calc(var(--sidebar-w) - 1px), var(--c-border) calc(var(--sidebar-w) - 1px) var(--sidebar-w), var(--c-bg) var(--sidebar-w));
   }
 }
 @media (max-width: 1023px) {
@@ -775,6 +775,8 @@ a.card:focus-visible { border-radius: var(--r-lg); }
 [style*="color:#2a7"], [style*="color: rgb(34, 170, 119)"],
 [style*="color:#2f9e44"], [style*="color: rgb(47, 158, 68)"] { color: var(--c-success-text) !important; }
 [style*="color:#e03131"], [style*="color: rgb(224, 49, 49)"] { color: var(--c-danger-text) !important; }
+/* Выбранная вкладка живого урока: белый на #2a7 — 2.96:1 */
+[style*="background:#2a7"], [style*="background: rgb(34, 170, 119)"] { background: var(--c-live-soft) !important; color: var(--c-success-text) !important; }
 
 /* Рамки #ddd/#eee/#ccc — на токены (явный border-color состояния не трогаем) */
 :is([style*="solid #ddd"], [style*="solid rgb(221, 221, 221)"], [style*="solid #eee"], [style*="solid rgb(238, 238, 238)"]):not([style*="border-color"]) { border-color: var(--c-border) !important; }
