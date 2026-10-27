@@ -171,7 +171,8 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
   секцией в фазе done), `transcript-panel.tsx` (блоки по спикерам, клик —
   seek и play, подсветка по `currentTime`, прокрутка списка, правка
   реплики и маппинг для teacher), `utterance-text.tsx` (`UtteranceText` —
-  единственный рендер текста реплики, место для `<ClickableText>` S3-1);
+  единственный рендер текста реплики — через `<ClickableText>` S3-1
+  с интеграции волны B);
   `lesson-player.tsx` отдаёт ref на `<video>` и позицию; типы `Utterance`,
   `Transcript` в `web/lib/api.ts`. Решения — ADR-025.
 - Тесты: `TestUtteranceEdit` (доступ, валидация, отметка и автор,

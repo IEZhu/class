@@ -218,8 +218,8 @@ LLM с контекстом предложения — **закрывает до
   пар, ~250 MB в PG; запрос примеров 1–8 мс. **Осталось для ☑:**
   `make migrate` и `make tatoeba-import` на стенде по
   [deploy/README.md](../../deploy/README.md#примеры-tatoeba-импорт-корпуса-s5-4)
-  и проверка DoD на частотных словах; примеры с подписью рисует попап
-  S3-1.
+  и проверка DoD на частотных словах. Примеры с подписью попап S3-1
+  рисует с интеграции волны B.
 
 ### S5-6 LLM-модуль и генерация текстов (2026-10-26) — ◐
 
@@ -240,7 +240,10 @@ LLM с контекстом предложения — **закрывает до
   `ReserveLLMRequest`, `CreateGeneratedText`, `GeneratedTextsByUser`.
 - Эндпоинты — `backend/internal/httpapi/practice.go` (student, teacher):
   `POST /practice/generate-text`, `GET /practice/texts` (своя история;
-  `?words=` — S5-7). Шов личного словаря — `userTermWords` (долг D-19).
+  `?words=` — S5-7). Без `words` — невыученные слова личного словаря
+  (интеграция волны B, долг D-19 закрыт): `userTermWords` →
+  `store.PracticeLemmas` (`backend/internal/store/user_terms.go`), число
+  целей — `textgen.TargetsFor`; поле слов в форме web необязательно.
 - Ключи `.env` (`deploy/.env.example`, compose — только api):
   `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_DAILY_LIMIT`; без
   `LLM_API_KEY` в журнале api строка «генерация текстов отвечает 503».
@@ -252,12 +255,12 @@ LLM с контекстом предложения — **закрывает до
   `backend/internal/textgen/*_test.go` (валидатор, промпт, ретрай),
   `backend/internal/httpapi/practice_test.go` (401/403, 503 без ключа, 201
   с сохранением, 400/422, 503/502 сбоя провайдера, 429 лимита, история
-  только своя, откат 0017).
+  только своя, откат 0017, `TestGenerateTextFromUserTerms` — цели
+  из словаря: порядок, «знаю» и чужие слова не попадают, потолок по длине).
 - **Для ☑ не хватает.** DoD «текст кликается» — `<ClickableText>` (S3-1)
   подключается в волне C заменой `renderParagraph`. Живой вызов
   провайдера не проверен — ключей у стенда нет: с первым `LLM_API_KEY`
-  сгенерировать текст на стенде. Подбор слов из личного словаря без
-  списка в запросе — после S3-5 (долг D-19).
+  сгенерировать текст на стенде.
 
 ## Риски этапа
 

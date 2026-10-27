@@ -21,7 +21,10 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   `internal/livekitapi/` (own Twirp client for Egress, ADR-012), `internal/assemblyai/`
   (ADR-015), `internal/webvtt/`, `internal/lemma/` (ADR-017), `internal/dictionary/`
   (ADR-019), `internal/translate/` (LibreTranslate, ADR-018), `internal/gcal/` (ADR-023),
-  `internal/harvester/` (subtitles, ADR-022), `internal/testdb/` (the shared DB test harness),
+  `internal/harvester/` (subtitles, ADR-022), `internal/dumpfile/` (dump download and
+  decompression shared by the imports), `internal/tatoeba/` (ADR-028), `internal/llm/` (LLM
+  providers, ADR-029), `internal/textgen/` (prompt and coverage validator, ADR-030),
+  `internal/testdb/` (the shared DB test harness),
   `migrations/` (golang-migrate `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a
   migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,

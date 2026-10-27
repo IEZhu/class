@@ -246,14 +246,20 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - `web/app/clickable-text.tsx` — `ClickableText` (по умолчанию) и
   `ClickableTextScope` (`lessonId`, `dictionary`); попап — лемма и форма,
   перевод, статус, дефиниции с подписью «Wiktionary, CC BY-SA», примеры
-  `examples[{text, translation}]`, если есть. `web/app/term-status-control.tsx`
+  Tatoeba с переводом и подписью (`ExampleAuthors`: авторы предложения и
+  перевода со ссылками на tatoeba.org, под списком «Tatoeba, CC BY 2.0 FR»,
+  ADR-028), если есть. `web/app/term-status-control.tsx`
   — `TermStatusControl` и общий кэш `termStatuses`. `term_id` 0 (слово
   api не знает, термин не заведён) — попап без «в мой словарь» и статуса.
 - Обёрнуты: тексты материалов и домашки (`body_md`) на странице урока —
   её видят и гости события. Контекст урока —
   `web/app/lesson/[id]/layout.tsx` (раскраска и статус — у студента).
-- Для S2-4: реплику рендерить `<ClickableText text={u.text} />` в
-  `UtteranceText` — layout урока уже даёт `lesson_id` и раскраску.
+- Транскрипт (интеграция волны B, 2026-10-27): `UtteranceText`
+  (`web/app/lesson/[id]/utterance-text.tsx`) рендерит реплику
+  `<ClickableText text={u.text} />`, урок и раскраску даёт layout урока.
+  Клик по слову (`stopPropagation` в `ClickableText`) и клики в попапе
+  не всплывают в перемотку реплики S2-4. Проверено `tsc` и сборкой
+  (WEB_CI_OK), в браузере после интеграции не прогонялось.
 - Для S3-7: клик на странице урока уходит в `POST /terms/click` с
   `lesson_id`, api проверяет урок в `checkClickLesson` — запись
   кандидата `source='click'` добавляется там же, web менять не нужно.
