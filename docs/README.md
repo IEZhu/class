@@ -11,7 +11,7 @@
 | [plans/](plans/README.md) | Планы этапов 0–5 с входными/выходными артефактами и правила конвейера |
 | [tasks/](tasks/README.md) | Единый индекс задач: статусы, зависимости, долги |
 | [../CLAUDE.md](../CLAUDE.md) | Роль и протокол работы ассистента |
-| [security-ci.md](security-ci.md) | Security CI policy, inventory checks and retained evidence |
+| [security-ci.md](security-ci.md) | Security CI (ADR-011): что сканируется и что блокирует, smoke образов, улики |
 
 ## Что это
 

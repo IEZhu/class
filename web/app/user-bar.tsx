@@ -36,7 +36,7 @@ export default function UserBar({ name, role }: { name: string; role: Role }) {
       </Link>
       <span>
         {/* Админка — только тем, у кого api всё равно не ответит 403 */}
-        {role !== "student" && (
+        {(role === "admin" || role === "teacher") && (
           <Link href="/admin" style={{ marginRight: "0.75rem" }}>
             Люди и группы
           </Link>

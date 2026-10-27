@@ -91,6 +91,9 @@ export interface LessonDetail extends Lesson {
   teacher_name: string;
   materials: Material[];
   participants: { user_id: number; email: string; name: string; role: string }[];
+  // Только организатору события: выпущена ли гостевая ссылка (сама она
+  // не восстанавливается — в БД лишь хэш). Остальным поле не приходит.
+  has_guest_link?: boolean;
 }
 
 // Реплика транскрипта (S2-2…S2-5); время — миллисекунды от начала записи.

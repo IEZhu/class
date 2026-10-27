@@ -11,6 +11,19 @@ import (
 // ErrEventOver — событие закончилось: гостевая ссылка больше не пускает.
 var ErrEventOver = errors.New("event is over")
 
+// ErrEventFull — на событии уже MaxGuestsPerEvent гостей.
+var ErrEventFull = errors.New("event is full")
+
+// GuestSessionGrace — сколько сессия гостя живёт после конца события:
+// запас на переподключение и на затянувшийся урок (ADR-010). Срок
+// считается от ends_at и при входе, и при переносе события.
+const GuestSessionGrace = 2 * time.Hour
+
+// MaxGuestsPerEvent — потолок гостевых учёток на одно событие. Ссылка
+// многоразовая и расходится широко; без потолка один её держатель
+// заводит гостей скриптом без счёта (ADR-032).
+const MaxGuestsPerEvent = 100
+
 // GuestEvent — что видит человек на странице входа по гостевой ссылке.
 type GuestEvent struct {
 	LessonID    int64
@@ -64,7 +77,9 @@ func (s *Store) GuestEventByToken(ctx context.Context, tokenHash string) (*Guest
 //
 // Email синтетический и уникальный: колонка UNIQUE NOT NULL, а настоящего
 // адреса у гостя мы не спрашиваем — он пришёл по ссылке представиться именем.
-func (s *Store) JoinAsGuest(ctx context.Context, tokenHash, name, syntheticEmail, sessionTokenHash string, sessionExpiresAt time.Time) (*User, int64, error) {
+// Сессия живёт до ends_at плюс GuestSessionGrace; ends_at берётся из той же
+// заблокированной строки, поэтому перенос события вход не обгоняет.
+func (s *Store) JoinAsGuest(ctx context.Context, tokenHash, name, syntheticEmail, sessionTokenHash string) (*User, int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -91,6 +106,19 @@ func (s *Store) JoinAsGuest(ctx context.Context, tokenHash, name, syntheticEmail
 	if endsAt.Before(time.Now()) {
 		return nil, 0, ErrEventOver
 	}
+	// Считаем под той же блокировкой строки урока: отзыв ссылки и удаление
+	// события ждут. Блокировка разделяемая, параллельные входы друг друга
+	// не ждут, поэтому одновременные гости могут превысить потолок на число
+	// таких входов — для защиты от заведения гостей без счёта этого хватает.
+	var guests int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM lesson_participants lp JOIN users u ON u.id = lp.user_id
+		 WHERE lp.lesson_id = $1 AND u.role = $2`, lessonID, RoleGuest).Scan(&guests); err != nil {
+		return nil, 0, err
+	}
+	if guests >= MaxGuestsPerEvent {
+		return nil, 0, ErrEventFull
+	}
 
 	u := &User{Email: syntheticEmail, Role: RoleGuest, Name: name}
 	if err := tx.QueryRow(ctx,
@@ -105,7 +133,7 @@ func (s *Store) JoinAsGuest(ctx context.Context, tokenHash, name, syntheticEmail
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-		u.ID, sessionTokenHash, sessionExpiresAt); err != nil {
+		u.ID, sessionTokenHash, endsAt.Add(GuestSessionGrace)); err != nil {
 		return nil, 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -10,16 +10,27 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 ## Layout
 
 - `backend/`: Go module `github.com/IEZhu/class/backend` (Go 1.26). `cmd/api/main.go` (HTTP API),
-  `cmd/worker/main.go` (background jobs), `cmd/dictimport/` (one-off dictionary import shipped in
-  the worker image, ADR-019), `internal/httpapi/` (routes, auth, middleware, groups,
-  lessons, invites, rooms, users, LiveKit webhook), `internal/store/` (Postgres via pgx),
+  `cmd/worker/main.go` (background jobs), `cmd/dictimport/` and `cmd/tatoebaimport/` (one-off
+  dictionary and Tatoeba imports shipped in the worker image, ADR-019, ADR-028),
+  `internal/httpapi/` (routes, auth, middleware, groups, lessons, invites, rooms, users, guests
+  and `/join`, media and material URLs, transcripts, word clicks, user terms, practice texts,
+  whiteboard, Google Calendar, LiveKit and AssemblyAI webhooks), `internal/store/` (Postgres via pgx),
   `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
-  retries, ADR-013), `internal/worker/` (job handlers by kind), `migrations/` (golang-migrate
-  `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a migration).
+  retries, ADR-013; periodic `Scheduler`, ADR-021), `internal/worker/` (job handlers by kind),
+  `internal/storage/` (R2/S3 via `aws-sdk-go-v2`: presigned GET/PUT, object keys, ADR-009),
+  `internal/livekitapi/` (own Twirp client for Egress, ADR-012), `internal/assemblyai/`
+  (ADR-015), `internal/webvtt/`, `internal/lemma/` (ADR-017), `internal/dictionary/`
+  (ADR-019), `internal/translate/` (LibreTranslate, ADR-018), `internal/gcal/` (ADR-023),
+  `internal/harvester/` (subtitles, ADR-022), `internal/testdb/` (the shared DB test harness),
+  `migrations/` (golang-migrate `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a
+  migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
-  `app/admin`, `app/account`, `app/invite/[token]`, `app/dictionary`); `lib/api.ts` calls the
-  API server-side. Every text renders through `app/clickable-text.tsx` (`<ClickableText>`,
-  ADR-026); its tokenizer and status cache are pure functions in `lib/` tested by `npm test`.
+  `app/admin`, `app/account`, `app/invite/[token]`, `app/dictionary`, `app/practice/text`,
+  public `app/join/[token]` for event guests); `lib/api.ts` calls the API server-side;
+  `lib/roles.ts`, `lib/lesson-phase.ts`, `lib/lesson-title.ts`. Every text renders through
+  `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
+  functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr
+  sprite into the git-ignored `public/excalidraw/` and `public/plyr/` before dev and build.
 - `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
   `tools` profile; `libretranslate` under the `translate` profile and its one-off model installer
   `libretranslate-models` under `translate-setup`, ADR-018; the whiteboard relay `whiteboard`
@@ -47,7 +58,11 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
 - Required keys in `deploy/.env` (checked by `make check-env`): `DOMAIN`, `POSTGRES_DB`,
   `POSTGRES_USER`, `POSTGRES_PASSWORD`. Optional: `HTTP_PORT` (default 8090), `SEED_PASSWORD`,
   `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (without them the lesson room returns
-  503), `BACKUP_S3_*` for `deploy/backup-pg.sh` (all empty → the recordings bucket and token
+  503), `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+  (R2 by default, ADR-009; without them media and material file URLs return 503 and no
+  recording is started), `EGRESS_AUDIO_ONLY=1` (record OGG audio instead of MP4),
+  `COMPOSE_PROFILES=translate` with `LIBRETRANSLATE_URL` (word translations; empty → the
+  word click answers with definitions only, ADR-018), `BACKUP_S3_*` for `deploy/backup-pg.sh` (all empty → the recordings bucket and token
   with a journal warning, debt D-8; any one set → `BACKUP_S3_BUCKET` is required),
   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (all three or the
   Google Calendar connection is unavailable and `calendar_sync` skips lesson creates and
@@ -70,8 +85,8 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
 - Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`, `test` —
-  `node --test` over `lib/*.test.ts`; `predev` and `prebuild` copy the Excalidraw fonts into the
-  git-ignored `public/excalidraw/`).
+  `node --test` over `lib/*.test.ts`; `predev` and `prebuild` copy the Excalidraw fonts and the
+  Plyr sprite into the git-ignored `public/excalidraw/` and `public/plyr/`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
   to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`
   queue tests; they create isolated schemas and apply the real migrations through the one
@@ -92,7 +107,8 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   One task may span several commits, never the reverse.
 - Work goes through PRs from branches like `feat/s1-10-invites` into `main`.
 - Postgres DDL follows ADR-005; auth is cookie sessions in Postgres with bcrypt (ADR-006);
-  roles are `teacher`, `student` and `admin` (ADR-007).
+  roles are `teacher`, `student` and `admin` (ADR-007), plus `guest` for open events
+  (password-less, one event, ADR-010).
 - Any choice not covered by the docs (library, format, deviation) gets an ADR entry in
   `docs/architecture/decisions.md` before the code.
 

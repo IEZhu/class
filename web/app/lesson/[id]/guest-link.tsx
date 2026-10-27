@@ -10,20 +10,40 @@ const rowStyle = { display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems:
 // Гостевая ссылка на событие (ADR-010): многоразовая, по ней заходят все,
 // представившись именем. Показывается только организатору и только
 // у события без группы — api выдаёт ссылку лишь ему.
-export default function GuestLink({ lessonId }: { lessonId: number }) {
+//
+// Сам токен хранится лишь хэшем: после перезагрузки страницы ссылку
+// не показать, известно только, что она выпущена (hasLink). Поэтому
+// перевыпуск, ломающий уже разосланную ссылку, идёт только с подтверждения,
+// а отозвать её можно и без нового выпуска (ADR-032).
+export default function GuestLink({ lessonId, hasLink }: { lessonId: number; hasLink: boolean }) {
+  const [exists, setExists] = useState(hasLink);
+  // Открытый текст ссылки есть только сразу после выпуска в этой вкладке
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const issue = useSubmit(async () => {
     const res = await requestJson<{ url: string }>(`/api/lessons/${lessonId}/guest-link`, "POST");
     setLink(res.url);
+    setExists(true);
     setCopied(false);
   });
 
   const revoke = useSubmit(async () => {
     await request(`/api/lessons/${lessonId}/guest-link`, "DELETE");
     setLink(null);
+    setExists(false);
   });
+
+  function confirmIssue(e: FormEvent) {
+    e.preventDefault();
+    // Первый выпуск ничего не ломает; перевыпуск отключает разосланную ссылку
+    if (
+      !exists ||
+      window.confirm("Выпустить новую ссылку? Старая перестанет работать у всех, кому вы её уже отправили.")
+    ) {
+      void issue.submit(e);
+    }
+  }
 
   function confirmRevoke(e: FormEvent) {
     e.preventDefault();
@@ -45,12 +65,12 @@ export default function GuestLink({ lessonId }: { lessonId: number }) {
   return (
     <div style={{ margin: "1rem 0" }}>
       <div style={rowStyle}>
-        <form onSubmit={issue.submit} style={{ display: "inline" }}>
+        <form onSubmit={confirmIssue} style={{ display: "inline" }}>
           <button type="submit" disabled={issue.busy}>
-            {issue.busy ? "Готовим…" : link ? "Выпустить новую ссылку" : "Гостевая ссылка"}
+            {issue.busy ? "Готовим…" : exists ? "Выпустить новую ссылку" : "Гостевая ссылка"}
           </button>
         </form>
-        {link && (
+        {exists && (
           <form onSubmit={confirmRevoke} style={{ display: "inline" }}>
             <button type="submit" disabled={revoke.busy}>
               Отозвать
@@ -67,9 +87,11 @@ export default function GuestLink({ lessonId }: { lessonId: number }) {
           </button>
         </div>
       )}
-      {link && (
+      {exists && (
         <p style={{ color: "#666", margin: "0.5rem 0 0" }}>
-          Ссылка многоразовая: по ней зайдут все, кому вы её отправите. Перевыпуск отключает предыдущую.
+          {link
+            ? "Ссылка многоразовая: по ней зайдут все, кому вы её отправите. Перевыпуск отключает предыдущую."
+            : "Ссылка уже выпущена и действует. Показать её ещё раз нельзя — хранится только отпечаток; нужна снова — выпустите новую, старая при этом перестанет работать."}
         </p>
       )}
     </div>

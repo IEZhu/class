@@ -29,8 +29,12 @@ type LessonListItem struct {
 
 type LessonDetail struct {
 	Lesson
-	GroupName    string
-	TeacherName  string
+	GroupName   string
+	TeacherName string
+	// HasGuestLink — у события выпущена гостевая ссылка. Сам токен
+	// не восстановить (в БД только хэш), поэтому web по этому флагу
+	// предупреждает, что перевыпуск сломает уже разосланную ссылку.
+	HasGuestLink bool
 	Materials    []Material
 	Participants []GroupMember
 }
@@ -117,12 +121,14 @@ func (s *Store) GetLessonDetail(ctx context.Context, lessonID int64) (*LessonDet
 	d := &LessonDetail{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT l.id, l.group_id, COALESCE(l.title, ''), l.teacher_id,
-		        l.starts_at, l.ends_at, l.status, COALESCE(g.name, ''), t.name
+		        l.starts_at, l.ends_at, l.status, COALESCE(g.name, ''), t.name,
+		        l.guest_token_hash IS NOT NULL
 		 FROM lessons l
 		 LEFT JOIN groups g ON g.id = l.group_id
 		 JOIN users t ON t.id = l.teacher_id
 		 WHERE l.id = $1`, lessonID).
-		Scan(&d.ID, &d.GroupID, &d.Title, &d.TeacherID, &d.StartsAt, &d.EndsAt, &d.Status, &d.GroupName, &d.TeacherName)
+		Scan(&d.ID, &d.GroupID, &d.Title, &d.TeacherID, &d.StartsAt, &d.EndsAt, &d.Status, &d.GroupName, &d.TeacherName,
+			&d.HasGuestLink)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -236,6 +242,18 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 		`UPDATE lessons SET starts_at = $2, ends_at = $3 WHERE id = $1
 		 RETURNING group_id, COALESCE(title, ''), starts_at, ends_at, status`,
 		lessonID, startsAt, endsAt).Scan(&l.GroupID, &l.Title, &l.StartsAt, &l.EndsAt, &l.Status); err != nil {
+		return nil, err
+	}
+	// Сессия гостя привязана к концу события (GuestSessionGrace) и едет
+	// вместе с ним: иначе гость, вошедший заранее, терял бы вход ещё до
+	// начала перенесённого события, а пароля для повторного входа у него нет.
+	// Гостевая учётка заводится на одно событие, чужие сессии не задеваются.
+	if _, err := tx.Exec(ctx,
+		`UPDATE sessions SET expires_at = $2
+		 WHERE user_id IN (SELECT lp.user_id FROM lesson_participants lp
+		                   JOIN users u ON u.id = lp.user_id
+		                   WHERE lp.lesson_id = $1 AND u.role = $3)`,
+		lessonID, l.EndsAt.Add(GuestSessionGrace), RoleGuest); err != nil {
 		return nil, err
 	}
 	if calendar {

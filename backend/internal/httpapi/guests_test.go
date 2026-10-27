@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/testdb"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -303,4 +304,249 @@ func TestOpenEventRulesInAPIAndSchema(t *testing.T) {
 			t.Fatalf("схема пропустила %q: %v", stmt.sql, err)
 		}
 	}
+}
+
+// 0006 накатывается на стенд поверх строк, которые писал код времён 0005:
+// урок с группой и названием, гостевая ссылка у урока с группой, событие
+// с пустым названием. Миграция приводит их к правилам ADR-010, а не падает
+// с грязной версией 6 (ревью раунда 1).
+func TestMigration0006NormalizesStandRows(t *testing.T) {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testdb.DSNBefore(t, "0006"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+	var teacherID, groupID int64
+	if err := conn.QueryRow(ctx, `INSERT INTO users(email,role,name) VALUES ('stand@example.com','teacher','Stand') RETURNING id`).Scan(&teacherID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('B1 стенд','B1') RETURNING id`).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	lesson := func(groupID *int64, title, tokenHash *string) int64 {
+		t.Helper()
+		var id int64
+		if err := conn.QueryRow(ctx, `INSERT INTO lessons(group_id,title,guest_token_hash,teacher_id,starts_at,ends_at)
+			VALUES ($1,$2,$3,$4,now(),now()+interval '1 hour') RETURNING id`, groupID, title, tokenHash, teacherID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	text := func(s string) *string { return &s }
+	titled := lesson(&groupID, text("Пробный"), nil)
+	linked := lesson(&groupID, nil, text("group-link-digest"))
+	blank := lesson(nil, text("  "), nil)
+	event := lesson(nil, text("Клуб"), text("event-link-digest"))
+
+	testdb.Apply(t, conn, "0006_event_constraints.up.sql")
+
+	for _, tc := range []struct {
+		id        int64
+		title     *string
+		tokenHash *string
+	}{
+		{titled, nil, nil},
+		{linked, nil, nil},
+		{blank, text(fmt.Sprintf("Событие #%d", blank)), nil},
+		{event, text("Клуб"), text("event-link-digest")},
+	} {
+		var title, tokenHash *string
+		if err := conn.QueryRow(ctx, `SELECT title, guest_token_hash FROM lessons WHERE id=$1`, tc.id).Scan(&title, &tokenHash); err != nil {
+			t.Fatal(err)
+		}
+		if nullableText(title) != nullableText(tc.title) || nullableText(tokenHash) != nullableText(tc.tokenHash) {
+			t.Fatalf("урок %d после 0006: title %v, guest_token_hash %v; ждали %v, %v",
+				tc.id, nullableText(title), nullableText(tokenHash), nullableText(tc.title), nullableText(tc.tokenHash))
+		}
+	}
+	// Ограничения на месте: нормализация не подменила их собой
+	_, err = conn.Exec(ctx, `UPDATE lessons SET title='Снова' WHERE id=$1`, titled)
+	if store.PgErrorCode(err) != pgCheckViolation {
+		t.Fatalf("lessons_title_event_only не действует: %v", err)
+	}
+}
+
+// nullableText — значение указателя или "<nil>" для сообщений и сравнения.
+func nullableText(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
+// GET /lessons/{id} говорит организатору, выпущена ли ссылка: web не даёт
+// молча перевыпустить уже разосланную. Остальным поле не приходит.
+func TestLessonDetailHasGuestLinkForOwnerOnly(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	organizerID, organizer := securityUser(t, a, conn, store.RoleTeacher, "flag-organizer")
+	event := openEvent(t, a, organizerID, "Флаг ссылки")
+	var groupID int64
+	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('C1','C1') RETURNING id`).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	groupLesson, err := a.store.CreateLesson(ctx, &groupID, "", organizerID, time.Now(), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := a.Router()
+	flag := func(lessonID int64, cookie *http.Cookie) *bool {
+		t.Helper()
+		w := securityRequest(h, "GET", fmt.Sprintf("/lessons/%d", lessonID), "", cookie)
+		expectStatus(t, w, http.StatusOK)
+		var d struct {
+			HasGuestLink *bool `json:"has_guest_link"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.HasGuestLink
+	}
+	expectFlag := func(got *bool, want string) {
+		t.Helper()
+		value := "absent"
+		if got != nil {
+			value = fmt.Sprint(*got)
+		}
+		if value != want {
+			t.Fatalf("has_guest_link = %s, ждали %s", value, want)
+		}
+	}
+
+	expectFlag(flag(event.ID, organizer), "false")
+	token := issueGuestLink(t, h, event.ID, organizer)
+	expectFlag(flag(event.ID, organizer), "true")
+	w := securityRequest(h, "POST", "/join/"+token, `{"name":"Гость"}`, nil)
+	expectStatus(t, w, http.StatusCreated)
+	expectFlag(flag(event.ID, w.Result().Cookies()[0]), "absent")
+	expectStatus(t, securityRequest(h, "DELETE", fmt.Sprintf("/lessons/%d/guest-link", event.ID), "", organizer), http.StatusNoContent)
+	expectFlag(flag(event.ID, organizer), "false")
+	expectFlag(flag(groupLesson.ID, organizer), "absent")
+}
+
+// Потолок гостей на событие, предел имени и после входа (PATCH /auth/me),
+// синтетический email не из хэша сессии, гости вне списков админа.
+func TestGuestLimitsEmailAndAdminList(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	organizerID, organizer := securityUser(t, a, conn, store.RoleTeacher, "limits-organizer")
+	_, admin := securityUser(t, a, conn, store.RoleAdmin, "limits-admin")
+	event := openEvent(t, a, organizerID, "День открытых дверей")
+	h := a.Router()
+	token := issueGuestLink(t, h, event.ID, organizer)
+
+	w := securityRequest(h, "POST", "/join/"+token, `{"name":"Первый"}`, nil)
+	expectStatus(t, w, http.StatusCreated)
+	first := w.Result().Cookies()[0]
+	var joined userResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &joined); err != nil {
+		t.Fatal(err)
+	}
+	var sessionHash string
+	if err := conn.QueryRow(ctx, `SELECT token_hash FROM sessions WHERE user_id=$1`, joined.ID).Scan(&sessionHash); err != nil {
+		t.Fatal(err)
+	}
+	local, ok := strings.CutSuffix(strings.TrimPrefix(joined.Email, "guest+"), "@guests.local")
+	if !ok || len(local) != 32 || strings.Contains(sessionHash, local) {
+		t.Fatalf("синтетический email %q не случайный или выведен из хэша сессии", joined.Email)
+	}
+
+	// Предел имени гостя держит и правка своего профиля
+	tooLong := fmt.Sprintf(`{"name":%q}`, strings.Repeat("я", maxGuestNameLen+1))
+	expectStatus(t, securityRequest(h, "PATCH", "/auth/me", tooLong, first), http.StatusBadRequest)
+	expectStatus(t, securityRequest(h, "PATCH", "/auth/me", fmt.Sprintf(`{"name":%q}`, strings.Repeat("я", maxGuestNameLen)), first), http.StatusOK)
+
+	// Гости не попадают ни в действующие учётки, ни в архив (ADR-010)
+	for _, route := range []string{"/users", "/users?archived=1"} {
+		w := securityRequest(h, "GET", route, "", admin)
+		expectStatus(t, w, http.StatusOK)
+		var users []userWithGroupsResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &users); err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range users {
+			if u.Role == store.RoleGuest {
+				t.Fatalf("%s показал гостя: %+v", route, u)
+			}
+		}
+		if route == "/users" && len(users) != 2 {
+			t.Fatalf("/users без гостей должен вернуть двух staff, вернул %d", len(users))
+		}
+	}
+
+	// Добиваем событие гостями до последнего места напрямую в БД
+	if _, err := conn.Exec(ctx, `WITH g AS (
+		INSERT INTO users(email,role,name)
+		SELECT 'filler-' || i || '@guests.local', 'guest', 'Гость ' || i FROM generate_series(1, $2::int) i
+		RETURNING id)
+		INSERT INTO lesson_participants(lesson_id,user_id) SELECT $1, id FROM g`,
+		event.ID, store.MaxGuestsPerEvent-2); err != nil {
+		t.Fatal(err)
+	}
+	expectStatus(t, securityRequest(h, "POST", "/join/"+token, `{"name":"Последний"}`, nil), http.StatusCreated)
+	w = securityRequest(h, "POST", "/join/"+token, `{"name":"Лишний"}`, nil)
+	expectStatus(t, w, http.StatusConflict)
+	if !strings.Contains(w.Body.String(), "event_full") {
+		t.Fatalf("сверх потолка ждали event_full: %s", w.Body.String())
+	}
+	var guests int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM users WHERE role='guest'`).Scan(&guests); err != nil || guests != store.MaxGuestsPerEvent {
+		t.Fatalf("гостей %d, ждали ровно %d (%v)", guests, store.MaxGuestsPerEvent, err)
+	}
+	// Вошедшие раньше продолжают работать
+	expectStatus(t, securityRequest(h, "GET", fmt.Sprintf("/lessons/%d", event.ID), "", first), http.StatusOK)
+}
+
+// Перенос события двигает сессии его гостей: срок — новый ends_at плюс
+// запас, чужие сессии не трогаются.
+func TestRescheduleMovesGuestSessions(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	organizerID, organizer := securityUser(t, a, conn, store.RoleTeacher, "move-organizer")
+	studentID, _ := securityUser(t, a, conn, store.RoleStudent, "move-student")
+	starts := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	event, err := a.store.CreateLesson(ctx, nil, "Перенесённая встреча", organizerID, starts, starts.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO lesson_participants(lesson_id,user_id) VALUES ($1,$2)`, event.ID, studentID); err != nil {
+		t.Fatal(err)
+	}
+	h := a.Router()
+	token := issueGuestLink(t, h, event.ID, organizer)
+	w := securityRequest(h, "POST", "/join/"+token, `{"name":"Ранний гость"}`, nil)
+	expectStatus(t, w, http.StatusCreated)
+	guest := w.Result().Cookies()[0]
+	// Срок держит БД; cookie не должен отрезать гостя от перенесённого события
+	if guest.MaxAge != int(sessionTTL.Seconds()) {
+		t.Fatalf("cookie гостя живёт %d с, ждали %d", guest.MaxAge, int(sessionTTL.Seconds()))
+	}
+	var joined userResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &joined); err != nil {
+		t.Fatal(err)
+	}
+	expiry := func(userID int64) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := conn.QueryRow(ctx, `SELECT expires_at FROM sessions WHERE user_id=$1`, userID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if got, want := expiry(joined.ID), starts.Add(time.Hour+store.GuestSessionGrace); !got.Equal(want) {
+		t.Fatalf("сессия гостя до %s, ждали %s", got, want)
+	}
+	studentExpiry := expiry(studentID)
+
+	moved := starts.Add(72 * time.Hour)
+	body := fmt.Sprintf(`{"starts_at":%q,"ends_at":%q}`, moved.Format(time.RFC3339), moved.Add(time.Hour).Format(time.RFC3339))
+	expectStatus(t, securityRequest(h, "PATCH", fmt.Sprintf("/lessons/%d", event.ID), body, organizer), http.StatusOK)
+	if got, want := expiry(joined.ID), moved.Add(time.Hour+store.GuestSessionGrace); !got.Equal(want) {
+		t.Fatalf("после переноса сессия гостя до %s, ждали %s", got, want)
+	}
+	if got := expiry(studentID); !got.Equal(studentExpiry) {
+		t.Fatalf("перенос сдвинул сессию студента: %s → %s", studentExpiry, got)
+	}
+	expectStatus(t, securityRequest(h, "GET", "/auth/me", "", guest), http.StatusOK)
 }
