@@ -414,6 +414,31 @@ func TestASRWebhookStoresUtterancesOnce(t *testing.T) {
 	}
 }
 
+// Данные AssemblyAI внешние: реплика с отрицательным началом, концом
+// раньше начала и NUL в тексте и метке не роняет транскрипт —
+// время зажимается в 0 ≤ start ≤ end (utterances_time_order), NUL
+// вырезается (Postgres не принимает его в text).
+func TestASRResultSanitizesUtterances(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.asr.respond(`{"id":"tr_fixture","status":"completed","utterances":[
+		{"speaker":"A\u0000","start":-300,"end":-100,"confidence":0.9,"text":"Neg\u0000ative","words":[]},
+		{"speaker":"B","start":5000,"end":4000,"confidence":0.9,"text":"Back\u0000wards","words":[]}]}`, 0)
+	s.fetched(t)
+	tr := s.transcript(t)
+	if tr.status != store.TranscriptCompleted || tr.utterances != 2 {
+		t.Fatalf("транскрипт %+v", tr)
+	}
+	var got string
+	if err := s.conn.QueryRow(context.Background(),
+		`SELECT string_agg(format('%s|%s|%s|%s|%s', idx, speaker_label, start_ms, end_ms, text), ';' ORDER BY idx)
+		 FROM utterances WHERE transcript_id = $1`, tr.id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if want := "0|A|0|0|Negative;1|B|5000|5000|Backwards"; got != want {
+		t.Fatalf("реплики %s, хотели %s", got, want)
+	}
+}
+
 // GET /lessons/{id}/transcript пускает ровно тех же, кого GET /lessons/{id}.
 func TestTranscriptAccessMatchesLesson(t *testing.T) {
 	s := newASRStand(t, 0)
@@ -797,7 +822,10 @@ func TestTranscriptsMigrationReverts(t *testing.T) {
 		t.Fatalf("после отката остались колонки %s", got)
 	}
 	var fk bool
-	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'lessons_transcript_fk')`).Scan(&fk); err != nil || fk {
+	// Только своя схема: у параллельных пакетов (internal/jobs) в той же базе
+	// свои схемы с этим же FK
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint
+		WHERE conname = 'lessons_transcript_fk' AND conrelid = 'lessons'::regclass)`).Scan(&fk); err != nil || fk {
 		t.Fatalf("FK lessons.transcript_id после отката: %v (%v)", fk, err)
 	}
 	apply("0008_transcripts.up.sql")
