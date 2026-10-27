@@ -17,7 +17,7 @@ import (
 const (
 	// termLang — язык словаря. Целевой язык перевода — русский: ученики
 	// русскоязычные (integrations/translation.md).
-	termLang        = "en"
+	termLang        = lemma.Lang
 	translationLang = "ru"
 	// maxContextRunes — предложение вокруг слова; длиннее — уже абзац
 	maxContextRunes = 1000
@@ -29,10 +29,12 @@ const (
 
 type termClickRequest struct {
 	Surface string `json:"surface"`
-	// ContextSentence пока только проверяется: по нему будут работать
-	// «объясни» (S5-8, долг D-2) и кандидаты словаря урока (S3-7)
+	// ContextSentence пока только проверяется: по нему будет работать
+	// «объясни» (S5-8, долг D-2)
 	ContextSentence string `json:"context_sentence"`
-	LessonID        *int64 `json:"lesson_id"`
+	// LessonID — клик на странице урока: у участника он ещё и кандидат
+	// словаря урока (S3-7, ADR-033)
+	LessonID *int64 `json:"lesson_id"`
 }
 
 type termTranslation struct {
@@ -148,6 +150,9 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.TermID = term.ID
+	if req.LessonID != nil {
+		a.recordClickCandidate(ctx, *req.LessonID, term.ID, surface)
+	}
 	resp.Examples = a.examples(ctx, term)
 	if tr, ok := term.Translations[translationLang]; ok {
 		resp.Translation = &termTranslation{Text: tr.Text, Source: tr.Source}
@@ -163,10 +168,9 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// checkClickLesson — клик на уроке: урок существует и виден кликнувшему.
-// Сейчас lesson_id ничего не пишет; кандидатов словаря урока заведёт S3-7,
-// и контракт к тому времени уже не пропускает чужие уроки. Та же проверка
-// стережёт source_lesson_id личного словаря (S3-5).
+// checkClickLesson — клик на уроке: урок существует и виден кликнувшему,
+// поэтому кандидата в чужой урок не записать. Та же проверка стережёт
+// source_lesson_id личного словаря (S3-5).
 func (a *API) checkClickLesson(w http.ResponseWriter, r *http.Request, lessonID int64) bool {
 	if lessonID <= 0 {
 		writeError(w, http.StatusBadRequest, "bad_request", "некорректный lesson_id")
@@ -185,6 +189,17 @@ func (a *API) checkClickLesson(w http.ResponseWriter, r *http.Request, lessonID 
 		return false
 	}
 	return true
+}
+
+// recordClickCandidate — клик на уроке становится кандидатом словаря урока
+// source='click' (S3-7, ADR-033); store пишет только клик участника
+// из снапшота урока, клики преподавателя и админа — нет. Сбой записи
+// попап не ломает: кандидат — подсказка преподавателю, а ответ клика
+// нужен ученику сейчас.
+func (a *API) recordClickCandidate(ctx context.Context, lessonID, termID int64, surface string) {
+	if _, err := a.store.RecordClickCandidate(ctx, lessonID, userFrom(ctx).ID, termID, surface); err != nil {
+		logf("click candidate lesson %d term %d: %v", lessonID, termID, err)
+	}
 }
 
 // examples — 1–2 коротких примера с леммой термина из локального корпуса

@@ -77,12 +77,3 @@ func TestCheckUnknownShare(t *testing.T) {
 		}
 	}
 }
-
-func TestTokenize(t *testing.T) {
-	got := tokenize("Don’t stop: the teachers' well-known café—R2D2 isn't 42 years-old! -run- a--b")
-	want := []string{"Don’t", "stop", "the", "teachers", "well-known", "café", "R", "D", "isn't",
-		"years-old", "run", "a", "b"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("токены %q\nхотели %q", got, want)
-	}
-}

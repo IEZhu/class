@@ -115,6 +115,10 @@ func registerCore(runner *jobs.Runner, st *store.Store) {
 	} else {
 		log.Printf("worker: хранилище не настроено — снимки досок и удаление файлов материалов ждут в очереди")
 	}
+
+	// S3-7: слова доски кончившегося урока — в кандидаты словаря урока
+	// (ADR-033); хранилище не нужно, сцена лежит в Postgres
+	worker.RegisterLessonTerms(runner, st)
 }
 
 // asrFromEnv — транскрибация AssemblyAI (S2-1, ADR-015). Без ключа —

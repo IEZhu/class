@@ -24,6 +24,10 @@ import (
 	"unicode"
 )
 
+// Lang — язык лемматизатора и словаря terms (terms.lang): только
+// английский.
+const Lang = "en"
+
 //go:generate go run ./gen -zip english-wordnet-2025.zip -out oewn
 
 //go:embed oewn/lemmas.tsv.gz oewn/exceptions.tsv.gz

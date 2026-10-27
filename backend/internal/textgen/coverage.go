@@ -2,7 +2,6 @@ package textgen
 
 import (
 	"strings"
-	"unicode"
 
 	"github.com/IEZhu/class/backend/internal/lemma"
 )
@@ -49,7 +48,7 @@ func Check(text string, targets []Target) Report {
 		rep.Occurrences[t.Lemma] = 0
 	}
 	unknown := 0
-	for _, tok := range tokenize(text) {
+	for _, tok := range lemma.Words(text) {
 		rep.Words++
 		ks := keys(tok)
 		matched := false
@@ -78,36 +77,6 @@ func Check(text string, targets []Target) Report {
 		rep.UnknownShare = float64(unknown) / float64(rep.Words)
 	}
 	return rep
-}
-
-// tokenize — слова текста: буквы (с диакритикой), внутри — апостроф или
-// дефис перед буквой. Цифры и знаки — разделители; апостроф в конце
-// (students') в слово не входит, Normalize всё равно бы его срезал.
-func tokenize(text string) []string {
-	rs := []rune(text)
-	var out []string
-	for i := 0; i < len(rs); {
-		if !unicode.IsLetter(rs[i]) {
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(rs) {
-			r := rs[j]
-			if unicode.IsLetter(r) || unicode.IsMark(r) {
-				j++
-				continue
-			}
-			if (r == '\'' || r == '’' || r == '-') && j+1 < len(rs) && unicode.IsLetter(rs[j+1]) {
-				j += 2
-				continue
-			}
-			break
-		}
-		out = append(out, string(rs[i:j]))
-		i = j
-	}
-	return out
 }
 
 // keys — ключи слова для сравнения с целями: нормализованная форма,
@@ -142,17 +111,17 @@ var clitics = []string{"n't", "'re", "'ll", "'ve", "'d", "'m", "'s"}
 // Составное известно, если известна каждая часть.
 func known(tok string) bool {
 	n := lemma.Normalize(tok)
-	if functionWords[n] || lemma.Known(n) || lemma.Known(lemma.Lemma(tok)) {
+	if lemma.FunctionWord(n) || lemma.Known(n) || lemma.Known(lemma.Lemma(tok)) {
 		return true
 	}
 	for _, c := range clitics {
 		if base, ok := strings.CutSuffix(n, c); ok && base != "" {
-			return functionWords[base] || lemma.Known(lemma.Lemma(base))
+			return lemma.FunctionWord(base) || lemma.Known(lemma.Lemma(base))
 		}
 	}
 	if strings.Contains(n, "-") {
 		for _, part := range strings.Split(n, "-") {
-			if !functionWords[part] && !lemma.Known(lemma.Lemma(part)) {
+			if !lemma.FunctionWord(part) && !lemma.Known(lemma.Lemma(part)) {
 				return false
 			}
 		}
@@ -160,38 +129,3 @@ func known(tok string) bool {
 	}
 	return false
 }
-
-// functionWords — служебные слова английского (артикли, местоимения,
-// предлоги, союзы, вспомогательные и модальные глаголы, частотные
-// наречия и числительные): в OEWN только знаменательные части речи,
-// и без этого списка «незнакомыми» оказались бы the, of и and.
-var functionWords = func() map[string]bool {
-	m := map[string]bool{}
-	for _, w := range strings.Fields(`
-		a an the this that these those
-		i me my mine myself you your yours yourself yourselves he him his himself
-		she her hers herself it its itself we us our ours ourselves they them
-		their theirs themselves who whom whose which what whatever whoever
-		someone somebody something anyone anybody anything everyone everybody
-		everything nobody nothing none one ones each every either neither both
-		all any some few many much more most less least several such own other
-		another same
-		about above across after against along among around as at before behind
-		below beneath beside besides between beyond by despite down during except
-		for from in inside into like near of off on onto out outside over past
-		since than through throughout till to toward towards under underneath
-		until up upon via with within without
-		and but or nor so yet if because although though while whereas unless
-		whether once when whenever where wherever why how however therefore
-		be am is are was were been being have has had having do does did done
-		doing will would shall should can could may might must ought
-		can't won't shan't cannot
-		not no yes very too also just only even still already again ever never
-		always often sometimes usually here there then now today tonight
-		yesterday tomorrow quite rather really almost enough
-		two three four five six seven eight nine ten first second third
-		oh ok okay please`) {
-		m[w] = true
-	}
-	return m
-}()

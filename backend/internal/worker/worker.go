@@ -13,6 +13,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/harvester"
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/lessonterms"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 )
@@ -123,4 +124,21 @@ func RegisterRecordingSweep(r *jobs.Runner, s *jobs.Scheduler, st *store.Store) 
 		return err
 	})
 	s.Every(store.JobRecordingSweep, recordingSweepEvery)
+}
+
+// RegisterLessonTerms — S3-7: джоба whiteboard_terms разбирает доску
+// кончившегося урока в кандидатов словаря урока (ADR-033). Повтор над той
+// же сценой ничего не меняет, поэтому доставка at-least-once безопасна.
+func RegisterLessonTerms(r *jobs.Runner, st *store.Store) {
+	r.Handle(store.JobWhiteboardTerms, func(ctx context.Context, job jobs.Job) error {
+		var p store.WhiteboardTermsJob
+		if err := json.Unmarshal(job.Payload, &p); err != nil {
+			return fmt.Errorf("payload: %w", err)
+		}
+		n, err := lessonterms.CollectWhiteboard(ctx, st, p.LessonID)
+		if err == nil {
+			log.Printf("worker: урок %d: кандидатов с доски %d", p.LessonID, n)
+		}
+		return err
+	})
 }
