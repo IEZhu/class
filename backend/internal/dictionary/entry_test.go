@@ -1,11 +1,7 @@
 package dictionary
 
 import (
-	"bufio"
 	"bytes"
-	"compress/gzip"
-	"errors"
-	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -79,55 +75,5 @@ func TestParseLimits(t *testing.T) {
 	}
 	if !reflect.DeepEqual(e.TranslationsRU, []string{"а", "б"}) {
 		t.Fatalf("переводы %q", e.TranslationsRU)
-	}
-}
-
-func TestReadLine(t *testing.T) {
-	long := strings.Repeat("x", maxLineBytes+10)
-	br := bufio.NewReaderSize(strings.NewReader("a\n"+long+"\nb\n"), 1<<20)
-	for _, want := range []struct {
-		line    string
-		tooLong bool
-	}{{"a", false}, {"", true}, {"b", false}} {
-		line, tooLong, err := readLine(br)
-		if err != nil || string(line) != want.line || tooLong != want.tooLong {
-			t.Fatalf("readLine = %q %v %v, ждали %q %v", line, tooLong, err, want.line, want.tooLong)
-		}
-	}
-	if _, _, err := readLine(br); !errors.Is(err, io.EOF) {
-		t.Fatalf("конец потока: %v", err)
-	}
-	// Недокачанный файл кончается посреди строки — это обрыв, а не конец
-	br = bufio.NewReader(strings.NewReader("a\n{\"word\""))
-	if _, _, err := readLine(br); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := readLine(br); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("обрыв: %v", err)
-	}
-}
-
-func TestDecompress(t *testing.T) {
-	var gz bytes.Buffer
-	zw := gzip.NewWriter(&gz)
-	_, _ = zw.Write([]byte("line\n"))
-	_ = zw.Close()
-	for name, src := range map[string]io.Reader{
-		"gzip":  &gz,
-		"plain": strings.NewReader("line\n"),
-	} {
-		r, err := decompress(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := io.ReadAll(r)
-		if err != nil || string(got) != "line\n" {
-			t.Fatalf("%s: %q %v", name, got, err)
-		}
-	}
-	if r, err := decompress(strings.NewReader("")); err != nil {
-		t.Fatalf("пустой источник: %v", err)
-	} else if got, _ := io.ReadAll(r); len(got) != 0 {
-		t.Fatalf("пустой источник: %q", got)
 	}
 }

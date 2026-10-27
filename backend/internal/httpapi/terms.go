@@ -10,6 +10,7 @@ import (
 
 	"github.com/IEZhu/class/backend/internal/lemma"
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/tatoeba"
 	"github.com/IEZhu/class/backend/internal/translate"
 )
 
@@ -22,6 +23,8 @@ const (
 	maxContextRunes = 1000
 	// maxDefinitions — статей в попапе: у set и run их десятки
 	maxDefinitions = 8
+	// maxExamples — примеров Tatoeba в попапе (flows/word-click.md)
+	maxExamples = 2
 )
 
 type termClickRequest struct {
@@ -55,21 +58,43 @@ type termClickResponse struct {
 	// не настроен или не ответил
 	Translation *termTranslation `json:"translation"`
 	Definitions []termDefinition `json:"definitions"`
-	// Examples — примеры Tatoeba: поле в контракте с S3-2, наполнит S5-4
-	// (долг D-1)
-	Examples []struct{} `json:"examples"`
+	// Examples — примеры Tatoeba (S5-4, ADR-028); пустой список, если
+	// корпус не импортирован или в нём нет леммы
+	Examples []termExample `json:"examples"`
 	// Status — статус слова в личном словаре студента (S3-5); null — слова
 	// в словаре нет или словаря у роли нет
 	Status *int `json:"status"`
 }
 
+// termExample — английское предложение с леммой и его русский перевод.
+type termExample struct {
+	Text        string             `json:"text"`
+	Translation string             `json:"translation"`
+	Source      string             `json:"source"`
+	Attribution exampleAttribution `json:"attribution"`
+}
+
+// exampleAttribution — подпись примера: CC BY 2.0 FR разрешает показ,
+// только назвав автора, поэтому у обоих предложений — автор и страница
+// на tatoeba.org. Пустой автор — у предложения нет владельца.
+type exampleAttribution struct {
+	Author            string `json:"author"`
+	URL               string `json:"url"`
+	TranslationAuthor string `json:"translation_author"`
+	TranslationURL    string `json:"translation_url"`
+	License           string `json:"license"`
+	LicenseURL        string `json:"license_url"`
+}
+
 // handleTermClick — POST /terms/click (S3-2, flows/word-click.md).
 // Источники по integrations/translation.md: кэш термина → словарный
-// датасет → LibreTranslate при кэш-миссе → запись в кэш. Повторный клик
-// по тому же слову (в любой форме) во внешние сервисы не ходит. Термин
-// заводится и переводится, только если слово знакомо — его лемма есть
-// в OEWN или у него есть статьи датасета (ADR-017): иначе клики по
-// произвольным буквам засоряли бы общий словарь и занимали LibreTranslate.
+// датасет → LibreTranslate при кэш-миссе → запись в кэш; примеры — из
+// локального корпуса Tatoeba (S5-4). Повторный клик по тому же слову
+// (в любой форме) во внешние сервисы не ходит. Термин заводится,
+// переводится и получает примеры и статус личного словаря, только если
+// слово знакомо — его лемма есть в OEWN или у него есть статьи датасета
+// (ADR-017): иначе клики по произвольным буквам засоряли бы общий
+// словарь и занимали LibreTranslate.
 func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 	var req termClickRequest
 	if err := decodeBody(w, r, &req); err != nil {
@@ -105,7 +130,7 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 
 	resp := termClickResponse{
 		Lemma: lem, Surface: surface,
-		Definitions: make([]termDefinition, 0, len(defs)), Examples: []struct{}{},
+		Definitions: make([]termDefinition, 0, len(defs)), Examples: []termExample{},
 	}
 	for _, d := range defs {
 		resp.Definitions = append(resp.Definitions, termDefinition{
@@ -123,6 +148,7 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.TermID = term.ID
+	resp.Examples = a.examples(ctx, term)
 	if tr, ok := term.Translations[translationLang]; ok {
 		resp.Translation = &termTranslation{Text: tr.Text, Source: tr.Source}
 	} else {
@@ -159,6 +185,30 @@ func (a *API) checkClickLesson(w http.ResponseWriter, r *http.Request, lessonID 
 		return false
 	}
 	return true
+}
+
+// examples — 1–2 коротких примера с леммой термина из локального корпуса
+// Tatoeba: во внешнюю сеть клик за ними не ходит. Сбой запроса (например,
+// миграция 0016 не применена) — пустой список: перевод и дефиниции попап
+// покажет и без примеров.
+func (a *API) examples(ctx context.Context, term *store.Term) []termExample {
+	found, err := a.store.Examples(ctx, term.Lemma, maxExamples)
+	if err != nil {
+		logf("examples term %d: %v", term.ID, err)
+		return []termExample{}
+	}
+	out := make([]termExample, 0, len(found))
+	for _, e := range found {
+		out = append(out, termExample{
+			Text: e.Text, Translation: e.Translation, Source: "tatoeba",
+			Attribution: exampleAttribution{
+				Author: e.Author, URL: tatoeba.SentenceURL(e.ID),
+				TranslationAuthor: e.TranslationAuthor, TranslationURL: tatoeba.SentenceURL(e.TranslationID),
+				License: tatoeba.License, LicenseURL: tatoeba.LicenseURL,
+			},
+		})
+	}
+	return out
 }
 
 // translateTerm — перевод леммы через LibreTranslate и запись в кэш.

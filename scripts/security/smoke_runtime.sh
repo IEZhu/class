@@ -21,6 +21,12 @@ case "$service" in
       exit 1
     fi
     grep -Fq 'dictimport: DATABASE_URL is required' <<<"$output"
+    # S5-4: импорт корпуса Tatoeba — там же и тоже без базы не стартует
+    if output=$(docker run --rm --network none --entrypoint tatoebaimport "$image" 2>&1); then
+      echo 'tatoebaimport started without DATABASE_URL' >&2
+      exit 1
+    fi
+    grep -Fq 'tatoebaimport: DATABASE_URL is required' <<<"$output"
     ;;
   harvester)
     # Subtitle harvester (ADR-022): the worker entrypoint plus exactly the

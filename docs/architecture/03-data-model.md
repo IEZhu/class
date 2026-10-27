@@ -77,9 +77,13 @@ subtitle_segments(video_id, idx, start_ms, end_ms, text,
 subtitle_sources(id, kind /*channel|playlist*/, external_id, title, enabled,
                  polled_at, last_error, created_at)  -- seed сборщика в 0011
 
--- корпус Tatoeba
-tatoeba_sentences(id, lang, text, owner_skill smallint)
-tatoeba_links(sentence_id, translation_id)
+-- корпус Tatoeba (S5-4, ADR-028): английские предложения с русским переводом;
+-- id — id предложения в Tatoeba (ссылка атрибуции, upsert импорта)
+tatoeba_sentences(id, lang /*en|ru*/, text, author /*CC BY: имя автора, '' — без владельца*/,
+                  lemmas text[] /*только en: леммы internal/lemma, GIN*/, import_id)
+tatoeba_links(en_id, ru_id, import_id, PRIMARY KEY(en_id, ru_id))
+tatoeba_imports(id, source_version, phase /*ru|en*/, lines_done /*контрольная точка*/,
+                finished_at, abandoned_at /*брошен -restart*/, created_at)
 
 -- практика
 generated_texts(id, group_id, level, genre, body_md, target_term_ids int[], model, created_at)
@@ -108,7 +112,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
-| tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-4, S5-6 |
+| tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
+| generated_texts | 5 | S5-6 |
 
 ## Инварианты модели
 
@@ -133,6 +138,11 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS.
 - FTS: `subtitle_segments.tsv` — GENERATED tsvector + GIN-индекс; поиск
   для видео-практики только по нему.
+- Корпус Tatoeba (ADR-028): у английского предложения `lemmas` непустой,
+  у русского — `NULL` (`CHECK tatoeba_sentences_lemmas_en`); примеры
+  ищутся по `lemmas @> ARRAY[лемма термина]` (GIN `WHERE lang = 'en'`)
+  и показываются только через пару в `tatoeba_links` — русское
+  предложение без пары, оставшееся от незавершённого импорта, не видно.
 - `users.google_refresh_token` хранится шифрованным (AES-256-GCM, ключ
   `GOOGLE_TOKEN_KEY` в `.env`, id пользователя в associated data — ADR-023),
   есть только у teachers; NULL — календарь не подключён.

@@ -2,8 +2,6 @@ package dictionary
 
 import (
 	"bufio"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/IEZhu/class/backend/internal/dumpfile"
 )
 
 const (
@@ -93,7 +93,7 @@ func Import(ctx context.Context, pool *pgxpool.Pool, src io.Reader, opt Options)
 	if err != nil {
 		return st, err
 	}
-	r, err := decompress(src)
+	r, err := dumpfile.Decompress(src)
 	if err != nil {
 		return st, err
 	}
@@ -116,7 +116,7 @@ func Import(ctx context.Context, pool *pgxpool.Pool, src io.Reader, opt Options)
 		return nil
 	}
 	for {
-		raw, tooLong, err := readLine(br)
+		raw, tooLong, err := dumpfile.ReadLine(br, maxLineBytes)
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -277,48 +277,4 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-// decompress распознаёт gzip по сигнатуре: kaikki.org отдаёт и .jsonl,
-// и .jsonl.gz, а у локального файла расширение может быть любым.
-func decompress(src io.Reader) (io.Reader, error) {
-	br := bufio.NewReader(src)
-	magic, err := br.Peek(2)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	if bytes.Equal(magic, []byte{0x1f, 0x8b}) {
-		return gzip.NewReader(br)
-	}
-	return br, nil
-}
-
-// readLine — следующая строка без перевода строки. Строка длиннее
-// maxLineBytes дочитывается впустую и помечается tooLong. Последняя
-// строка без перевода строки — обрыв источника (недокачанный файл),
-// а не конец словаря: такой прогон не должен завершиться и удалить
-// статьи, до которых не дошёл.
-func readLine(br *bufio.Reader) (line []byte, tooLong bool, err error) {
-	var buf []byte
-	for {
-		chunk, err := br.ReadSlice('\n')
-		if !tooLong && len(buf)+len(chunk) > maxLineBytes {
-			tooLong, buf = true, nil
-		}
-		if !tooLong {
-			buf = append(buf, chunk...)
-		}
-		switch {
-		case err == nil:
-			return bytes.TrimSuffix(buf, []byte("\n")), tooLong, nil
-		case errors.Is(err, bufio.ErrBufferFull):
-			continue
-		case errors.Is(err, io.EOF) && len(buf) == 0 && !tooLong:
-			return nil, false, io.EOF
-		case errors.Is(err, io.EOF):
-			return nil, false, io.ErrUnexpectedEOF
-		default:
-			return nil, false, err
-		}
-	}
 }

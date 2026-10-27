@@ -1,0 +1,13 @@
+1	eng	Run!	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+2	eng	I run every morning.	fixture_en	\N	2026-10-24 06:00:00
+3	eng	She was running to the station because the last train was about to leave.	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+4	eng	He ran home.	\N	\N	2026-10-24 06:00:00
+5	eng	The bank is closed today.	fixture_bank	2026-10-24 06:00:00	2026-10-24 06:00:00
+6	eng	This sentence has no Russian translation.	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+7	eng	If you run every single morning before work, you will slowly become stronger, calmer and much more patient with the people around you, or so my old coach says.	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+8	eng	2 + 2 = 4	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+9	eng	A line with a missing field.	fixture_en	2026-10-24 06:00:00
+abc	eng	The id is not a number.	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+10	rus	The language is not English.	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+11	eng	We are running late.	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00
+12	eng	Is the building old?	fixture_en	2026-10-24 06:00:00	2026-10-24 06:00:00

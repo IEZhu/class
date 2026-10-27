@@ -72,3 +72,15 @@ translate-models: check-env
 
 dict-import: check-env
 	$(COMPOSE) run --rm --entrypoint dictimport $(if $(DICT_DIR),-v $(abspath $(DICT_DIR)):/data:ro) worker -source "$(DICT_SOURCE)"
+
+# S5-4: корпус Tatoeba (deploy/README.md, ADR-028). tatoeba-import — импорт
+# из образа worker'а; без TATOEBA_DIR качает официальные выгрузки, с ним —
+# читает три файла с именами как на tatoeba.org из каталога хоста
+# (монтируется в /data). Повторный запуск продолжает оборванный прогон.
+TATOEBA_FILES = -links /data/eng-rus_links.tsv.bz2 \
+	-english /data/eng_sentences_detailed.tsv.bz2 -russian /data/rus_sentences_detailed.tsv.bz2
+
+.PHONY: tatoeba-import
+
+tatoeba-import: check-env
+	$(COMPOSE) run --rm --entrypoint tatoebaimport $(if $(TATOEBA_DIR),-v $(abspath $(TATOEBA_DIR)):/data:ro) worker $(if $(TATOEBA_DIR),$(TATOEBA_FILES))
