@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | caddy | caddy:2 | ~30 MB | 0 | TLS (Let's Encrypt), reverse proxy, единая точка входа |
 | web | Next.js | 300–500 MB | 0 | UI: страницы уроков, плеер, словарь, практика, доска-обёртка |
-| api | Go | 50–150 MB | 0 | REST/JSON API, auth (sessions/JWT), FSRS (go-fsrs), выдача presigned URL, LiveKit tokens, LLM-генерация текстов и «объясни» синхронно (ADR-029, ADR-039) |
+| api | Go | 50–150 MB | 0 | REST/JSON API, auth (sessions/JWT), FSRS (go-fsrs), выдача presigned URL, LiveKit tokens, LLM-генерация текстов, «объясни» и LLM-дистракторы cloze синхронно (ADR-029, ADR-039, ADR-037; дистракторы тратят лимит «объясни») |
 | postgres | postgres:16 | 300–500 MB | 0 | всё состояние + full-text search субтитров/текстов |
 | worker | Go | 100–300 MB | 1 | очереди: календарь, ASR-джобы, VTT-рендер, разбор доски `whiteboard_terms` (ADR-033), уборка сессий `session_cleanup` (ADR-035), `recording_sweep` с остановкой Egress через `LIVEKIT_*` (ADR-031); бэкфилл `srs_cards` на каждом старте (ADR-036); в образе — разовые импорты словаря и Tatoeba (`dictimport`, `tatoebaimport`, ADR-019, ADR-028) |
 | harvester | Go + yt-dlp (target `harvester`) | 50–150 MB (оценка, не замерено; потолок 512 MB, 1 CPU до замера S5-2) | 5 | сборщик субтитров: тот же worker с `WORKER_ROLE=harvester`, профиль compose `harvester` — включается явно; своя роль базы только с его таблицами, корень только на чтение ([ADR-022](decisions.md)) |
