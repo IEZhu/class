@@ -361,7 +361,7 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   откатывает и 0019 — она ссылается на `terms`). Новых ключей `.env` нет.
 - Долг D-22: кандидаты — только одиночные слова.
 
-### S3-8 Post-lesson word picker (2026-10-27)
+### S3-8 Post-lesson word picker (2026-10-27) — ◐
 
 - Решение — [ADR-034](../architecture/decisions.md). Таблица `lesson_terms`
   (lesson_id `ON DELETE CASCADE`, term_id, confirmed_by, confirmed_at;
@@ -395,6 +395,11 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - Для S4-1 (долг D-3): хук карточек — в `store.SaveUserTerm` при
   `created = true`; назначение S3-8 идёт через него
   (`store.AssignLessonTerms`). Для S4-4 — слова урока в `lesson_terms`.
+- **Для ☑ не хватает.** Пикер в браузере не прогонялся (DoD проверен
+  только API-тестом `TestPickerConfirmAndAssign`): на стенде преподаватель
+  урока на `/lesson/{id}` отмечает кандидатов, «Сохранить словарь урока»,
+  «Назначить» всем или выбранным студентам — слова у них в «Словаре»
+  и в «Карточках» (DoD).
 
 ## Риски этапа
 

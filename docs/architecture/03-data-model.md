@@ -152,7 +152,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
 | user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_term_clicks, lesson_terms (миграция `0019_lesson_terms`), whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews (миграция `0021_srs`, ADR-036) | 4 | S4-1…S4-3 |
-| cloze_items, cloze_attempts (миграция `0022_cloze`, ADR-037; `cloze_tests` не заводится — тест есть выдача) | 4 | S4-4, S4-5 |
+| cloze_items, cloze_misses, cloze_attempts; колонки utterances.text_tsv, materials.body_tsv с GIN-индексами (миграция `0022_cloze`, ADR-037; `cloze_tests` не заводится — тест есть выдача) | 4 | S4-4, S4-5 |
 | cloze_distractors (миграция `0022_cloze`, ADR-037) | 5 | S5-8 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
 | tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
