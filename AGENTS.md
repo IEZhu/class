@@ -41,7 +41,11 @@ are in Russian.
   word, ADR-037), public `app/join/[token]` for
   event guests); `lib/api.ts` calls the API server-side; `lib/roles.ts`, `lib/lesson-phase.ts`,
   `lib/lesson-title.ts`, `lib/review-session.ts`, `lib/cloze-session.ts`, `lib/timeline.ts` (player cue timing shared by
-  the transcript and video practice). Every text renders through
+  the transcript and video practice). Интерфейс (ADR-040): `app/globals.css` — единственный глобальный CSS
+  (дизайн-токены светлой и тёмной темы, база, классы общих компонентов; оглавление — в шапке файла);
+  `app/app-shell.tsx` — каркас с навигацией по роли, `app/user-bar.tsx` его реэкспортирует; `app/ui/` — общие
+  React-компоненты (кнопка, поле, сообщение, иконки `icons.tsx`, время в поясе зрителя `local-time.tsx`); стили одной
+  страницы — CSS Module рядом с ней, без inline-цветов и без новых npm-пакетов. Every text renders through
   `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
   functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr
   sprite into the git-ignored `public/excalidraw/` and `public/plyr/` before dev and build.
