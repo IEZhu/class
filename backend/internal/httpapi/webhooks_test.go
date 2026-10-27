@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/testdb"
@@ -281,18 +282,45 @@ func TestWebhookBodyLimit(t *testing.T) {
 var egressSeq atomic.Int64
 
 // egressFake — серверный API LiveKit: на StartRoomCompositeEgress отвечает
-// тем, что вернёт respond, и запоминает, куда просили писать.
+// тем, что вернёт respond, и запоминает, куда просили писать; StopEgress
+// запоминает остановленные id и отвечает stopStatus (0 — 200).
 type egressFake struct {
-	url   string
-	calls atomic.Int32
-	mu    sync.Mutex
-	paths []string
+	url        string
+	calls      atomic.Int32
+	stopStatus atomic.Int32
+	mu         sync.Mutex
+	paths      []string
+	stops      []string
+	// onStop, если задан, зовётся на каждый StopEgress до ответа
+	onStop func(egressID string)
 }
 
 func fakeEgress(t *testing.T, respond func(w http.ResponseWriter)) *egressFake {
 	t.Helper()
 	f := &egressFake{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/twirp/livekit.Egress/StopEgress" {
+			body, _ := io.ReadAll(r.Body)
+			var req livekit.StopEgressRequest
+			if err := protojson.Unmarshal(body, &req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			f.mu.Lock()
+			f.stops = append(f.stops, req.EgressId)
+			onStop := f.onStop
+			f.mu.Unlock()
+			if onStop != nil {
+				onStop(req.EgressId)
+			}
+			if code := int(f.stopStatus.Load()); code != 0 {
+				http.Error(w, `{"code":"unavailable","msg":"egress down"}`, code)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"egressId":%q,"status":"EGRESS_ENDING"}`, req.EgressId)
+			return
+		}
 		if r.URL.Path != "/twirp/livekit.Egress/StartRoomCompositeEgress" {
 			http.NotFound(w, r)
 			return
@@ -316,6 +344,17 @@ func (f *egressFake) filepaths() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.paths...)
+}
+
+func (f *egressFake) stopped() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.stops...)
+}
+
+// stopper — клиент LiveKit worker'а, нацеленный на тот же fake.
+func (f *egressFake) stopper() *livekitapi.Client {
+	return livekitapi.New(f.url, webhookKey, webhookSecret)
 }
 
 // egressStarted — Egress запущен; id у каждого запуска свой, как у LiveKit.
@@ -676,7 +715,7 @@ func TestEgressEndedMidLessonKeepsLessonLive(t *testing.T) {
 	// Окно закрылось — уборка по расписанию завершает урок: запись —
 	// больший первый сегмент, джоба recording_ready поставлена
 	moveLesson(t, s.conn, s.lessonID, -2*time.Hour)
-	runSweep(t, s.st)
+	runSweep(t, s)
 	want := fmt.Sprintf("processing rec=%s jobs=1 ", segs[0].key)
 	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, want) {
 		t.Fatalf("после уборки: %s, хотели %s…", state, want)
@@ -690,13 +729,15 @@ func TestEgressEndedMidLessonKeepsLessonLive(t *testing.T) {
 }
 
 // runSweep — тик расписания worker'а и выполнение поставленной уборки,
-// без ожидания реального периода.
-func runSweep(t *testing.T, st *store.Store) {
+// без ожидания реального периода. Egress worker останавливает через fake
+// стенда.
+func runSweep(t *testing.T, s *recordingStand) {
 	t.Helper()
 	ctx := context.Background()
+	st := s.st
 	runner := jobs.NewRunner(st.Pool(), jobs.Config{WorkerID: "sweep-worker"})
 	scheduler := jobs.NewScheduler(st.Pool())
-	worker.RegisterRecordingSweep(runner, scheduler, st)
+	worker.RegisterRecordingSweep(runner, scheduler, st, s.egress.stopper())
 	// Слот периода мог быть занят прошлым вызовом: «выполнить сейчас» —
 	// удалить строку kind (ADR-021)
 	if _, err := st.Pool().Exec(ctx, `DELETE FROM job_schedules WHERE kind = $1`, store.JobRecordingSweep); err != nil {
@@ -759,7 +800,7 @@ func TestEgressFailureDoesNotLeaveLessonLive(t *testing.T) {
 
 	// Ни одна запись не удалась, окно закрылось — уборка ставит done
 	moveLesson(t, s.conn, s.lessonID, -2*time.Hour)
-	runSweep(t, s.st)
+	runSweep(t, s)
 	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "done rec=<nil> jobs=0 ") {
 		t.Fatalf("после уборки: %s", state)
 	}
@@ -771,12 +812,15 @@ func TestEgressFailureDoesNotLeaveLessonLive(t *testing.T) {
 		t.Fatalf("room_started: %d", code)
 	}
 	moveLesson(t, lost.conn, lost.lessonID, -2*time.Hour)
-	runSweep(t, lost.st)
+	runSweep(t, lost)
 	if got := lessonStatus(t, lost.conn, lost.lessonID); got != "live" {
 		t.Fatalf("урок %s, пока сегмент ещё может закончиться", got)
 	}
+	if got := lost.egress.stopped(); len(got) != 1 {
+		t.Fatalf("после окна уборка остановила %v, хотели один Egress", got)
+	}
 	moveLesson(t, lost.conn, lost.lessonID, -5*time.Hour)
-	runSweep(t, lost.st)
+	runSweep(t, lost)
 	if state := lessonState(t, lost.conn, lost.lessonID); !strings.HasPrefix(state, "done rec=<nil> jobs=0 ") ||
 		!strings.Contains(state, "egress_ended не пришёл") {
 		t.Fatalf("потерянный сегмент: %s", state)
@@ -794,6 +838,204 @@ func TestEgressFailureDoesNotLeaveLessonLive(t *testing.T) {
 	}
 	if got := lessonStatus(t, late.conn, late.lessonID); got != "done" {
 		t.Fatalf("урок %s после сбоя за окном", got)
+	}
+}
+
+// Egress, который пишет после окна комнаты (кто-то не закрыл вкладку),
+// уборка останавливает (ADR-031): в окне не трогает, после окна зовёт
+// StopEgress каждый тик, пока сегмент active; сбой LiveKit уборку
+// не держит. egress_ended остановленного Egress отдаёт запись уроку, как
+// обычно, и останавливать больше нечего.
+func TestSweepStopsEgressAfterWindow(t *testing.T) {
+	s := newRecordingStand(t, egressStarted)
+	if code := s.room(t, eventRoomStarted, "RM_1"); code != http.StatusOK {
+		t.Fatalf("room_started: %d", code)
+	}
+	seg := segments(t, s.conn, s.lessonID)[0]
+	runSweep(t, s)
+	if got := s.egress.stopped(); len(got) != 0 {
+		t.Fatalf("в окне уборка остановила %v", got)
+	}
+
+	moveLesson(t, s.conn, s.lessonID, -2*time.Hour)
+	s.egress.stopStatus.Store(http.StatusServiceUnavailable)
+	runSweep(t, s)
+	s.egress.stopStatus.Store(0)
+	runSweep(t, s)
+	if got := s.egress.stopped(); len(got) != 2 || got[0] != seg.egressID || got[1] != seg.egressID {
+		t.Fatalf("остановки %v, хотели дважды %s", got, seg.egressID)
+	}
+	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "live rec=<nil> jobs=0 ") ||
+		!strings.Contains(state, " active ") {
+		t.Fatalf("до egress_ended остановленного Egress: %s", state)
+	}
+	if code := s.ended(t, &livekit.EgressInfo{EgressId: seg.egressID, RoomId: "RM_1",
+		Status: livekit.EgressStatus_EGRESS_COMPLETE, FileResults: []*livekit.FileInfo{{Filename: seg.key, Size: 1 << 20}}}); code != http.StatusOK {
+		t.Fatalf("egress_ended: %d", code)
+	}
+	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "processing rec="+seg.key+" jobs=1 ") {
+		t.Fatalf("после egress_ended: %s", state)
+	}
+	runSweep(t, s)
+	if got := len(s.egress.stopped()); got != 2 {
+		t.Fatalf("остановок %d, хотели прежние 2: active-сегментов нет", got)
+	}
+}
+
+// Сегмент, который уборка сочла потерянным, — не конец записи (ADR-031).
+// StopEgress уборка зовёт, пока сегмент ещё active, и только потом
+// помечает его failed. Если egress_ended с файлом всё же пришёл, урок,
+// закрытый без записи, получает её, как от closeLessonIfOver:
+// recording_s3_key, processing и recording_ready; повтор доставки ничего
+// не меняет. У урока, чья запись уже выбрана, запоздавший сегмент её
+// не меняет.
+func TestLateSegmentAfterSweepAttachesRecording(t *testing.T) {
+	ctx := context.Background()
+	s := newRecordingStand(t, egressStarted)
+	if code := s.room(t, eventRoomStarted, "RM_1"); code != http.StatusOK {
+		t.Fatalf("room_started: %d", code)
+	}
+	seg := segments(t, s.conn, s.lessonID)[0]
+	atStop := make(chan string, 4)
+	s.egress.mu.Lock()
+	s.egress.onStop = func(egressID string) {
+		var status string
+		if err := s.conn.QueryRow(ctx, `SELECT status FROM lesson_recordings WHERE egress_id = $1`, egressID).Scan(&status); err != nil {
+			t.Errorf("сегмент при остановке: %v", err)
+		}
+		atStop <- status
+	}
+	s.egress.mu.Unlock()
+	// Egress так и не закончился за 3 ч после конца урока
+	moveLesson(t, s.conn, s.lessonID, -5*time.Hour)
+	runSweep(t, s)
+	select {
+	case status := <-atStop:
+		if status != "active" {
+			t.Fatalf("при остановке сегмент уже %s, а остановка должна идти до пометки", status)
+		}
+	default:
+		t.Fatal("уборка не остановила Egress перед пометкой сегмента")
+	}
+	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "done rec=<nil> jobs=0 ") ||
+		!strings.Contains(state, "egress_ended не пришёл") {
+		t.Fatalf("после уборки: %s", state)
+	}
+
+	late := &livekit.EgressInfo{EgressId: seg.egressID, RoomId: "RM_1", Status: livekit.EgressStatus_EGRESS_COMPLETE,
+		FileResults: []*livekit.FileInfo{{Filename: seg.key, Size: 128044}}}
+	for _, delivery := range []string{"запоздавший egress_ended", "повтор доставки"} {
+		if code := s.ended(t, late); code != http.StatusOK {
+			t.Fatalf("%s: %d", delivery, code)
+		}
+		want := fmt.Sprintf("processing rec=%s jobs=1 segments=[{%s complete %s }]", seg.key, seg.egressID, seg.key)
+		if state := lessonState(t, s.conn, s.lessonID); state != want {
+			t.Fatalf("%s: %s, хотели %s", delivery, state, want)
+		}
+	}
+	var queued int
+	if err := s.conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1 AND payload = $2`,
+		store.JobRecordingReady, map[string]int64{"lesson_id": s.lessonID}).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("джоб recording_ready: %d (%v)", queued, err)
+	}
+
+	// Запись уже выбрана из другого сегмента — запоздавший больший
+	// сегмент принимается, но выбор не меняет
+	chosen := newRecordingStand(t, egressStarted)
+	if code := chosen.room(t, eventRoomStarted, "RM_a"); code != http.StatusOK {
+		t.Fatalf("room_started: %d", code)
+	}
+	first := segments(t, chosen.conn, chosen.lessonID)[0]
+	if code := chosen.ended(t, &livekit.EgressInfo{EgressId: first.egressID, Status: livekit.EgressStatus_EGRESS_COMPLETE,
+		FileResults: []*livekit.FileInfo{{Filename: first.key, Size: 1 << 20}}}); code != http.StatusOK {
+		t.Fatalf("egress_ended первого сегмента: %d", code)
+	}
+	if code := chosen.room(t, eventRoomStarted, "RM_b"); code != http.StatusOK {
+		t.Fatalf("второй room_started: %d", code)
+	}
+	second := segments(t, chosen.conn, chosen.lessonID)[1]
+	moveLesson(t, chosen.conn, chosen.lessonID, -5*time.Hour)
+	runSweep(t, chosen)
+	want := fmt.Sprintf("processing rec=%s jobs=1 ", first.key)
+	if state := lessonState(t, chosen.conn, chosen.lessonID); !strings.HasPrefix(state, want) {
+		t.Fatalf("после уборки: %s, хотели %s…", state, want)
+	}
+	if code := chosen.ended(t, &livekit.EgressInfo{EgressId: second.egressID, Status: livekit.EgressStatus_EGRESS_COMPLETE,
+		FileResults: []*livekit.FileInfo{{Filename: second.key, Size: 4 << 20}}}); code != http.StatusOK {
+		t.Fatalf("запоздавший egress_ended второго сегмента: %d", code)
+	}
+	if state := lessonState(t, chosen.conn, chosen.lessonID); !strings.HasPrefix(state, want) {
+		t.Fatalf("запоздавший сегмент сменил выбор: %s, хотели %s…", state, want)
+	}
+	if segs := segments(t, chosen.conn, chosen.lessonID); segs[1].status != "complete" {
+		t.Fatalf("запоздавший сегмент не принят: %v", segs)
+	}
+}
+
+// ADR-012: Egress запустился, а транзакция запуска не зафиксировалась —
+// урок остался scheduled без сегмента. egress_ended заводит сегмент;
+// пока окно открыто, урок ждёт, после окна уборка отдаёт запись
+// в обработку. Тот же egress_ended уже после окна завершает урок сразу.
+func TestScheduledLessonWithUncommittedSegment(t *testing.T) {
+	s := newRecordingStand(t, egressStarted)
+	key := fmt.Sprintf("recordings/%d/uncommitted.mp4", s.lessonID)
+	if code := s.ended(t, &livekit.EgressInfo{EgressId: "EG_uncommitted", RoomId: "RM_x",
+		Status: livekit.EgressStatus_EGRESS_COMPLETE, FileResults: []*livekit.FileInfo{{Filename: key, Size: 1 << 20}}}); code != http.StatusOK {
+		t.Fatalf("egress_ended: %d", code)
+	}
+	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "scheduled rec=<nil> jobs=0 ") {
+		t.Fatalf("в окне: %s", state)
+	}
+	moveLesson(t, s.conn, s.lessonID, -2*time.Hour)
+	runSweep(t, s)
+	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "processing rec="+key+" jobs=1 ") {
+		t.Fatalf("после уборки: %s", state)
+	}
+
+	late := newRecordingStand(t, egressStarted)
+	moveLesson(t, late.conn, late.lessonID, -2*time.Hour)
+	lateKey := fmt.Sprintf("recordings/%d/uncommitted.mp4", late.lessonID)
+	if code := late.ended(t, &livekit.EgressInfo{EgressId: "EG_uncommitted_late", RoomId: "RM_y",
+		Status: livekit.EgressStatus_EGRESS_COMPLETE, FileResults: []*livekit.FileInfo{{Filename: lateKey, Size: 1 << 20}}}); code != http.StatusOK {
+		t.Fatalf("egress_ended после окна: %d", code)
+	}
+	if state := lessonState(t, late.conn, late.lessonID); !strings.HasPrefix(state, "processing rec="+lateKey+" jobs=1 ") {
+		t.Fatalf("egress_ended после окна: %s", state)
+	}
+}
+
+// Охранные условия сегментов (ADR-031). Сегмент, заведённый room_started
+// без sid, совпадает с любым sid: participant_joined той же сессии уже
+// с sid второго Egress не запускает. Принятый complete-сегмент
+// запоздавший EGRESS_FAILED (устаревший повтор) не портит, и после окна
+// запись урока — он.
+func TestSegmentGuards(t *testing.T) {
+	s := newRecordingStand(t, egressStarted)
+	if code := s.room(t, eventRoomStarted, ""); code != http.StatusOK {
+		t.Fatalf("room_started без sid: %d", code)
+	}
+	if code := s.room(t, eventParticipantJoined, "RM_1"); code != http.StatusOK {
+		t.Fatalf("participant_joined: %d", code)
+	}
+	if got := s.egress.calls.Load(); got != 1 {
+		t.Fatalf("запусков Egress %d, хотели 1", got)
+	}
+	seg := segments(t, s.conn, s.lessonID)[0]
+	if code := s.ended(t, &livekit.EgressInfo{EgressId: seg.egressID, RoomId: "RM_1", Status: livekit.EgressStatus_EGRESS_COMPLETE,
+		FileResults: []*livekit.FileInfo{{Filename: seg.key, Size: 1 << 20}}}); code != http.StatusOK {
+		t.Fatalf("egress_ended: %d", code)
+	}
+	if code := s.ended(t, &livekit.EgressInfo{EgressId: seg.egressID, RoomId: "RM_1", Status: livekit.EgressStatus_EGRESS_FAILED,
+		Error: "stale retry"}); code != http.StatusOK {
+		t.Fatalf("устаревший EGRESS_FAILED: %d", code)
+	}
+	if segs := segments(t, s.conn, s.lessonID); len(segs) != 1 || segs[0] != (segment{seg.egressID, "complete", seg.key, ""}) {
+		t.Fatalf("после устаревшего EGRESS_FAILED сегменты %v", segs)
+	}
+	moveLesson(t, s.conn, s.lessonID, -2*time.Hour)
+	runSweep(t, s)
+	if state := lessonState(t, s.conn, s.lessonID); !strings.HasPrefix(state, "processing rec="+seg.key+" jobs=1 ") {
+		t.Fatalf("после уборки: %s", state)
 	}
 }
 

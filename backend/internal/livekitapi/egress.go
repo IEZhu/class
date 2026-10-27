@@ -1,9 +1,9 @@
 // Package livekitapi — тонкий клиент серверного API LiveKit.
 //
-// Пишем свой вместо server-sdk-go намеренно: оттуда нужны два вызова
-// (запуск Egress и RemoveParticipant при архивации), а тянет он полный стек
-// pion/webrtc. Протокол у LiveKit — Twirp поверх HTTP с protojson-телом,
-// то есть это один POST.
+// Пишем свой вместо server-sdk-go намеренно: оттуда нужны три вызова
+// (запуск и остановка Egress, RemoveParticipant при архивации), а тянет
+// он полный стек pion/webrtc. Протокол у LiveKit — Twirp поверх HTTP
+// с protojson-телом, то есть это один POST.
 package livekitapi
 
 import (
@@ -58,6 +58,23 @@ func (c *Client) StartRoomCompositeEgress(ctx context.Context, req *livekit.Room
 		return nil, fmt.Errorf("start egress: %w", err)
 	}
 	return info, nil
+}
+
+// StopEgress останавливает запись: Egress дописывает файл, выгружает его
+// и присылает egress_ended. stopped — остановили этим вызовом. Записи уже
+// нет или она уже кончается — не ошибка, а stopped = false: LiveKit
+// отвечает not_found или failed_precondition («egress with status …
+// cannot be stopped»), итог придёт или пришёл вебхуком.
+func (c *Client) StopEgress(ctx context.Context, egressID string) (stopped bool, err error) {
+	status, err := c.call(ctx, "livekit.Egress/StopEgress",
+		&auth.VideoGrant{RoomRecord: true}, &livekit.StopEgressRequest{EgressId: egressID}, &livekit.EgressInfo{})
+	if status == http.StatusNotFound || status == http.StatusPreconditionFailed {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stop egress %s: %w", egressID, err)
+	}
+	return true, nil
 }
 
 // call — один вызов Twirp: POST protojson-тела на /twirp/<метод> с токеном

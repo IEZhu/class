@@ -109,13 +109,40 @@ func materialFilesDelete(objects MaterialFiles) jobs.Handler {
 // не позже чем через 5 минут после закрытия окна комнаты.
 const recordingSweepEvery = 5 * time.Minute
 
-// RegisterRecordingSweep — F1 (ADR-031): уборка записей. Урок, чьё окно
-// комнаты закрылось, а egress_ended его не завершил (комната опустела
-// до конца урока, запись упала, вебхук потерялся), уходит в processing
-// с выбранной записью или в done без неё. Джоба периодическая, расписание
-// ставится рядом с хендлером (ADR-021).
-func RegisterRecordingSweep(r *jobs.Runner, s *jobs.Scheduler, st *store.Store) {
+// EgressStopper — остановка записи LiveKit (*livekitapi.Client); stopped —
+// остановил этот вызов, false — запись уже кончалась.
+type EgressStopper interface {
+	StopEgress(ctx context.Context, egressID string) (stopped bool, err error)
+}
+
+// RegisterRecordingSweep — F1 (ADR-031): уборка записей. Сначала
+// останавливается Egress, который пишет после закрытия окна комнаты:
+// кто-то не закрыл вкладку, а урок кончился, — egress_ended тогда придёт
+// с файлом сразу, а не после того, как сегмент сочтут потерянным. Сбой
+// остановки не держит уборку: сегмент остаётся active, и следующий тик
+// попробует снова. egress == nil — LiveKit у worker'а не настроен, Egress
+// пишет, пока комната не опустеет. Затем урок, чьё окно закрылось, а
+// egress_ended его не завершил (комната опустела до конца урока, запись
+// упала, вебхук потерялся), уходит в processing с выбранной записью или
+// в done без неё. Джоба периодическая, расписание ставится рядом
+// с хендлером (ADR-021).
+func RegisterRecordingSweep(r *jobs.Runner, s *jobs.Scheduler, st *store.Store, egress EgressStopper) {
 	r.Handle(store.JobRecordingSweep, func(ctx context.Context, _ jobs.Job) error {
+		if egress != nil {
+			overdue, err := st.RecordingsPastWindow(ctx)
+			if err != nil {
+				return err
+			}
+			for _, rec := range overdue {
+				stopped, err := egress.StopEgress(ctx, rec.EgressID)
+				switch {
+				case err != nil:
+					log.Printf("worker: уборка записей: урок %d: %v", rec.LessonID, err)
+				case stopped:
+					log.Printf("worker: уборка записей: урок %d, окно закрыто — egress %s остановлен", rec.LessonID, rec.EgressID)
+				}
+			}
+		}
 		n, err := st.SweepRecordings(ctx)
 		if n > 0 {
 			log.Printf("worker: уборка записей завершила уроков: %d", n)

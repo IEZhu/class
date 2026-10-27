@@ -84,7 +84,9 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
   `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
   `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots and `material_files_delete`
-  wait in the queue without storage, ADR-024), plus `DOMAIN` and `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
+  wait in the queue without storage, ADR-024), `LIVEKIT_*` (`recording_sweep` stops Egress still
+  recording after the room window; without them it does not, ADR-031), plus `DOMAIN` and
+  `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
   secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
 - Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`, `test` —

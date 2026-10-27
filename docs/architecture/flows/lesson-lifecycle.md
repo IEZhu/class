@@ -51,7 +51,8 @@ stateDiagram-v2
    вариант — audio-only. Комната опустела посреди урока — сегмент закрыт,
    урок идёт дальше, следующий вход пишет новый сегмент. *(этап 1)*
 6. Окно урока закрылось (`egress_ended` после него или уборка
-   `recording_sweep`) → самый большой сегмент в `recording_s3_key`,
+   `recording_sweep`, которая сначала останавливает Egress, ещё пишущий
+   после окна) → самый большой сегмент в `recording_s3_key`,
    `status=processing` + джоба `recording_ready` (записи нет — сразу
    `done`) → worker: строка `transcripts` и джоба `asr_submit` →
    presigned GET на запись → AssemblyAI (`speaker_labels: true`,

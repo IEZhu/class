@@ -14,6 +14,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/harvester"
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/worker"
@@ -57,8 +58,9 @@ func main() {
 	} else {
 		runner = jobs.NewRunner(st.Pool(), jobs.Config{})
 		registerCore(runner, st)
-		// F1: уроки, которые egress_ended сам не завершил (ADR-031)
-		worker.RegisterRecordingSweep(runner, scheduler, st)
+		// F1: уроки, которые egress_ended сам не завершил, и Egress, пишущий
+		// после окна комнаты (ADR-031)
+		worker.RegisterRecordingSweep(runner, scheduler, st, egressFromEnv())
 	}
 	go scheduler.Run(ctx)
 
@@ -115,6 +117,18 @@ func registerCore(runner *jobs.Runner, st *store.Store) {
 	} else {
 		log.Printf("worker: хранилище не настроено — снимки досок и удаление файлов материалов ждут в очереди")
 	}
+}
+
+// egressFromEnv — серверный API LiveKit для остановки записи после окна
+// комнаты (ADR-031): те же LIVEKIT_*, что у api. Без них уборка Egress
+// не останавливает, остальное работает.
+func egressFromEnv() worker.EgressStopper {
+	url, key, secret := os.Getenv("LIVEKIT_URL"), os.Getenv("LIVEKIT_API_KEY"), os.Getenv("LIVEKIT_API_SECRET")
+	if url == "" || key == "" || secret == "" {
+		log.Printf("worker: LIVEKIT_* не заданы — уборка записей не останавливает Egress после окна комнаты")
+		return nil
+	}
+	return livekitapi.New(url, key, secret)
 }
 
 // asrFromEnv — транскрибация AssemblyAI (S2-1, ADR-015). Без ключа —
