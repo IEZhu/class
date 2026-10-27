@@ -119,7 +119,11 @@ LLM с контекстом предложения — **закрывает до
   `SearchSubtitles(words, limit)` (FTS по `tsv`, слова через `english`).
 - Регистрация — `worker.RegisterHarvester` (`backend/internal/worker/worker.go`);
   роль процесса — `WORKER_ROLE` в `backend/cmd/worker/main.go`
-  (`core` по умолчанию | `harvester`).
+  (`core` по умолчанию | `harvester`). Runner и расписание роли harvester
+  (потолок попытки `harvester.JobTimeout`) собирает `worker.HarvesterRole`
+  — после ревью волны A, с тестом проводки
+  `backend/internal/worker/harvester_test.go`; порядок очереди —
+  `TestHarvestQueuePolicy` в `httpapi/subtitles_test.go`.
 - Образ — target `harvester` в `backend/Dockerfile`: yt-dlp 2026.10.21 и
   yt-dlp-ejs 0.8.0 по sha256 из `backend/ytdlp/requirements.txt`, Node.js
   из Alpine 3.24, пользователь 10001, `WORKER_ROLE=harvester`. Compose —
@@ -230,6 +234,8 @@ LLM с контекстом предложения — **закрывает до
   `ErrAuth`, `ErrRateLimited`, `ErrUnavailable`, `ErrTimeout`, `ErrRejected`,
   `ErrTruncated`, `ErrEmpty`, `ErrTooLarge`, `ErrBadResponse` и
   `llm.Temporary`. Фейк для тестов — `backend/internal/llm/llmtest`.
+  Переадресаций клиент не выполняет: 3xx — `ErrRejected`, ключ на чужой
+  хост не уходит (ревью волны B, `TestRedirectRefused`).
 - Генерация и валидатор — `backend/internal/textgen` (ADR-030):
   `NewParams` (белые списки, `lemma.IsWord`), промпт со словами-данными в
   `<target_words>`, `Check` (покрытие по леммам, вхождения, доля слов вне

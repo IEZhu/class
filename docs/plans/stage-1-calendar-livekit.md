@@ -524,7 +524,9 @@ teacher — только студенты своих групп (состав г
   в api — за интерфейсом `objectStore` (`api.go`). `GET /lessons/{id}`
   прячет неподтверждённые файлы от участников.
 - Джоба `material_files_delete` (`store.JobMaterialFilesDelete`, payload
-  `{"keys": [постоянные ключи]}`): ставят `store.CancelLesson` в транзакции
+  `{"keys": [постоянные ключи], "objects": [прочие объекты урока]}` —
+  `objects` с ревью волны A: снимок доски отменённого урока, удаляется как
+  есть, ADR-020): ставят `store.CancelLesson` в транзакции
   отмены урока и `store.DeleteMaterial`, когда api не удалось удалить
   объект; хендлер — `worker.RegisterMaterialFiles` в
   `backend/internal/worker/worker.go` (оба объекта каждого ключа),
@@ -579,11 +581,21 @@ ADR-010, ADR-012 на месте.
 - `store.EndLessonRecording` (вместо `FinishLessonRecording`): upsert
   сегмента по `egress_id`, затем `closeLessonIfOver` — после окна и без
   active-сегментов урок → processing с самым большим complete-сегментом
-  и джобой `recording_ready`, без записи → done.
+  и джобой `recording_ready`, без записи → done. Условие на урок —
+  `store.lessonToClose`, одно на вебхук и уборку: live, scheduled
+  с сегментами (ADR-012) и, после ревью волны B, done без
+  `recording_s3_key` и транскрипта с complete-сегментом — запоздавший
+  `egress_ended` отдаёт уроку запись.
 - Джоба `recording_sweep` (`store.SweepRecordings`,
-  `worker.RegisterRecordingSweep`, каждые 5 мин через `jobs.Scheduler`,
-  только роль core): закрывает уроки с закрытым окном, active-сегмент
-  старше `ends_at` + 3 ч помечает failed «egress_ended не пришёл».
+  `worker.RegisterRecordingSweep(runner, scheduler, st, egress)`, каждые
+  5 мин через `jobs.Scheduler`, только роль core): сначала
+  `store.RecordingsPastWindow` и `livekitapi.Client.StopEgress`
+  (`livekit.Egress/StopEgress`) для каждого active-сегмента урока
+  с закрытым окном — после ревью волны B; затем закрывает уроки с закрытым
+  окном, active-сегмент старше `ends_at` + 3 ч помечает failed
+  «egress_ended не пришёл». Worker читает `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+  `LIVEKIT_API_SECRET` (compose передаёт их и worker'у; без них остановки
+  нет, строка в журнале).
 - `POST /webhooks/livekit`: тело ≤ 1 MiB до проверки подписи (413);
   `egress_ended` с `EGRESS_FAILED`/`EGRESS_ABORTED` или без файлов — 200,
   сегмент failed; `lessonIDFromRoom` — только каноническое `lesson-{id}`.
@@ -596,7 +608,13 @@ ADR-010, ADR-012 на месте.
 - Тесты (схема `security_test`): `httpapi/webhooks_test.go` — сегменты
   посреди урока, новая сессия комнаты, уборка; сбои Egress и потерянный
   сегмент; 401 на подделки без изменений; потолок тела; окно комнаты;
-  вход гостя не ждёт вызова LiveKit при запуске записи; обратимость 0018; `httpapi/media_test.go` — матрица доступа к записи;
+  вход гостя не ждёт вызова LiveKit при запуске записи; обратимость 0018;
+  после ревью волны B — остановка Egress после окна
+  (`TestSweepStopsEgressAfterWindow`), запоздавший сегмент после уборки
+  (`TestLateSegmentAfterSweepAttachesRecording`), путь ADR-012
+  (`TestScheduledLessonWithUncommittedSegment`), охранные условия
+  сегментов (`TestSegmentGuards`), `livekitapi/egress_test.go`
+  (`TestStopEgress`); `httpapi/media_test.go` — матрица доступа к записи;
   `egress_jobs_test.go` и `transcripts_test.go` (ASR) — на сегментах после
   окна; `storage/s3_test.go` — ключ сегмента и регион.
 - Долг D-20: плеер и ASR — только самый большой сегмент.

@@ -21,6 +21,9 @@
   остаётся live до конца окна. После окна — сразу или уборкой
   `recording_sweep` — `lessons.recording_s3_key` = самый большой сегмент
   и `status=processing` (без записи — done), [ADR-031](../decisions.md).
+  Egress, который пишет после окна (кто-то не закрыл вкладку), уборка
+  останавливает: `Egress/StopEgress` из worker'а с теми же `LIVEKIT_*`.
+  Запоздавший `egress_ended` урока, закрытого без записи, отдаёт ему запись.
 - Архивация учётки (D-5) выставляет человека из комнат идущих уроков:
   `RoomService/RemoveParticipant`, прежние токены в эту комнату
   гасятся ([ADR-024](../decisions.md)).

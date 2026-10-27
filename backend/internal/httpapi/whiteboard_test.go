@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +35,7 @@ type whiteboardFixture struct {
 	// teacher и student — участники урока; outsider — студент без доступа;
 	// guest — гость другого события; eventID — его событие
 	teacher, student, outsider, guest *http.Cookie
-	eventID                           int64
+	eventID, teacherID                int64
 }
 
 func newWhiteboardFixture(t *testing.T) *whiteboardFixture {
@@ -62,7 +63,8 @@ func newWhiteboardFixture(t *testing.T) *whiteboardFixture {
 	w := securityRequest(h, "POST", "/join/"+issueGuestLink(t, h, event.ID, teacher), `{"name":"Гость"}`, nil)
 	expectStatus(t, w, http.StatusCreated)
 	return &whiteboardFixture{a: a, conn: conn, h: h, lessonID: lesson.ID,
-		teacher: teacher, student: student, outsider: outsider, guest: w.Result().Cookies()[0], eventID: event.ID}
+		teacher: teacher, student: student, outsider: outsider, guest: w.Result().Cookies()[0], eventID: event.ID,
+		teacherID: teacherID}
 }
 
 func (f *whiteboardFixture) path(suffix string) string {
@@ -487,6 +489,227 @@ func TestWhiteboardSceneSavesAndSnapshots(t *testing.T) {
 	runJob(true)
 	if j := f.snapshotJobs(t); j.count != 0 {
 		t.Fatalf("snapshot of a deleted board left %d jobs", j.count)
+	}
+}
+
+// sceneIDs — id@version элементов сохранённой сцены, удалённые с «-».
+func (f *whiteboardFixture) sceneIDs(t *testing.T) string {
+	t.Helper()
+	w := securityRequest(f.h, "GET", f.path("/scene"), "", f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var file struct {
+		Elements []struct {
+			ID        string `json:"id"`
+			Version   int    `json:"version"`
+			IsDeleted bool   `json:"isDeleted"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &file); err != nil {
+		t.Fatal(err)
+	}
+	out := []string{}
+	for _, e := range file.Elements {
+		state := ""
+		if e.IsDeleted {
+			state = "-"
+		}
+		out = append(out, fmt.Sprintf("%s%s@%d", state, e.ID, e.Version))
+	}
+	return strings.Join(out, ",")
+}
+
+// Два участника сохраняют сцену в один момент: оба сохранения ждут
+// захваченную строку доски, и ни одно не затирает элементы другого —
+// в сцене оба элемента, версия выросла на 2. Без FOR UPDATE оба прочли бы
+// одну версию, и второе UPDATE выбросило бы элемент первого.
+func TestWhiteboardConcurrentSavesMerge(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	ctx := context.Background()
+	f.open(t, f.teacher)
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(element("a", 1, "apple")), f.teacher), http.StatusOK)
+
+	holder, err := f.conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM whiteboards WHERE lesson_id = $1 FOR UPDATE`, f.lessonID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 2)
+	for _, save := range []struct {
+		cookie  *http.Cookie
+		element string
+	}{{f.teacher, element("x", 1, "ox")}, {f.student, element("y", 1, "yak")}} {
+		go func() { done <- securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(save.element), save.cookie) }()
+	}
+	// Оба сохранения стоят на блокировке строки доски
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := f.a.store.Pool().QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%whiteboards%'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= 2 {
+			break
+		}
+		select {
+		case w := <-done:
+			t.Fatalf("сохранение не дождалось блокировки: %d %s", w.Code, w.Body.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("на блокировке доски ждут %d сохранений, хотели 2", waiting)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case w := <-done:
+			expectStatus(t, w, http.StatusOK)
+		case <-time.After(10 * time.Second):
+			t.Fatal("сохранение не закончилось после снятия блокировки")
+		}
+	}
+	got := strings.Split(f.sceneIDs(t), ",")
+	slices.Sort(got)
+	if strings.Join(got, ",") != "a@1,x@1,y@1" {
+		t.Fatalf("сцена после параллельных сохранений: %v", got)
+	}
+	if b := f.board(t); b.sceneVersion != 3 {
+		t.Fatalf("версия сцены %d, хотели 3", b.sceneVersion)
+	}
+}
+
+// Отметка снимка — версия, которую записал последний снимок, даже если
+// она старше прежней: две джобы снимка разошлись, и старая сцена легла
+// поверх новой. Следующая джоба снимка тогда переписывает объект,
+// а не пропускает его как свежий.
+func TestWhiteboardSnapshotMarkFollowsLastWrite(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	ctx := context.Background()
+	f.open(t, f.teacher)
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(element("a", 1, "apple")), f.teacher), http.StatusOK)
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(element("b", 1, "pear")), f.teacher), http.StatusOK)
+	key := storage.WhiteboardKey(f.lessonID)
+	// Новая джоба унесла версию 2, разошедшаяся с ней старая записала версию 1
+	for _, version := range []int64{2, 1} {
+		if err := f.a.store.MarkWhiteboardSnapshot(ctx, f.lessonID, key, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b := f.board(t); b.snapshotVersion != 1 || b.sceneVersion != 2 {
+		t.Fatalf("отметка %+v, хотели снимок 1 при сцене 2", b)
+	}
+	if _, err := f.conn.Exec(ctx, `DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.a.store.ScheduleWhiteboardSnapshot(ctx, f.lessonID); err != nil {
+		t.Fatal(err)
+	}
+	scenes := &fakeScenes{objects: map[string][]byte{}}
+	runner := jobs.NewRunner(f.a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
+	worker.RegisterWhiteboard(runner, f.a.store, scenes)
+	if worked, err := runner.RunOnce(ctx); err != nil || !worked {
+		t.Fatalf("RunOnce = %v, %v", worked, err)
+	}
+	if got := sceneTexts(t, scenes.objects[key]); scenes.puts != 1 || got != "b@1:pear,a@1:apple" {
+		t.Fatalf("снимок не переписан: %d записей, %s", scenes.puts, got)
+	}
+	if b := f.board(t); b.snapshotVersion != 2 {
+		t.Fatalf("отметка после снимка %+v", b)
+	}
+}
+
+// Очищенная доска снова принимает рисунок (ADR-020): надгробия удалённых
+// элементов не держат сцену у предела — когда она не влезает, уходят
+// самые давние из них. Живые элементы больше предела — по-прежнему 413.
+func TestWhiteboardTombstonesPrunedAtLimit(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	f.open(t, f.teacher)
+	big := func(id string, version int, deleted bool, updated int) string {
+		return fmt.Sprintf(`{"id":%q,"type":"freedraw","version":%d,"versionNonce":1,"isDeleted":%t,"updated":%d,"points":%q}`,
+			id, version, deleted, updated, strings.Repeat("1,", maxSceneBytes*45/200))
+	}
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(big("a", 1, false, 1000), big("b", 1, false, 1100)), f.teacher), http.StatusOK)
+	// Доску очистили: оба элемента удалены
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(big("a", 2, true, 2000), big("b", 2, true, 2100)), f.teacher), http.StatusOK)
+	if got := f.sceneIDs(t); got != "-a@2,-b@2" {
+		t.Fatalf("после очистки: %s", got)
+	}
+	// Новый рисунок не влез бы вместе с надгробиями — уходит самое давнее
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(big("c", 1, false, 3000)), f.student), http.StatusOK)
+	if got := f.sceneIDs(t); got != "c@1,-b@2" {
+		t.Fatalf("после нового рисунка: %s", got)
+	}
+	w := securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(big("d", 1, false, 4000), big("e", 1, false, 4100)), f.teacher)
+	expectStatus(t, w, http.StatusRequestEntityTooLarge)
+	if got := f.sceneIDs(t); got != "c@1,-b@2" {
+		t.Fatalf("отклонённое сохранение изменило сцену: %s", got)
+	}
+}
+
+// deletedKeys — хранилище worker'а для material_files_delete: только
+// запоминает удалённые ключи.
+type deletedKeys struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (d *deletedKeys) Delete(_ context.Context, key string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.keys = append(d.keys, key)
+	return nil
+}
+
+// Отменённый урок не оставляет снимок доски в бакете: ключ уходит
+// в джобу material_files_delete той же транзакцией, что удаляет урок,
+// и worker удаляет объект как есть. Урок с доской без снимка удалять
+// в бакете нечего — джоба не ставится.
+func TestCancelLessonDeletesWhiteboardSnapshot(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	ctx := context.Background()
+	f.open(t, f.teacher)
+	key := storage.WhiteboardKey(f.lessonID)
+	if err := f.a.store.MarkWhiteboardSnapshot(ctx, f.lessonID, key, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.conn.Exec(ctx, `DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	expectStatus(t, securityRequest(f.h, "DELETE", fmt.Sprintf("/lessons/%d", f.lessonID), "", f.teacher), http.StatusNoContent)
+	var payload store.MaterialFilesDelete
+	if err := f.conn.QueryRow(ctx, `SELECT payload FROM jobs WHERE kind = $1`, store.JobMaterialFilesDelete).Scan(&payload); err != nil {
+		t.Fatalf("джоба удаления: %v", err)
+	}
+	if len(payload.Keys) != 0 || len(payload.Objects) != 1 || payload.Objects[0] != key {
+		t.Fatalf("джоба удаления %+v, хотели снимок %s", payload, key)
+	}
+	deleted := &deletedKeys{}
+	runner := jobs.NewRunner(f.a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
+	worker.RegisterMaterialFiles(runner, deleted)
+	if worked, err := runner.RunOnce(ctx); err != nil || !worked {
+		t.Fatalf("RunOnce = %v, %v", worked, err)
+	}
+	if len(deleted.keys) != 1 || deleted.keys[0] != key {
+		t.Fatalf("worker удалил %v, хотели %s", deleted.keys, key)
+	}
+
+	// Доска без снимка — объектов нет, и джобы нет
+	other, err := f.a.store.CreateLesson(ctx, nil, "Без снимка", f.teacherID, time.Now().Add(time.Hour), time.Now().Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectStatus(t, securityRequest(f.h, "GET", fmt.Sprintf("/lessons/%d/whiteboard", other.ID), "", f.teacher), http.StatusOK)
+	expectStatus(t, securityRequest(f.h, "DELETE", fmt.Sprintf("/lessons/%d", other.ID), "", f.teacher), http.StatusNoContent)
+	var queued int
+	if err := f.conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1`, store.JobMaterialFilesDelete).Scan(&queued); err != nil || queued != 0 {
+		t.Fatalf("джоб удаления для доски без снимка: %d (%v)", queued, err)
 	}
 }
 

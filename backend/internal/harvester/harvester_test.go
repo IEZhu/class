@@ -185,3 +185,12 @@ func TestFetchSubtitlesLeavesRoomBeforeDeadline(t *testing.T) {
 		t.Fatalf("calls %v, %v", f.calls, err)
 	}
 }
+
+// Потолок джобы сборщика вмещает хотя бы одно видео: иначе subtitles_fetch
+// завершается, не взявшись ни за одно (FetchSubtitles), а worker роли
+// harvester ставит его HandlerTimeout (worker.HarvesterRole).
+func TestJobTimeoutFitsOneVideo(t *testing.T) {
+	if JobTimeout <= fetchReserve {
+		t.Fatalf("JobTimeout %s не больше запаса на видео %s", JobTimeout, fetchReserve)
+	}
+}

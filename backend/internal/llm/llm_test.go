@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -227,6 +228,36 @@ func TestErrorMapping(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), testKey) {
 				t.Errorf("%s HTTP %d: ключ в ошибке: %v", name, c.status, err)
+			}
+		}
+	}
+}
+
+// Переадресация провайдера не выполняется: ключ (x-api-key у Anthropic,
+// Bearer у остальных) и промпт не уходят на чужой адрес, а 3xx — отказ
+// провайдера ErrRejected со статусом и адресом переадресации.
+func TestRedirectRefused(t *testing.T) {
+	for _, name := range Providers {
+		for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+			var leaked atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				leaked.Add(1)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			p := testProvider(t, name, func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+r.URL.Path, status)
+			})
+			_, err := p.Generate(context.Background(), testRequest)
+			target.Close()
+			var e *Error
+			if !errors.As(err, &e) || !errors.Is(err, ErrRejected) || e.Status != status || Temporary(err) {
+				t.Errorf("%s HTTP %d: %v, хотели отказ ErrRejected", name, status, err)
+			}
+			if e != nil && !strings.Contains(e.Detail, target.URL) {
+				t.Errorf("%s HTTP %d: в причине нет адреса переадресации: %q", name, status, e.Detail)
+			}
+			if n := leaked.Load(); n != 0 {
+				t.Errorf("%s HTTP %d: запрос ушёл по переадресации %d раз", name, status, n)
 			}
 		}
 	}

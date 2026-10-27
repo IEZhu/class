@@ -75,6 +75,10 @@ class BoardSync {
   private socket: Socket;
   // id → версия, которую участники уже знают (разослали мы или прислали они)
   private known = new Map<string, number>();
+  // id → версия удалённого элемента, которая уже есть в api: надгробие
+  // уходит в сохранение один раз, иначе очищенная доска весила бы в каждом
+  // сохранении, как нарисованная (ADR-020)
+  private savedDeleted = new Map<string, number>();
   private collaborators = new Map<SocketId, Collaborator>();
   private peers = 1;
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -100,7 +104,10 @@ class BoardSync {
     initial: readonly OrderedExcalidrawElement[],
     private report: (status: Status, peers: number) => void,
   ) {
-    for (const e of initial) this.known.set(e.id, e.version);
+    for (const e of initial) {
+      this.known.set(e.id, e.version);
+      if (e.isDeleted) this.savedDeleted.set(e.id, e.version);
+    }
     // Тот же origin: cookie сессии уходит и caddy пускает к ретранслятору
     // только участников урока (forward_auth в api)
     this.socket = io({ path: session.socket_path });
@@ -288,7 +295,10 @@ class BoardSync {
       return;
     }
     this.dirty = false;
-    const body = JSON.stringify({ elements: this.elements() });
+    // api сливает поэлементно и хранит то, чего нет в присланном, поэтому
+    // уже сохранённое надгробие слать незачем
+    const elements = this.elements().filter((e) => !e.isDeleted || this.savedDeleted.get(e.id) !== e.version);
+    const body = JSON.stringify({ elements });
     // При уходе со страницы обычный запрос браузер оборвёт, а keepalive
     // ограничен 64 КБ: сцена больше уходит обычным и может не дойти
     const keepalive = leaving && new TextEncoder().encode(body).byteLength < KEEPALIVE_MAX_BYTES;
@@ -307,6 +317,9 @@ class BoardSync {
         if (res.status >= 500) this.retrySave();
         this.status({ text: `не сохранено: ${parsed?.error ?? `ошибка ${res.status}`}`, error: true });
         return;
+      }
+      for (const e of elements) {
+        if (e.isDeleted) this.savedDeleted.set(e.id, e.version);
       }
       this.status({ text: "сохранено" });
     } catch {

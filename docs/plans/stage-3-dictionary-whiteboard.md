@@ -188,10 +188,14 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - `backend/internal/store/whiteboards.go` — `OpenWhiteboard`
   (`WhiteboardRoom`: имя и ключ комнаты), `WhiteboardScene`,
   `SaveWhiteboardScene` (поэлементное слияние `mergeElements` по правилу
-  `reconcileElements`, порядок по `index`; итог больше предела —
-  `ErrSceneTooLarge`, сцена не меняется),
+  `reconcileElements`, порядок по `index`; итог в предел укладывает
+  `fitScene` — после ревью волны A уходят самые давние надгробия, — живые
+  элементы больше предела — `ErrSceneTooLarge`, сцена не меняется),
   `ScheduleWhiteboardSnapshot`, `WhiteboardForSnapshot`,
-  `MarkWhiteboardSnapshot`, `WhiteboardFile` (формат `.excalidraw`).
+  `MarkWhiteboardSnapshot` (отметка ставится как есть, без `GREATEST`),
+  `WhiteboardFile` (формат `.excalidraw`).
+  `store.CancelLesson` ставит ключ снимка в `material_files_delete`
+  (`objects`).
   Джоба `whiteboard_snapshot` (`store.JobWhiteboardSnapshot`, payload
   `{"lesson_id"}`).
 - `backend/internal/jobs/jobs.go` — `EnqueueOnce`: одна ждущая джоба
