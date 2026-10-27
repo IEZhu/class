@@ -262,6 +262,55 @@ LLM с контекстом предложения — **закрывает до
   провайдера не проверен — ключей у стенда нет: с первым `LLM_API_KEY`
   сгенерировать текст на стенде.
 
+### S5-8 «объясни» в попапе, часть 1 (2026-10-27) — ◐, закрывает D-2
+
+- Разделение задачи (ADR-039): часть 1 — «объясни» — сделана здесь;
+  часть 2 — LLM-дистракторы cloze — за воркером cloze вместе с S4-4/S4-5
+  (ветка `feat/s4-cloze`), поверх того же `backend/internal/llm`.
+- Эндпоинт — `backend/internal/httpapi/explain.go` (student, teacher,
+  admin; гость — 403, долг D-27): `POST /terms/{id}/explain {surface,
+  context_sentence, lesson_id?}` → 200 `{term_id, lemma, explanation,
+  cached, provider, model, created_at}`; 400 — форма не слово или не
+  этого термина, предложение пустое, без слова или длиннее 1000 символов;
+  403/404 — чужой/нет урока в `lesson_id`; 404 — нет термина; 429 —
+  суточный лимит объяснений; 503 `llm_not_configured` без ключа, 503
+  `llm_unavailable` / 502 `llm_failed` — сбой провайдера.
+  `POST /terms/click` отдаёт `explain_available` (`canExplain`).
+- Промпт и вывод — пакет `backend/internal/explain`: `Context`
+  (нормализация предложения, `<` `>` → `‹` `›`), `Hash` (sha256 —
+  ключ кэша), `Contains`, `NewRequest` (слово, лемма и предложение в
+  `<word>`, `<lemma>`, `<sentence>` как данные), `Finish` (абзацы,
+  потолок `MaxRunes` = 1000 с обрезкой по слову).
+- Миграция `backend/migrations/0024_term_explanations.up.sql` (откат —
+  `.down.sql`): кэш `term_explanations` (PK `(term_id, context_hash)`),
+  колонка `llm_usage.kind` (`generate` | `explain`, PK `(user_id, day,
+  kind)`). Store: `TermExplanation`, `SaveTermExplanation`
+  (`backend/internal/store/explanations.go`), `TermByID`
+  (`terms.go`), `ReserveLLMRequest(ctx, user, kind, limit)` и константы
+  `LLMKindGenerate`, `LLMKindExplain` (`practice.go`; генерация S5-6
+  передаёт свой вид).
+- Ключ `.env` (`deploy/.env.example`, compose — только api):
+  `LLM_EXPLAIN_DAILY_LIMIT` (пусто — 30); провайдер — те же `LLM_*`, без
+  `LLM_API_KEY` в журнале api строка «генерация текстов и «объясни»
+  отвечают 503». Джоб и путей S3 нет.
+- Web — `web/app/clickable-text.tsx`: кнопка «объясни» в попапе
+  (`TermExplain`) при `explain_available`, состояния «объясняем…» и
+  ошибки, ответ абзацами через `<ClickableText>`; типы `TermClick`,
+  `TermExplanation` в `web/lib/api.ts`.
+- Тесты: `backend/internal/explain/explain_test.go` (нормализация, ключ,
+  форма промпта с попыткой закрыть тег, обрезка);
+  `backend/internal/httpapi/explain_test.go` на фейке `llmtest` (401,
+  403 гостю, 503 без ключа без траты лимита, `explain_available` в клике,
+  кэш по термину и нормализованному предложению — повтор у того же и
+  другого пользователя без вызова, новое предложение — новый вызов,
+  слово и предложение в промпте данными, чужой/несуществующий урок,
+  отказы до провайдера, лимит 429 и отдача из кэша сверх него, лимит
+  генераций не тронут, сбои 503/502 без записи в кэш, обрезка длинного
+  ответа, откат 0024).
+- **Для ☑ не хватает.** Части 2 (LLM-дистракторы cloze) и живого вызова
+  провайдера: ключей у стенда нет — с первым `LLM_API_KEY` объяснить
+  слово в транскрипте и проверить DoD «отвечает с учётом контекста».
+
 ## Риски этапа
 
 Блокировка IP YouTube (рейт/cookies/backoff, fallback — домашняя машина,
