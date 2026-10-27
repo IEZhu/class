@@ -104,12 +104,14 @@ func registerCore(runner *jobs.Runner, st *store.Store) {
 	}
 	worker.RegisterCalendar(runner, st, cal, "https://"+domain)
 
-	// S3-6: снимки досок пишутся в то же хранилище, что и записи (ADR-020).
-	// Без ключей джобы снимков ждут в очереди, остальное работает
+	// S3-6: снимки досок пишутся в то же хранилище, что и записи (ADR-020);
+	// долг D-4: файлы материалов удаляются из того же хранилища, что у api
+	// (ADR-024). Без ключей обе джобы ждут в очереди, остальное работает
 	if objects != nil {
 		worker.RegisterWhiteboard(runner, st, objects)
+		worker.RegisterMaterialFiles(runner, objects)
 	} else {
-		log.Printf("worker: хранилище не настроено — снимки досок ждут в очереди")
+		log.Printf("worker: хранилище не настроено — снимки досок и удаление файлов материалов ждут в очереди")
 	}
 }
 

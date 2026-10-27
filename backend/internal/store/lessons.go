@@ -246,35 +246,39 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 	return l, tx.Commit(ctx)
 }
 
-// CancelLesson удаляет запланированный урок (материалы и участники — каскадом).
-// Отдельного статуса cancelled в статус-машине нет (03-data-model.md).
-// Событие в календаре удаляет джоба calendar_sync: строки урока к её
-// запуску уже нет, поэтому id события и организатор уходят в payload.
-// Возвращает ключи файлов удалённых материалов: объекты в хранилище
-// каскад не достаёт, их удаляет вызывающий (ADR-024).
-func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) ([]string, error) {
+// CancelLesson удаляет запланированный урок. Отдельного статуса cancelled
+// в статус-машине нет (03-data-model.md). Материалы с файлами удаляются
+// явным DELETE … RETURNING s3_key: их объекты в той же транзакции уходят
+// в джобу JobMaterialFilesDelete (ADR-024) — каскад до бакета не достаёт.
+// Остальные материалы и участники удаляются каскадом. Событие в календаре
+// удаляет джоба calendar_sync: строки урока к её запуску уже нет, поэтому
+// id события и организатор уходят в payload (ADR-023).
+func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := lessonForUpdate(ctx, tx, lessonID, teacherID); err != nil {
-		return nil, err
+		return err
 	}
 	rows, err := tx.Query(ctx,
 		`DELETE FROM materials WHERE lesson_id = $1 AND s3_key IS NOT NULL RETURNING s3_key`, lessonID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if err := queueMaterialFilesDelete(ctx, tx, keys); err != nil {
+		return err
 	}
 	var eventID *string
 	if err := tx.QueryRow(ctx,
 		`DELETE FROM lessons WHERE id = $1 RETURNING gcal_event_id`, lessonID).Scan(&eventID); err != nil {
-		return nil, err
+		return err
 	}
 	// Без id событие в календарь не ставилось: удалять нечего. С id
 	// удаление ставится и без подключения: событие могло появиться раньше,
@@ -282,8 +286,8 @@ func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) ([]
 	if eventID != nil {
 		if _, err := jobs.Enqueue(ctx, tx, JobCalendarSync,
 			CalendarSync{LessonID: lessonID, TeacherID: teacherID, EventID: *eventID}); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return keys, tx.Commit(ctx)
+	return tx.Commit(ctx)
 }

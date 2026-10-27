@@ -472,43 +472,62 @@ teacher — только студенты своих групп (состав г
 
 - Миграция `backend/migrations/0013_material_files_archive.up.sql` (номер
   из резерва параллельных веток): рядом с `materials.s3_key` —
-  `file_name`, `file_content_type`, `file_size`, `file_uploaded_at`;
-  `CHECK` `materials_file_complete` и `materials_file_key_layout`
-  (ключ только под `materials/{lesson_id}/`), уникальный
-  `materials_s3_key_idx`; `users.deactivated_at`. Откат обнуляет `s3_key`,
-  объекты в бакете остаются. Решения — [ADR-024](../architecture/decisions.md).
+  `file_name`, `file_content_type`, `file_size`, `file_uploaded_at`,
+  `file_etag`; `CHECK` `materials_file_complete` (с явными `IS NOT NULL`,
+  подтверждение и ETag вместе) и `materials_file_key_layout` (ключ только
+  под `materials/{lesson_id}/`), уникальный `materials_s3_key_idx`;
+  `users.deactivated_at`. Откат обнуляет `s3_key`, объекты в бакете
+  остаются. Решения — [ADR-024](../architecture/decisions.md).
 - `backend/internal/storage/s3.go` — `PresignPut` (тип, длина и
   `Content-Disposition` в подписи; `Host` и `Content-Length` браузеру
-  не отдаются), `Stat` (размер и тип; заменил неиспользуемый `Exists`),
-  `Delete`, `NewMaterialKey` → `materials/{lesson_id}/<32 hex>.<ext>`.
+  не отдаются), `Stat` (размер, тип, ETag; заменил неиспользуемый
+  `Exists`), `Copy` (CopyObject внутри бакета), `Delete`,
+  `NewMaterialKey` → `materials/{lesson_id}/<32 hex>.<ext>`,
+  `PendingMaterialKey` → `materials-pending/{lesson_id}/<32 hex>.<ext>`,
+  `MaterialFileKeys`.
 - `backend/internal/httpapi/materials.go` — `POST /lessons/{id}/materials`
-  и `/homework` с полем `file`, `POST /materials/{id}/confirm`,
-  `GET /materials/{id}/url`, `DELETE /materials/{id}`; белый список
-  `materialFileTypes`, `maxMaterialFileBytes` = 50 MiB, `uploadURLTTL` =
-  10 мин. Хранилище в api — за интерфейсом `objectStore` (`api.go`).
-  `GET /lessons/{id}` прячет неподтверждённые файлы от участников;
-  `DELETE /lessons/{id}` удаляет и объекты (`store.CancelLesson`
-  возвращает их ключи).
+  и `/homework` с полем `file` (PUT подписывается на `materials-pending/`,
+  расширение имени — по типу, Unicode Cc/Cf в имени — 400),
+  `POST /materials/{id}/confirm` (сверка, копия на постоянный ключ, ETag),
+  `GET /materials/{id}/url` (HEAD и сверка с ETag перед подписью, 409),
+  `DELETE /materials/{id}`; белый список `materialFileTypes`,
+  `maxMaterialFileBytes` = 50 MiB, `uploadURLTTL` = 10 мин. Хранилище
+  в api — за интерфейсом `objectStore` (`api.go`). `GET /lessons/{id}`
+  прячет неподтверждённые файлы от участников.
+- Джоба `material_files_delete` (`store.JobMaterialFilesDelete`, payload
+  `{"keys": [постоянные ключи]}`): ставят `store.CancelLesson` в транзакции
+  отмены урока и `store.DeleteMaterial`, когда api не удалось удалить
+  объект; хендлер — `worker.RegisterMaterialFiles` в
+  `backend/internal/worker/worker.go` (оба объекта каждого ключа),
+  подключается в `backend/cmd/worker/main.go`, только если заданы `S3_*`;
+  `deploy/docker-compose.yml` передаёт worker'у те же `S3_*`.
 - Архив: `store.DeactivateUser` (отметка и `DELETE FROM sessions` одной
   транзакцией), `ReactivateUser`; `UserBySessionTokenHash` отсекает
   архивных. `POST /users/{id}/deactivate` и `/reactivate` (права —
   `authorizeManage`, себя — 403), `GET /users?archived=1`, логин
   архивного — 403 `account_deactivated`. `CreateLesson` архивных
   в участники не берёт; в составе групп и участниках урока — флаг `archived`.
+  После архивации — `RemoveParticipant` из комнат идущих уроков
+  (`store.LiveLessonsOf`, `backend/internal/livekitapi/room.go`), без
+  ключей LiveKit — строка в журнале.
 - Web: `web/app/lesson/[id]/material-files.tsx` — «Прикрепить файл»
   в материалы или домашку (заявка → PUT в R2 → confirm; сбой — заготовка
   удаляется), «Скачать», «Удалить»; `/admin` — «В архив» у человека,
   секция «Архив» с возвратом, отметка «в архиве» в составе групп.
-- `deploy/s3-bootstrap.sh` — второе CORS-правило: `PUT` с заголовками
-  `Content-Type`, `Content-Disposition`. **На бакете стенда не применено** —
-  долг D-14, порядок — [deploy/README.md](../../deploy/README.md).
-- S3: префикс `materials/{lesson_id}/`. Новых ключей `.env`, джоб
-  и зависимостей нет.
+- `deploy/s3-bootstrap.sh` — одно CORS-правило на `GET`, `HEAD`, `PUT`
+  с заголовками `Content-Type`, `Content-Disposition`, `Range` и
+  lifecycle-правило `materials-pending-expire` (сутки). **На бакете стенда
+  не применено** — долг D-14, порядок — [deploy/README.md](../../deploy/README.md).
+- S3: префиксы `materials/{lesson_id}/` и `materials-pending/{lesson_id}/`.
+  Новых ключей `.env` и зависимостей нет.
 - Тесты на схеме `security_test`: `httpapi/materials_test.go` (фейк
-  хранилища: лимиты, права, 409/422, скачивание, удаление, отмена урока,
-  `CHECK` ключа), `httpapi/archive_test.go` (сессии, логин, списки,
-  снапшот, обратимость 0013); `storage/s3_test.go` — подпись PUT,
-  `Stat`/`Delete` на httptest.
+  хранилища: лимиты, права, имя для скачивания, 409/422, равенство
+  размера, charset, копия на постоянный ключ, подмена после подтверждения,
+  гонка отказа с удалением, 503 без хранилища, `CHECK` 0013, джоба
+  уборки с повтором после сбоя), `httpapi/archive_test.go` (сессии, логин,
+  списки, снапшот, `RemoveParticipant` на httptest-фейке LiveKit,
+  обратимость 0013); `storage/s3_test.go` — точный набор заголовков
+  подписи PUT, `Stat`/`Copy`/`Delete` на httptest.
 
 ## Риски этапа
 

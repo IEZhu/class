@@ -98,8 +98,8 @@ services:
       start_period: 10s
 
   # S1-2: фоновые джобы из таблицы jobs (ADR-003, ADR-013). Портов нет:
-  # worker ходит в postgres, а с S2-1 — ещё в AssemblyAI и хранилище. Healthcheck не заведён — HTTP у worker'а
-  # нет, а упавший процесс поднимет restart.
+  # worker ходит в postgres, а с S2-1 — ещё в AssemblyAI и хранилище. Healthcheck
+  # не заведён — HTTP у worker'а нет, а упавший процесс поднимет restart.
   worker:
     build:
       context: ../backend
@@ -120,8 +120,9 @@ services:
       # адреса вебхука, иначе он не стартует
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
-      # S3_* — хранилище записей: запись и VTT для S2-1…S2-3, снимки досок
-      # S3-6 (ADR-020); без ключей снимки ждут в очереди, остальное работает
+      # S3_* — то же хранилище, что у api: запись и VTT для S2-1…S2-3, снимки
+      # досок S3-6 (ADR-020), удаление файлов материалов material_files_delete
+      # (долг D-4, ADR-024); без ключей снимки и удаления файлов ждут в очереди
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-auto}
       S3_ENDPOINT: ${S3_ENDPOINT:-}

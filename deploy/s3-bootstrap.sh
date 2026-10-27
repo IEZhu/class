@@ -46,28 +46,28 @@ else
 fi
 
 say "2/4 CORS: GET/HEAD и PUT, только с домена платформы"
-# GET/HEAD нужен плееру: запись отдаётся браузеру по presigned GET напрямую
-# из R2, минуя VPS. ExposeHeaders — чтобы работала перемотка по Range.
+# GET/HEAD нужен плееру и скачиванию: запись и файлы материалов отдаются
+# браузеру по presigned GET напрямую из R2, минуя VPS. Range — перемотка,
+# ExposeHeaders — чтобы плеер видел длину и диапазон ответа.
 # PUT — загрузка файлов материалов браузером по presigned PUT (ADR-024):
-# ровно те два заголовка, что api вносит в подпись; длину браузер ставит
-# сам. Правило PUT появилось с долгом D-4 — бакет, настроенный раньше,
-# надо перенастроить повторным запуском скрипта (долг D-14).
+# Content-Type и Content-Disposition api вносит в подпись, длину браузер
+# ставит сам. Набор заголовков сверяет TestPresignPutShape
+# (backend/internal/storage/s3_test.go) — менять вместе.
+# Правило одно на все методы: с двумя (GET/HEAD и отдельно PUT) SeaweedFS
+# отвечал на preflight PUT без Access-Control-Allow-Methods, и браузер
+# загрузку блокировал (ревью D-4). PUT появился с долгом D-4 — бакет,
+# настроенный раньше, надо перенастроить повторным запуском (долг D-14).
 r2 put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
   \"CORSRules\": [{
     \"AllowedOrigins\": [\"$ORIGIN\"],
-    \"AllowedMethods\": [\"GET\", \"HEAD\"],
-    \"AllowedHeaders\": [\"*\"],
+    \"AllowedMethods\": [\"GET\", \"HEAD\", \"PUT\"],
+    \"AllowedHeaders\": [\"Content-Type\", \"Content-Disposition\", \"Range\"],
     \"ExposeHeaders\": [\"Content-Length\", \"Content-Range\", \"Accept-Ranges\", \"ETag\"],
-    \"MaxAgeSeconds\": 3000
-  }, {
-    \"AllowedOrigins\": [\"$ORIGIN\"],
-    \"AllowedMethods\": [\"PUT\"],
-    \"AllowedHeaders\": [\"Content-Type\", \"Content-Disposition\"],
     \"MaxAgeSeconds\": 3000
   }]
 }"
 
-say "3/4 lifecycle: записи дешевеют, транскрипты не трогаем"
+say "3/4 lifecycle: записи дешевеют, незавершённые загрузки исчезают"
 # У R2 только Standard и Infrequent Access, архивного класса нет (ADR-009).
 # Удаление старого видео с сохранением аудио и VTT — отдельное решение,
 # когда накопится статистика просмотров; сейчас только переход в IA.
@@ -75,6 +75,10 @@ say "3/4 lifecycle: записи дешевеют, транскрипты не �
 # «одну копию в неделю после 7 суток» lifecycle не выразить, а истечение
 # по возрасту стёрло бы последние копии, если бэкапы перестанут делаться.
 # Чистит сам deploy/backup-pg.sh (ADR-014); в IA они тоже не уходят.
+# materials-pending/ — загрузки файлов материалов до подтверждения
+# (ADR-024): confirm копирует годный файл на постоянный ключ, остальное
+# (отвергнутое, брошенное, догруженное после удаления материала или
+# отмены урока) стирается через сутки — ссылка на загрузку живёт 10 минут.
 r2 put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration "{
   \"Rules\": [
     {
@@ -82,6 +86,12 @@ r2 put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configurati
       \"Status\": \"Enabled\",
       \"Filter\": {\"Prefix\": \"recordings/\"},
       \"Transitions\": [{\"Days\": $IA_AFTER_DAYS, \"StorageClass\": \"STANDARD_IA\"}]
+    },
+    {
+      \"ID\": \"materials-pending-expire\",
+      \"Status\": \"Enabled\",
+      \"Filter\": {\"Prefix\": \"materials-pending/\"},
+      \"Expiration\": {\"Days\": 1}
     },
     {
       \"ID\": \"abort-incomplete-uploads\",

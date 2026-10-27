@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -135,11 +136,22 @@ func TestNewMaterialKey(t *testing.T) {
 	if a == b {
 		t.Error("два ключа совпали — имя не случайное")
 	}
+	// До подтверждения файл лежит под materials-pending/ с тем же именем:
+	// этот префикс бакет чистит lifecycle-правилом из s3-bootstrap.sh
+	if got, want := PendingMaterialKey(a), "materials-pending/"+strings.TrimPrefix(a, "materials/"); got != want {
+		t.Errorf("PendingMaterialKey(%q) = %q, хотели %q", a, got, want)
+	}
 }
 
 // Тип, длина и Content-Disposition входят в подпись: браузер не загрузит
 // по этой ссылке другой тип или другой объём (ADR-024). Host и
 // Content-Length ему не отдаём — их выставляет сам браузер.
+//
+// Набор заголовков сверяется точно: web шлёт put.Header как есть, а CORS
+// бакета (AllowedHeaders в deploy/s3-bootstrap.sh) пускает только
+// Content-Type, Content-Disposition и Range. Новый подписанный заголовок
+// после обновления SDK сломал бы preflight каждой загрузки — менять их
+// вместе.
 func TestPresignPutShape(t *testing.T) {
 	c, err := New(Config{
 		Bucket: "lingua-class", Endpoint: "https://acc.r2.cloudflarestorage.com",
@@ -165,10 +177,13 @@ func TestPresignPutShape(t *testing.T) {
 		t.Errorf("X-Amz-Expires = %q, хотели 600", got)
 	}
 	signed := strings.Split(q.Get("X-Amz-SignedHeaders"), ";")
-	for _, h := range []string{"content-disposition", "content-length", "content-type", "host"} {
-		if !slices.Contains(signed, h) {
-			t.Errorf("%s не в подписи: %v", h, signed)
-		}
+	slices.Sort(signed)
+	if want := []string{"content-disposition", "content-length", "content-type", "host"}; !slices.Equal(signed, want) {
+		t.Errorf("подписаны %v, хотели ровно %v", signed, want)
+	}
+	browser := slices.Sorted(maps.Keys(put.Header))
+	if want := []string{"Content-Disposition", "Content-Type"}; !slices.Equal(browser, want) {
+		t.Errorf("браузеру уходят заголовки %v, хотели ровно %v (AllowedHeaders в s3-bootstrap.sh)", browser, want)
 	}
 	if got := put.Header.Get("Content-Type"); got != "application/pdf" {
 		t.Errorf("Content-Type для браузера = %q", got)
@@ -195,6 +210,7 @@ func TestStatAndDelete(t *testing.T) {
 		case r.Method == http.MethodHead && r.URL.Path == "/b/materials/1/present.pdf":
 			w.Header().Set("Content-Length", "42")
 			w.Header().Set("Content-Type", "application/pdf")
+			w.Header().Set("ETag", `"9a0364b9e99bb480dd25e1f0284c8555"`)
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodHead:
 			w.WriteHeader(http.StatusNotFound)
@@ -213,8 +229,9 @@ func TestStatAndDelete(t *testing.T) {
 	ctx := context.Background()
 
 	info, err := c.Stat(ctx, "materials/1/present.pdf")
-	if err != nil || info.Size != 42 || info.ContentType != "application/pdf" {
-		t.Errorf("Stat = (%+v, %v), хотели 42 байта application/pdf", info, err)
+	if err != nil || info.Size != 42 || info.ContentType != "application/pdf" ||
+		info.ETag != `"9a0364b9e99bb480dd25e1f0284c8555"` {
+		t.Errorf("Stat = (%+v, %v), хотели 42 байта application/pdf с ETag", info, err)
 	}
 	if _, err := c.Stat(ctx, "materials/1/missing.pdf"); !errors.Is(err, ErrObjectNotFound) {
 		t.Errorf("Stat отсутствующего = %v, хотели ErrObjectNotFound", err)
@@ -232,6 +249,40 @@ func TestStatAndDelete(t *testing.T) {
 	}
 	if err := none.Delete(ctx, "k"); err != ErrNotConfigured {
 		t.Errorf("Delete на nil-клиенте = %v", err)
+	}
+}
+
+// Copy — один CopyObject: источник в x-amz-copy-source (бакет/ключ),
+// назначение в пути; ошибка хранилища возвращается вызывающему.
+func TestCopy(t *testing.T) {
+	var method, path, source string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, source = r.Method, r.URL.Path, r.Header.Get("X-Amz-Copy-Source")
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`))
+		}
+	}))
+	defer srv.Close()
+	c, err := New(Config{Bucket: "b", Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := c.Copy(ctx, "materials-pending/1/x.pdf", "materials/1/x.pdf"); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if method != http.MethodPut || path != "/b/materials/1/x.pdf" || source != "b/materials-pending/1/x.pdf" {
+		t.Errorf("CopyObject ушёл как %s %s из %q", method, path, source)
+	}
+	status = http.StatusForbidden
+	if err := c.Copy(ctx, "materials-pending/1/x.pdf", "materials/1/x.pdf"); err == nil {
+		t.Error("ошибка хранилища проглочена")
+	}
+	var none *Client
+	if err := none.Copy(ctx, "a", "b"); err != ErrNotConfigured {
+		t.Errorf("Copy на nil-клиенте = %v", err)
 	}
 }
 

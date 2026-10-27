@@ -60,6 +60,7 @@ type objectStore interface {
 	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
 	PresignPut(ctx context.Context, key, contentType, contentDisposition string, size int64, ttl time.Duration) (storage.PresignedPut, error)
 	Stat(ctx context.Context, key string) (storage.ObjectInfo, error)
+	Copy(ctx context.Context, src, dst string) error
 	Delete(ctx context.Context, key string) error
 }
 

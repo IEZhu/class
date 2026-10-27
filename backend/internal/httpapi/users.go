@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -44,7 +45,7 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("archived"); v != "" {
 		var err error
 		if archived, err = strconv.ParseBool(v); err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", "archived — true или false")
+			writeError(w, http.StatusBadRequest, "bad_request", "archived — 1/0 или true/false")
 			return
 		}
 	}
@@ -238,7 +239,35 @@ func (a *API) handleSetUserArchived(archived bool) http.HandlerFunc {
 		case err != nil:
 			internalError(w, op, err)
 		default:
+			if archived {
+				a.removeFromLiveRooms(r.Context(), id)
+			}
 			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+}
+
+// removeFromLiveRooms — после архивации выставить человека из комнат
+// идущих уроков: сессий у него уже нет, но выданный раньше токен LiveKit
+// живёт до roomTokenTTL. RemoveParticipant заодно гасит прежние токены
+// в эту комнату (revoke_token_ts). Архивация уже зафиксирована, поэтому
+// сбой LiveKit — только строка в журнале (ADR-024).
+func (a *API) removeFromLiveRooms(ctx context.Context, userID int64) {
+	if !a.cfg.liveKitConfigured() {
+		logf("архив %d: LiveKit не настроен — из комнат не выставляем", userID)
+		return
+	}
+	// Ответ уже решён: клиент, закрывший запрос, не должен оборвать вызовы
+	ctx = context.WithoutCancel(ctx)
+	lessons, err := a.store.LiveLessonsOf(ctx, userID)
+	if err != nil {
+		logf("архив %d: идущие уроки не прочитаны: %v", userID, err)
+		return
+	}
+	identity := strconv.FormatInt(userID, 10)
+	for _, lessonID := range lessons {
+		if err := a.livekit.RemoveParticipant(ctx, roomName(lessonID), identity); err != nil {
+			logf("архив %d: из комнаты %s не выставлен: %v", userID, roomName(lessonID), err)
 		}
 	}
 }

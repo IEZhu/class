@@ -14,14 +14,16 @@ s3://lingua/
   transcripts/{lesson_id}.vtt
   whiteboards/{lesson_id}.json
   materials/{lesson_id}/{random}.{ext}  (ключ выбирает api, ADR-024)
+  materials-pending/{lesson_id}/{random}.{ext}  (загрузка до confirm, lifecycle — сутки)
   backups/pg/{date}.dump.zst        (пока BACKUP_S3_* пусты; цель — свой бакет, ADR-014)
 ```
 
 ## Доступ
 
-- Bucket приватный; CORS — только с домена платформы: GET/HEAD (плеер,
-  скачивание) и PUT с заголовками `Content-Type`, `Content-Disposition`
-  (загрузка файлов материалов).
+- Bucket приватный; CORS — одно правило, только с домена платформы:
+  GET/HEAD (плеер, скачивание) и PUT (загрузка файлов материалов),
+  заголовки `Content-Type`, `Content-Disposition`, `Range`
+  (`deploy/s3-bootstrap.sh`).
 - Presigned GET (TTL ~30 мин) выдаёт api после проверки прав
   (`GET /media/{lesson_id}/url`, `GET /materials/{id}/url`, VTT — в
   `GET /lessons/{id}/transcript`). Исключение — ссылка на запись для
@@ -30,9 +32,15 @@ s3://lingua/
 - VTT (`transcripts/{lesson_id}.vtt`, `text/vtt; charset=utf-8`) кладёт
   worker сам: файл маленький и текстовый, медиа-инвариант не задет.
 - Файлы материалов (ADR-024): преподаватель урока получает presigned PUT
-  на 10 мин — тип, длина и `Content-Disposition` с именем файла входят
-  в подпись; затем `POST /materials/{id}/confirm`, где api сверяет объект
-  (HEAD) с заявленным. Белый список типов и потолок 50 MiB — в
+  на 10 мин под `materials-pending/` — тип, длина и `Content-Disposition`
+  с именем файла входят в подпись; затем `POST /materials/{id}/confirm`:
+  api сверяет объект (HEAD) с заявленным, копирует его внутри бакета
+  (CopyObject) на постоянный ключ под `materials/` и запоминает ETag.
+  Перед каждой ссылкой на скачивание объект сверяется с ним снова.
+  Lifecycle стирает `materials-pending/` через сутки: брошенные, отвергнутые
+  и догруженные после удаления загрузки там не копятся. Объекты удалённых
+  материалов и отменённых уроков убирает worker (`material_files_delete`).
+  Белый список типов и потолок 50 MiB — в
   `backend/internal/httpapi/materials.go`.
 - S3 отдаёт HTTP Range → перемотка в плеере Plyr работает из коробки.
 - Egress LiveKit пишет в бакет сам (S3 credentials в конфиге egress-запроса);
@@ -64,6 +72,8 @@ s3://lingua/
   и словарь ценнее сырого видео.
 - Аудио + VTT храним вечно.
 - Незавершённые multipart-загрузки убираются через 7 дней.
+- `materials-pending/` — загрузки файлов материалов до подтверждения —
+  удаляются через сутки (ADR-024, долг D-14 до перенастройки бакета).
 
 ## Ротация токена R2 (долг D-6)
 
