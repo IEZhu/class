@@ -116,9 +116,15 @@ func (a *API) startRecording(ctx context.Context, event *livekit.WebhookEvent) e
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		// Запись в этой сессии уже идёт (повторная доставка, следующий
-		// участник), её прямо сейчас запускает параллельная доставка, окно
-		// комнаты закрыто либо урок завершён
+		// участник), окно комнаты закрыто либо урок завершён
 		return nil
+	case errors.Is(err, store.ErrLessonBusy):
+		// Урок держит другая транзакция: перенос, отмена или параллельная
+		// доставка, которая запускает Egress прямо сейчас. 503 — повтор
+		// доставки застанет урок свободным и запустит запись либо увидит,
+		// что она уже идёт
+		logf("%s: урок %d занят другой транзакцией — запуск записи до повтора доставки", event.Event, lessonID)
+		return err
 	case err != nil:
 		logf("%s: урок %d: %v", event.Event, lessonID, err)
 		return err

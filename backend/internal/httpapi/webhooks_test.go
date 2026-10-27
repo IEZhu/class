@@ -528,7 +528,8 @@ func TestRecordingRetriesAfterEgressFailure(t *testing.T) {
 
 // Две одновременные доставки (room_started и participant_joined первого
 // участника приходят почти вместе) запускают один Egress, и вторая
-// не ждёт, пока первая договорится с LiveKit.
+// не ждёт, пока первая договорится с LiveKit: урок занят — 503, и повтор
+// доставки, пришедший после запуска, видит идущую запись.
 func TestRecordingStartsOnce(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -561,21 +562,78 @@ func TestRecordingStartsOnce(t *testing.T) {
 	}
 	select {
 	case code := <-deliver(eventParticipantJoined):
-		if code != http.StatusOK {
-			t.Errorf("параллельная доставка: ответ %d, хотели 200", code)
+		if code != http.StatusServiceUnavailable {
+			t.Errorf("параллельная доставка: ответ %d, хотели 503 и повтор", code)
 		}
 	case <-time.After(5 * time.Second):
-		t.Error("параллельная доставка ждёт первую, а должна пропустить урок")
+		t.Error("параллельная доставка ждёт первую, а должна сразу ответить 503")
 	}
 	close(release)
 	if code := <-first; code != http.StatusOK {
 		t.Errorf("первая доставка: ответ %d, хотели 200", code)
+	}
+	if code := s.room(t, eventParticipantJoined, ""); code != http.StatusOK {
+		t.Errorf("повтор параллельной доставки: ответ %d, хотели 200", code)
 	}
 	if got := s.egress.calls.Load(); got != 1 {
 		t.Errorf("запусков Egress %d, хотели 1", got)
 	}
 	if got := lessonStatus(t, s.conn, s.lessonID); got != "live" {
 		t.Errorf("статус %q, хотели live", got)
+	}
+}
+
+// Строку урока держит другая транзакция — перенос (RescheduleLesson берёт
+// её FOR UPDATE) или отмена: запуск записи не пропускает урок с ответом
+// 200, после которого LiveKit доставку не повторит и урок остался бы без
+// записи, а сразу отвечает 503 (ревью PR #17, ADR-012). Повтор после
+// снятия блокировки запускает запись как обычно.
+func TestRecordingRetriesWhileLessonLocked(t *testing.T) {
+	s := newRecordingStand(t, egressStarted)
+	ctx := context.Background()
+	holder, err := s.st.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Rollback(ctx) })
+	if _, err := holder.Exec(ctx, `SELECT id FROM lessons WHERE id = $1 FOR UPDATE`, s.lessonID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, event := range []string{eventRoomStarted, eventParticipantJoined} {
+		r := signedWebhook(t, &livekit.WebhookEvent{Event: event, Room: &livekit.Room{Name: roomName(s.lessonID), Sid: "RM_1"}})
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			w := httptest.NewRecorder()
+			s.h.ServeHTTP(w, r)
+			done <- w
+		}()
+		select {
+		case w := <-done:
+			if w.Code != http.StatusServiceUnavailable || !jsonHasCode(t, w.Body.Bytes(), "recording_not_started") {
+				t.Fatalf("%s при занятом уроке: %d %s, хотели 503 и повтор", event, w.Code, w.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s ждёт блокировку урока, а должен сразу ответить 503", event)
+		}
+	}
+	if got := s.egress.calls.Load(); got != 0 {
+		t.Fatalf("Egress запущен %d раз при занятом уроке", got)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "scheduled" {
+		t.Fatalf("статус %q при занятом уроке, хотели scheduled", got)
+	}
+
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := s.room(t, eventRoomStarted, "RM_1"); code != http.StatusOK {
+		t.Fatalf("повтор room_started после снятия блокировки: %d", code)
+	}
+	segs := segments(t, s.conn, s.lessonID)
+	if got := s.egress.calls.Load(); got != 1 || len(segs) != 1 || segs[0].status != "active" ||
+		lessonStatus(t, s.conn, s.lessonID) != "live" {
+		t.Fatalf("после повтора: запусков %d, сегменты %v, статус %s", got, segs, lessonStatus(t, s.conn, s.lessonID))
 	}
 }
 
