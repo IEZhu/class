@@ -1,6 +1,7 @@
 package cloze
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"testing"
@@ -136,6 +137,33 @@ func TestPickDistractorsOddShapedTarget(t *testing.T) {
 	plain := PickDistractors(Target{Lemma: "coat", Surface: "coat"}, words("x-ray", "t-shirt"), "She took off her warm coat.", []byte("s"))
 	if len(plain) != Distractors || !slices.Contains(plain, "x-ray") || !slices.Contains(plain, "t-shirt") {
 		t.Fatalf("обычная цель: %q", plain)
+	}
+}
+
+// Число непохожих вариантов ответа не выдаёт (ревью финальной правки):
+// у обычного ответа среди вариантов словаря непохожих ноль или два — нет
+// ни одной непохожей кнопки, которая заведомо не ответ, ни одной обычной
+// среди трёх непохожих, которая заведомо ответ; у непохожего ответа
+// непохожих не меньше двух. Словарь с четырьмя непохожими
+// существительными, 2000 ключей пункта на каждый ответ.
+func TestPickDistractorsOddShapeCount(t *testing.T) {
+	pool := words("teacher", "window", "river", "sweater", "student", "kitchen", "doctor", "bottle",
+		"t-shirt", "co-worker", "half-brother", "ex-wife")
+	const sentence = "We talked about it for a long time."
+	for _, key := range []string{"teacher", "window", "t-shirt", "co-worker"} {
+		target := Target{Lemma: key, Surface: key}
+		counts := map[int]int{} // непохожих вариантов в наборе → наборов
+		for i := range 2000 {
+			seed := []byte(fmt.Sprint(i))
+			d := PickDistractors(target, pool, sentence, seed)
+			if len(d) != Distractors {
+				t.Fatalf("%s, ключ %d: дистракторы %q", key, i, d)
+			}
+			counts[countFunc(Options(key, d, seed), odd)]++
+		}
+		if letters(key) && (counts[1] > 0 || counts[3] > 0 || counts[2] == 0) || !letters(key) && counts[0]+counts[1] > 0 {
+			t.Fatalf("%s: непохожих вариантов в наборе → наборов %v", key, counts)
+		}
 	}
 }
 

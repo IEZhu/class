@@ -48,7 +48,9 @@ const (
 // латинских букв (t-shirt, café, o'clock) — первым берётся такой же
 // непохожий дистрактор: иначе ответ был бы единственной кнопкой с
 // дефисом, диакритикой или апострофом. Такого слова нет — вариантов нет
-// (nil), и пункта из этого предложения не будет (ADR-037).
+// (nil), и пункта из этого предложения не будет (ADR-037). У обычного
+// ключа непохожих дистракторов ноль или два: ни одна непохожая кнопка,
+// ни одна обычная среди трёх непохожих ответа не выдаёт.
 func PickDistractors(t Target, pool []Word, sentence string, seed []byte) []string {
 	taken := map[string]bool{t.Lemma: true, lemma.Normalize(t.Surface): true}
 	for _, w := range lemma.Words(sentence) {
@@ -101,28 +103,55 @@ func PickDistractors(t Target, pool []Word, sentence string, seed []byte) []stri
 		return strings.Compare(a.word, b.word)
 	})
 	out := make([]string, 0, Distractors)
-	// take добирает out до n слов по порядку кандидатов; odd — только
-	// слова не из одних латинских букв
-	take := func(n int, odd bool) {
+	// take добирает out до n слов по порядку кандидатов, годных fits
+	// (nil — любых)
+	take := func(n int, fits func(string) bool) {
 		for _, c := range cands {
 			if len(out) == n {
 				return
 			}
 			l := lemma.Lemma(c.word)
-			if odd && letters(c.word) || !distractor(c.word) || taken[c.word] || taken[l] {
+			if fits != nil && !fits(c.word) || !distractor(c.word) || taken[c.word] || taken[l] {
 				continue
 			}
 			taken[c.word], taken[l] = true, true
 			out = append(out, c.word)
 		}
 	}
-	if !letters(t.Lemma) {
-		if take(1, true); len(out) == 0 {
+	plain := letters(t.Lemma)
+	if !plain {
+		if take(1, odd); len(out) == 0 {
 			return nil
 		}
 	}
-	take(Distractors, false)
+	take(Distractors, nil)
+	if plain && countFunc(out, odd)%2 == 1 {
+		// Нечётное число непохожих у обычного ключа выдало бы ответ: одна
+		// непохожая кнопка — заведомо не он, единственная обычная среди
+		// трёх непохожих — он. Последний непохожий уступает место
+		// следующему обычному кандидату
+		i := len(out) - 1
+		for !odd(out[i]) {
+			i--
+		}
+		out = slices.Delete(out, i, i+1)
+		take(Distractors, letters)
+	}
 	return out
+}
+
+// odd — слово не из одних строчных латинских букв (дефис, диакритика,
+// апостроф): среди ключей словаря такие редки.
+func odd(w string) bool { return !letters(w) }
+
+func countFunc(words []string, f func(string) bool) int {
+	n := 0
+	for _, w := range words {
+		if f(w) {
+			n++
+		}
+	}
+	return n
 }
 
 // distractor — слово годится в варианты: одно слово, не служебное.
