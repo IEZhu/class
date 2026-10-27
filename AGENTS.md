@@ -10,7 +10,8 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 ## Layout
 
 - `backend/`: Go module `github.com/IEZhu/class/backend` (Go 1.26). `cmd/api/main.go` (HTTP API),
-  `cmd/worker/main.go` (background jobs), `internal/httpapi/` (routes, auth, middleware, groups,
+  `cmd/worker/main.go` (background jobs), `cmd/dictimport/` (one-off dictionary import shipped in
+  the worker image, ADR-019), `internal/httpapi/` (routes, auth, middleware, groups,
   lessons, invites, rooms, users, LiveKit webhook), `internal/store/` (Postgres via pgx),
   `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
   retries, ADR-013), `internal/worker/` (job handlers by kind), `migrations/` (golang-migrate
@@ -18,7 +19,9 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.
 - `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
-  `tools` profile; the whiteboard relay `whiteboard` under the `whiteboard` profile, ADR-020;
+  `tools` profile; `libretranslate` under the `translate` profile and its one-off model installer
+  `libretranslate-models` under `translate-setup`, ADR-018; the whiteboard relay `whiteboard`
+  under the `whiteboard` profile, ADR-020;
   the subtitle `harvester` under the `harvester` profile, ADR-022), `Caddyfile`, `.env.example`;
   `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`, `systemd/` timer): nightly pg_dump to S3
   and restore (S1-7, ADR-014).
@@ -48,15 +51,18 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   Google Calendar connection is unavailable and `calendar_sync` skips lesson creates and
   reschedules while event deletes wait in the queue, ADR-023),
   `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_WEBHOOK_SECRET` (without the key a recorded lesson
-  goes straight to `done` without a transcript; ADR-015), `COMPOSE_PROFILES=whiteboard` with
-  `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503),
+  goes straight to `done` without a transcript; ADR-015), `LIBRETRANSLATE_URL` with
+  `COMPOSE_PROFILES=translate` (word translation; without them `POST /terms/click` answers
+  `translation: null`, ADR-018), `COMPOSE_PROFILES=whiteboard` with
+  `WHITEBOARD_ENABLED=1` (the lesson whiteboard; without them it returns 503; several profiles
+  are comma-separated: `translate,whiteboard`),
   `HARVESTER_COOKIES_FILE` (YouTube cookies for the `harvester` profile, readable by uid 10001),
   `HARVESTER_DATABASE_URL` (the harvester's own least-privilege role, created by
   `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022). The api also
   reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
   `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
-  `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots wait in the queue without storage), plus `DOMAIN` and
-  `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
+  `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots and `material_files_delete`
+  wait in the queue without storage, ADR-024), plus `DOMAIN` and `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
   secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
 - Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`; `predev`

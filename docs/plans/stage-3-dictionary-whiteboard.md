@@ -176,17 +176,20 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - Решение — [ADR-020](../architecture/decisions.md): excalidraw-complete
   закрыт автором, доска собрана из редактора `@excalidraw/excalidraw`
   0.18.1 в web, ретранслятора `excalidraw/excalidraw-room` (тег
-  `sha-03ff435` + digest) и хранения сцены в api. Комната — `lesson-{id}`,
-  сообщения шифруются ключом комнаты; вместо `?room=` — путь
+  `sha-03ff435` + digest) и хранения сцены в api. Комната — случайное
+  имя (`room_id`, из id урока не выводится), сообщения шифруются ключом
+  комнаты; имя и ключ выдаются только участникам; вместо `?room=` — путь
   `/whiteboard/lesson-{id}/socket.io/` за forward_auth.
 - Миграция `backend/migrations/0010_whiteboards.up.sql` (откат — `.down.sql`,
   заодно убирает ждущие снимки): таблица `whiteboards` — `lesson_id` (PK,
-  каскад с уроком), `room_key`, `scene jsonb` (массив элементов как есть,
+  каскад с уроком), `room_id` (UNIQUE), `room_key`, `scene jsonb` (массив элементов как есть,
   с удалёнными), `scene_version`, `snapshot_version`, `scene_s3_key`,
   `updated_at`, `created_at`.
-- `backend/internal/store/whiteboards.go` — `OpenWhiteboard`,
-  `WhiteboardScene`, `SaveWhiteboardScene` (поэлементное слияние
-  `mergeElements` по правилу `reconcileElements`, порядок по `index`),
+- `backend/internal/store/whiteboards.go` — `OpenWhiteboard`
+  (`WhiteboardRoom`: имя и ключ комнаты), `WhiteboardScene`,
+  `SaveWhiteboardScene` (поэлементное слияние `mergeElements` по правилу
+  `reconcileElements`, порядок по `index`; итог больше предела —
+  `ErrSceneTooLarge`, сцена не меняется),
   `ScheduleWhiteboardSnapshot`, `WhiteboardForSnapshot`,
   `MarkWhiteboardSnapshot`, `WhiteboardFile` (формат `.excalidraw`).
   Джоба `whiteboard_snapshot` (`store.JobWhiteboardSnapshot`, payload
@@ -198,7 +201,8 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   волны A — единственный хелпер записи объекта, им же пишется VTT S2-3),
   `WhiteboardKey` → `whiteboards/{lesson_id}.json`.
 - `backend/internal/httpapi/whiteboard.go` — `GET /lessons/{id}/whiteboard`,
-  `GET` и `PUT /lessons/{id}/whiteboard/scene` (предел 1 MiB),
+  `GET` и `PUT /lessons/{id}/whiteboard/scene` (предел 1 MiB и на тело,
+  и на сцену после слияния — 413 `scene_too_large`),
   `GET /whiteboard/auth` для forward_auth; `webhooks.go` — `room_finished`
   ставит снимок сразу. Ключ `.env` api: `WHITEBOARD_ENABLED` (без `1` — 503).
 - `backend/internal/worker/whiteboard.go` + `worker.RegisterWhiteboard`;
@@ -210,8 +214,10 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   `COMPOSE_PROFILES`, `WHITEBOARD_ENABLED`.
 - web: вкладки `app/lesson/[id]/live-tabs.tsx` («Класс» / «Доска», только
   в фазе live; живая секция шире колонки), `whiteboard.tsx` (next/dynamic
-  без SSR), `whiteboard-canvas.tsx` (синхронизация, сохранение через 2 с,
-  курсоры), `whiteboard-sync.ts` (AES-GCM); `scripts/excalidraw-assets.mjs`
+  без SSR), `whiteboard-canvas.tsx` (синхронизация, сохранение через 2 с
+  и сразу при уходе со страницы — `pagehide`/`visibilitychange`, запрос
+  `keepalive`; ответ новичкам `SCENE_INIT` не чаще раза в 10 с на сокет,
+  одной рассылкой через 1 с; курсоры), `whiteboard-sync.ts` (AES-GCM); `scripts/excalidraw-assets.mjs`
   (`predev`/`prebuild`) кладёт шрифты в `public/excalidraw/` (в .gitignore).
   Зависимости: `@excalidraw/excalidraw` 0.18.1, `socket.io-client` ^4.8.4,
   `overrides` для nanoid, lodash-es, katex.

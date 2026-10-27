@@ -58,9 +58,9 @@
 | `POST /terms/click` | `{surface, context_sentence, lesson_id?}` → `{term_id, lemma, surface, translation: {text, source} \| null, definitions[{word, pos, glosses[], translations_ru[]}], examples: []}`; источники: кэш → датасет → LibreTranslate (без него `translation: null`, 200); незнакомое слово (нет ни в OEWN, ни в датасете) — `term_id: 0`, `translation: null`, термин не заводится (ADR-017); 400 — не одно слово, контекст > 1000 символов; 403/404 — чужой/нет урока в `lesson_id` | все, включая гостя | 3 |
 | `POST /user-terms` | «в мой словарь» / смена статуса | student | 3 |
 | `POST /lessons/{id}/terms/confirm` | `{term_ids[], assign_to[]}` — словарь урока | teacher | 3 |
-| `GET /lessons/{id}/whiteboard` | вход на доску: `{room, key, socket_path}` — комната `lesson-{id}`, ключ AES-GCM, путь ретранслятора; доска заводится при первом входе; 409 — урок в processing/done, 503 — доска не включена (ADR-020) | участники | 3 |
+| `GET /lessons/{id}/whiteboard` | вход на доску: `{room, key, socket_path}` — случайное имя комнаты ретранслятора (из id урока не выводится), ключ AES-GCM, путь ретранслятора; доска заводится при первом входе; 409 — урок в processing/done, 503 — доска не включена (ADR-020) | участники | 3 |
 | `GET /lessons/{id}/whiteboard/scene` | сцена файлом `.excalidraw` (элементы как есть, с удалёнными), и после урока; 404 — доску не открывали | участники | 3 |
-| `PUT /lessons/{id}/whiteboard/scene` | `{elements: [...]}` → поэлементное слияние с сохранённой, `{version}`; снимок в S3 не чаще раза в минуту; 409/503 — как у входа, 413 — больше 1 MiB | участники | 3 |
+| `PUT /lessons/{id}/whiteboard/scene` | `{elements: [...]}` → поэлементное слияние с сохранённой, `{version}`; снимок в S3 не чаще раза в минуту; 409/503 — как у входа, 413 — тело или сцена после слияния больше 1 MiB (сохранённая не меняется) | участники | 3 |
 | `GET /whiteboard/auth` | решение forward_auth caddy для `/whiteboard/lesson-{id}/socket.io/` (урок — из `X-Forwarded-Uri`): 204 участнику незавершённого урока, 401/403/409 иначе | участники | 3 |
 | `GET /practice/queue` | due-карточки по FSRS | student | 4 |
 | `POST /reviews` | рейтинг карточки (again/hard/good/easy) | student | 4 |

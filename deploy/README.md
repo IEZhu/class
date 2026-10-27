@@ -22,6 +22,8 @@ Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socke
                           GOOGLE_TOKEN_KEY (S1-1), LIVEKIT_*, S3_*,
                           BACKUP_S3_* (ADR-014)
                        2: ASSEMBLYAI_*
+                       3: COMPOSE_PROFILES, LIBRETRANSLATE_URL (ADR-018),
+                          WHITEBOARD_ENABLED (ADR-020)
                        5: HARVESTER_COOKIES_FILE, HARVESTER_DATABASE_URL (ADR-022),
                           LLM_PROVIDER, LLM_API_KEY
 backup-pg.sh         ночной pg_dump | zstd → S3, retention 7/30 (S1-7)
@@ -338,3 +340,43 @@ make dict-import DICT_DIR=/var/tmp/wiktextract DICT_SOURCE=/data/raw-wiktextract
 
 Каталог монтируется в контейнер только на чтение; файл должен быть
 читаем для пользователя контейнера (uid 10001): `chmod a+r`.
+
+## Доска (S3-6)
+
+Решение — ADR-020 в [decisions.md](../docs/architecture/decisions.md).
+Ретранслятор доски `whiteboard` (excalidraw-room, образ закреплён
+digest'ом) живёт в профиле `whiteboard` и по умолчанию не стартует: его
+образ не проходит блокирующий скан ADR-011 (долг D-11), включение —
+решение владельца стенда. Без него вкладка «Доска» отвечает 503,
+остальной стенд работает; снимки сцен worker пишет в хранилище `S3_*`.
+
+```bash
+# в deploy/.env (профили — через запятую):
+#   COMPOSE_PROFILES=whiteboard     # с переводом: translate,whiteboard
+#   WHITEBOARD_ENABLED=1
+make migrate    # миграция 0010_whiteboards, если ещё не применена
+make up         # поднимется whiteboard, api перечитает WHITEBOARD_ENABLED
+docker compose -f deploy/docker-compose.yml ps whiteboard   # healthy в пределах минуты
+```
+
+**WebSocket через host-nginx.** Снаружи ретранслятор доступен по
+`/whiteboard/lesson-{id}/socket.io/` (caddy пускает после forward_auth
+в api). caddy WebSocket проксирует сам, а host-nginx (ADR-004) без
+заголовков `Upgrade` его не пробросит: socket.io тогда останется на
+long-polling — доска работает, но с задержкой и лишними запросами.
+В vhost `/etc/nginx/sites-available/lang.wondermr.com` владельцу стенда
+нужен для `/whiteboard/` блок с теми же `proxy_pass` и заголовками, что
+у основного `location /`, плюс три строки:
+
+```nginx
+location /whiteboard/ {
+    # proxy_pass и proxy_set_header — как в location / этого vhost
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+затем `sudo nginx -t && sudo systemctl reload nginx`. Проверка:
+в DevTools браузера на вкладке «Доска» запрос `socket.io/?EIO=4&transport=websocket`
+отвечает `101 Switching Protocols`.

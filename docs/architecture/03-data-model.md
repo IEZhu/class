@@ -84,7 +84,8 @@ cloze_items(test_id, idx, sentence, answer_term_id, distractor_term_ids int[])
 cloze_attempts(id, test_id, user_id, answers jsonb, score, finished_at)
 
 whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены Excalidraw
-           /* + room_key, scene jsonb, scene_version, snapshot_version (ADR-020) */
+           /* + room_id, room_key, scene jsonb, scene_version, snapshot_version,
+              created_at (ADR-020) */
 ```
 
 ## Когда появляется каждая таблица

@@ -31,21 +31,31 @@ type WhiteboardSnapshotJob struct {
 // ErrBadScene — присланные элементы не похожи на элементы Excalidraw.
 var ErrBadScene = errors.New("bad whiteboard scene")
 
+// ErrSceneTooLarge — сцена после слияния вышла бы за предел.
+var ErrSceneTooLarge = errors.New("whiteboard scene too large")
+
 // maxElementIDLen — id элементов Excalidraw — nanoid из 21 символа;
 // потолок с запасом отсекает мусор, а не чужие форматы.
 const maxElementIDLen = 128
 
-// OpenWhiteboard возвращает ключ комнаты доски урока, заводя доску
-// с ключом newKey при первом открытии. Параллельные первые открытия
-// получают один и тот же ключ: проигравшая вставка читает строку
+// WhiteboardRoom — комната доски у ретранслятора: ID — её имя, Key — ключ
+// AES-GCM её сообщений. Оба случайные и выдаются только участникам урока.
+type WhiteboardRoom struct {
+	ID  string
+	Key string
+}
+
+// OpenWhiteboard возвращает комнату доски урока, заводя доску
+// с комнатой fresh при первом открытии. Параллельные первые открытия
+// получают одну и ту же комнату: проигравшая вставка читает строку
 // победившей.
-func (s *Store) OpenWhiteboard(ctx context.Context, lessonID int64, newKey string) (string, error) {
-	var key string
+func (s *Store) OpenWhiteboard(ctx context.Context, lessonID int64, fresh WhiteboardRoom) (WhiteboardRoom, error) {
+	var room WhiteboardRoom
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO whiteboards (lesson_id, room_key) VALUES ($1, $2)
+		`INSERT INTO whiteboards (lesson_id, room_id, room_key) VALUES ($1, $2, $3)
 		 ON CONFLICT (lesson_id) DO UPDATE SET room_key = whiteboards.room_key
-		 RETURNING room_key`, lessonID, newKey).Scan(&key)
-	return key, err
+		 RETURNING room_id, room_key`, lessonID, fresh.ID, fresh.Key).Scan(&room.ID, &room.Key)
+	return room, err
 }
 
 // WhiteboardScene — элементы сцены доски урока как есть, вместе
@@ -65,8 +75,10 @@ func (s *Store) WhiteboardScene(ctx context.Context, lessonID int64) (json.RawMe
 // доски захвачена до конца транзакции: сохранения одной доски идут по
 // очереди, и ни одно не затирает элементы другого. Если слияние ничего
 // не изменило, версия и очередь не трогаются. Возвращает версию сцены;
-// ErrNotFound — доску не открывали, ErrBadScene — мусор в элементах.
-func (s *Store) SaveWhiteboardScene(ctx context.Context, lessonID int64, incoming []json.RawMessage, snapshotDelay time.Duration) (int64, error) {
+// ErrNotFound — доску не открывали, ErrBadScene — мусор в элементах,
+// ErrSceneTooLarge — слитая сцена больше maxBytes (сохранённая остаётся
+// как была).
+func (s *Store) SaveWhiteboardScene(ctx context.Context, lessonID int64, incoming []json.RawMessage, maxBytes int, snapshotDelay time.Duration) (int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -98,6 +110,12 @@ func (s *Store) SaveWhiteboardScene(ctx context.Context, lessonID int64, incomin
 	scene, err := json.Marshal(merged)
 	if err != nil {
 		return 0, err
+	}
+	// Слияние элементы только добавляет, поэтому предел — на итог, а не
+	// на одно сохранение: иначе сохранения по частям растили бы сцену
+	// без конца
+	if len(scene) > maxBytes {
+		return 0, fmt.Errorf("%w: %d байт", ErrSceneTooLarge, len(scene))
 	}
 	if err := tx.QueryRow(ctx,
 		`UPDATE whiteboards SET scene = $2, scene_version = scene_version + 1, updated_at = now()
