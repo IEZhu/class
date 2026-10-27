@@ -425,7 +425,10 @@ LLM с контекстом предложения — **закрывает до
   — только JSON. Проверка (`cloze.ParseDistractors`, `llmOption`):
   известное слово (строчные латинские буквы до 24 байт, лемма в OEWN или
   служебное), не ответ и не его форма, без повторов, ровно три — иначе
-  у пункта закрепляются дистракторы словаря.
+  у пункта закрепляются дистракторы словаря. Ответ не такой формы
+  (`cloze.LLMShaped`: t-shirt, café, o'clock, длиннее 24 байт) в LLM не
+  идёт: выдача и этот запрос сразу закрепляют за ним словарь, даже при
+  записи кэша.
   Промпт и разбор — `backend/internal/cloze/llm.go` (`DistractorRequest`,
   `ParseDistractors`, `Generate`), тесты на фейке `llmtest` —
   `llm_test.go`.
@@ -451,7 +454,12 @@ LLM с контекстом предложения — **закрывает до
   `llm_unavailable` при сбое провайдера, 503 без ключа, чужой пункт
   рядом со своим — 404; `TestParseDistractorsRejectsInjectedOptions`
   (`backend/internal/cloze/llm_test.go`) — ссылки, фразы, разметка,
-  маскировка и выдуманные слова отсекаются.
+  маскировка и выдуманные слова отсекаются, правило букв — и для слов
+  OEWN (o'clock, x-ray, well-known, came's); `TestLLMShaped`,
+  `TestClozeOddShapedAnswersStayOffLLM` — непохожий ответ не получает
+  вариантов LLM; `TestClozeLLMSetWithoutCacheNotServed` — пункт без
+  записи кэша не отдаётся; `TestClozeLockKeepsFirstSet` — закреплённый
+  набор не перезаписывается.
 - **Для ☑ не хватает.** Живого вызова провайдера (обеих частей S5-8):
   ключей у стенда нет — с первым `LLM_API_KEY` проверить DoD
   «дистракторы правдоподобны» на выдаче cloze.
