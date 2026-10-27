@@ -583,7 +583,7 @@ func TestGuestJoinDoesNotWaitForEgressStart(t *testing.T) {
 	joinCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_, lessonID, err := s.st.JoinAsGuest(joinCtx, hashToken("rec-guest-link"), "Гость", "guest+rec@guest.invalid",
-		hashToken("rec-guest-session"), time.Now().Add(time.Hour))
+		hashToken("rec-guest-session"))
 	if err != nil || lessonID != s.lessonID {
 		t.Fatalf("вход гостя во время запуска записи: урок %d, %v", lessonID, err)
 	}
