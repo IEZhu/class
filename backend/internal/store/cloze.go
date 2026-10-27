@@ -33,27 +33,63 @@ type ClozeTarget struct {
 	Lemma  string
 	// LessonID — урок, с которого слово пришло в словарь; nil — вне урока
 	LessonID *int64
+	// Checked — слову недавно искали новое предложение и не нашли
+	// (свежая запись cloze_misses): искать снова рано
+	Checked bool
 }
 
-// ClozeTargets — слова пользователя по очереди упражнения: сначала те,
-// чей показ наступил (самые просроченные первыми), затем карточки на
-// шагах обучения и переобучения, затем остальные по ближайшему показу.
-func (s *Store) ClozeTargets(ctx context.Context, userID int64, now time.Time, limit int) ([]ClozeTarget, error) {
+// ClozeTargets — страница слов пользователя по очереди упражнения
+// (limit слов после offset): сначала те, чей показ наступил (самые
+// просроченные первыми), затем карточки на шагах обучения
+// и переобучения, затем остальные по ближайшему показу. Checked —
+// запись cloze_misses позже staleBefore и позже новых источников
+// пользователя (ADR-037): материала его урока или подтверждения файла
+// материала, своего сгенерированного текста, законченного импорта
+// Tatoeba. Реплик среди источников нет — у транскрипта нет времени
+// готовности, новые реплики слово получит, когда запись устареет.
+func (s *Store) ClozeTargets(ctx context.Context, userID int64, now, staleBefore time.Time, limit, offset int) ([]ClozeTarget, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT c.term_id, t.lemma, ut.source_lesson_id
+		`WITH fresh AS (
+		     SELECT greatest($3::timestamptz,
+		         (SELECT max(greatest(m.created_at, m.file_uploaded_at))
+		          FROM lesson_participants lp JOIN materials m ON m.lesson_id = lp.lesson_id
+		          WHERE lp.user_id = $1),
+		         (SELECT max(g.created_at) FROM generated_texts g WHERE g.user_id = $1),
+		         (SELECT max(ti.finished_at) FROM tatoeba_imports ti)) AS since
+		 )
+		 SELECT c.term_id, t.lemma, ut.source_lesson_id, coalesce(cm.checked_at > fresh.since, false)
 		 FROM srs_cards c
 		 JOIN user_terms ut USING (user_id, term_id)
 		 JOIN terms t ON t.id = c.term_id
+		 CROSS JOIN fresh
+		 LEFT JOIN cloze_misses cm ON cm.user_id = c.user_id AND cm.term_id = c.term_id
 		 WHERE c.user_id = $1
 		 ORDER BY c.due_at <= $2 DESC, c.state IN ('learning', 'relearning') DESC, c.due_at, c.term_id
-		 LIMIT $3`, userID, now, limit)
+		 LIMIT $4 OFFSET $5`, userID, now, staleBefore, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClozeTarget, error) {
 		var t ClozeTarget
-		return t, row.Scan(&t.TermID, &t.Lemma, &t.LessonID)
+		return t, row.Scan(&t.TermID, &t.Lemma, &t.LessonID, &t.Checked)
 	})
+}
+
+// RecordClozeMisses запоминает, что словам termIDs при проверке в at не
+// нашлось нового годного предложения (cloze_misses). Слово, которое уже
+// убрали из словаря, пропускается.
+func (s *Store) RecordClozeMisses(ctx context.Context, userID int64, termIDs []int64, at time.Time) error {
+	if len(termIDs) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO cloze_misses (user_id, term_id, checked_at)
+		 SELECT user_id, term_id, $3 FROM user_terms WHERE user_id = $1 AND term_id = ANY($2)
+		 ON CONFLICT (user_id, term_id) DO UPDATE SET checked_at = EXCLUDED.checked_at`, userID, termIDs, at)
+	if PgErrorCode(err) == "23503" { // foreign_key_violation: слово убрали между выборкой и вставкой
+		return nil
+	}
+	return err
 }
 
 // ClozeWords — словарь пользователя (леммы и урок-источник): запас
@@ -71,12 +107,13 @@ func (s *Store) ClozeWords(ctx context.Context, userID int64) ([]cloze.Word, err
 	})
 }
 
-// ClozeItemRef — пункт пользователя по слову: ключ и сколько раз на него
-// отвечали.
+// ClozeItemRef — пункт пользователя по слову: ключ, предложение и
+// сколько раз на него отвечали.
 type ClozeItemRef struct {
 	ID          int64
 	TermID      int64
 	ContextHash []byte
+	Sentence    string
 	Attempts    int
 	// LastAttemptAt — nil, если ответов не было
 	LastAttemptAt *time.Time
@@ -85,7 +122,7 @@ type ClozeItemRef struct {
 // ClozeItemRefs — пункты пользователя по словам termIDs, старые первыми.
 func (s *Store) ClozeItemRefs(ctx context.Context, userID int64, termIDs []int64) ([]ClozeItemRef, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT i.id, i.term_id, i.context_hash, count(a.id), max(a.created_at)
+		`SELECT i.id, i.term_id, i.context_hash, i.sentence, count(a.id), max(a.created_at)
 		 FROM cloze_items i LEFT JOIN cloze_attempts a ON a.item_id = i.id
 		 WHERE i.user_id = $1 AND i.term_id = ANY($2)
 		 GROUP BY i.id ORDER BY i.id`, userID, termIDs)
@@ -94,7 +131,7 @@ func (s *Store) ClozeItemRefs(ctx context.Context, userID int64, termIDs []int64
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClozeItemRef, error) {
 		var r ClozeItemRef
-		return r, row.Scan(&r.ID, &r.TermID, &r.ContextHash, &r.Attempts, &r.LastAttemptAt)
+		return r, row.Scan(&r.ID, &r.TermID, &r.ContextHash, &r.Sentence, &r.Attempts, &r.LastAttemptAt)
 	})
 }
 
@@ -130,13 +167,49 @@ type ClozeQuery struct {
 	LessonID *int64
 }
 
+// clozeQueriesSQL — tsquery каждого запроса ($2 — его номер у слова $1):
+// лемма и формы через «или».
+const clozeQueriesSQL = `
+	SELECT w.ord, string_agg('(' || t::text || ')', ' | ')
+	FROM unnest($1::text[], $2::int[]) AS w (word, ord), plainto_tsquery('english', w.word) AS t
+	WHERE numnode(t) > 0
+	GROUP BY w.ord ORDER BY w.ord`
+
+// clozeWordTextsSQL — тексты уроков пользователя $1 со словом $2
+// (tsquery): до $4 реплик транскриптов и до $4 материалов, урок слова
+// ($3) первым, затем новые уроки. Урок — тот, где пользователь
+// в снапшоте участников, как у вьюера транскрипта; материал — тот, что
+// видят участники (visibleMaterials: без файла или с подтверждённой
+// загрузкой). Слово сверяется с хранимыми лексемами (text_tsv, body_tsv,
+// 0022), а не с to_tsvector, пересчитанным в запросе (ADR-037).
+const clozeWordTextsSQL = `
+	WITH lesson AS MATERIALIZED (
+	    SELECT l.id, l.starts_at, l.id IS NOT DISTINCT FROM $3::bigint AS own
+	    FROM lesson_participants lp JOIN lessons l ON l.id = lp.lesson_id
+	    WHERE lp.user_id = $1
+	)
+	SELECT kind, lesson_id, material_id, text FROM (
+	(SELECT 0 AS kind, l.id AS lesson_id, NULL::bigint AS material_id, u.text, l.own, l.starts_at, u.idx::bigint AS pos
+	 FROM utterances u JOIN transcripts tr ON tr.id = u.transcript_id JOIN lesson l ON l.id = tr.lesson_id
+	 WHERE u.text_tsv @@ $2::tsquery
+	 ORDER BY own DESC, starts_at DESC, lesson_id, pos
+	 LIMIT $4)
+	UNION ALL
+	(SELECT 1 AS kind, l.id AS lesson_id, m.id AS material_id, m.body_md AS text, l.own, l.starts_at, m.id AS pos
+	 FROM materials m JOIN lesson l ON l.id = m.lesson_id
+	 WHERE m.body_tsv @@ $2::tsquery AND (m.s3_key IS NULL OR m.file_uploaded_at IS NOT NULL)
+	 ORDER BY own DESC, starts_at DESC, lesson_id, pos
+	 LIMIT $4)
+	) x
+	ORDER BY kind, own DESC, starts_at DESC, lesson_id, pos`
+
 // ClozeLessonTexts — тексты уроков пользователя для каждого запроса
-// (в порядке queries): реплики транскриптов, затем материалы; урок слова
-// первым, затем новые уроки. Урок — тот, где пользователь в снапшоте
-// участников, как у вьюера транскрипта. Индекса FTS у реплик нет,
-// поэтому tsvector каждой реплики и материала считается один раз на всю
-// пачку слов (MATERIALIZED), а не на каждое. Точное вхождение проверяет
-// cloze.Find.
+// (в порядке queries): реплики транскриптов, затем материалы. tsquery
+// запросов считается одним вызовом, тексты — запросом на слово
+// (clozeWordTextsSQL) безымянным оператором: план строится под само
+// слово, и планировщик по статистике лексем решает, идти ли по
+// GIN-индексу (редкое слово) или по своим урокам (частое слово, короткая
+// история). Точное вхождение проверяет cloze.Find.
 func (s *Store) ClozeLessonTexts(ctx context.Context, userID int64, queries []ClozeQuery) ([][]ClozeText, error) {
 	out := make([][]ClozeText, len(queries))
 	if len(queries) == 0 {
@@ -144,59 +217,50 @@ func (s *Store) ClozeLessonTexts(ctx context.Context, userID int64, queries []Cl
 	}
 	var words []string
 	var ords []int32
-	lessons := make([]*int64, len(queries))
 	for i, q := range queries {
 		for _, w := range q.Words {
 			words, ords = append(words, w), append(ords, int32(i))
 		}
-		lessons[i] = q.LessonID
 	}
-	rows, err := s.pool.Query(ctx, `
-		WITH want AS (
-		    SELECT w.ord, string_agg('(' || t::text || ')', ' | ')::tsquery AS query
-		    FROM unnest($2::text[], $3::int[]) AS w (word, ord), plainto_tsquery('english', w.word) AS t
-		    WHERE numnode(t) > 0
-		    GROUP BY w.ord
-		), lesson AS MATERIALIZED (
-		    SELECT l.id, l.starts_at FROM lesson_participants lp JOIN lessons l ON l.id = lp.lesson_id
-		    WHERE lp.user_id = $1
-		), doc AS MATERIALIZED (
-		    SELECT 0 AS kind, l.id AS lesson_id, l.starts_at, NULL::bigint AS material_id, u.idx AS pos,
-		           u.text, to_tsvector('english', u.text) AS tsv
-		    FROM lesson l JOIN transcripts tr ON tr.lesson_id = l.id JOIN utterances u ON u.transcript_id = tr.id
-		    UNION ALL
-		    SELECT 1, l.id, l.starts_at, m.id, m.id, m.body_md, to_tsvector('english', m.body_md)
-		    FROM lesson l JOIN materials m ON m.lesson_id = l.id
-		)
-		SELECT want.ord, x.kind, x.lesson_id, x.material_id, x.text
-		FROM want CROSS JOIN LATERAL (
-		    SELECT * FROM (
-		        SELECT d.kind, d.lesson_id, d.material_id, d.text,
-		               row_number() OVER (PARTITION BY d.kind
-		                   ORDER BY d.lesson_id IS NOT DISTINCT FROM ($4::bigint[])[want.ord + 1] DESC,
-		                            d.starts_at DESC, d.lesson_id, d.pos) AS rn
-		        FROM doc d WHERE d.tsv @@ want.query
-		    ) ranked WHERE rn <= $5
-		) x
-		ORDER BY want.ord, x.kind, x.rn`,
-		userID, words, ords, lessons, clozeLessonTexts)
+	rows, err := s.pool.Query(ctx, clozeQueriesSQL, words, ords)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var ord, kind int
-		var t ClozeText
-		if err := rows.Scan(&ord, &kind, &t.LessonID, &t.MaterialID, &t.Text); err != nil {
+	type wordQuery struct {
+		ord   int
+		query string
+	}
+	tsqueries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (wordQuery, error) {
+		var q wordQuery
+		return q, row.Scan(&q.ord, &q.query)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, q := range tsqueries {
+		if out[q.ord], err = s.clozeWordTexts(ctx, userID, q.query, queries[q.ord].LessonID); err != nil {
 			return nil, err
 		}
+	}
+	return out, nil
+}
+
+// clozeWordTexts — тексты уроков пользователя со словом (clozeWordTextsSQL).
+func (s *Store) clozeWordTexts(ctx context.Context, userID int64, tsquery string, lessonID *int64) ([]ClozeText, error) {
+	rows, err := s.pool.Query(ctx, clozeWordTextsSQL, pgx.QueryExecModeExec, userID, tsquery, lessonID, clozeLessonTexts)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClozeText, error) {
+		var kind int
+		var t ClozeText
+		err := row.Scan(&kind, &t.LessonID, &t.MaterialID, &t.Text)
 		t.Source = ClozeSourceLesson
 		if kind == 1 {
 			t.Source = ClozeSourceMaterial
 		}
-		out[ord] = append(out[ord], t)
-	}
-	return out, rows.Err()
+		return t, err
+	})
 }
 
 // ClozeOtherTexts — тексты со словом вне уроков: свои сгенерированные
@@ -241,6 +305,9 @@ type ClozeItem struct {
 	Distractors []string
 	// LLM — проверенные LLM-дистракторы из кэша; nil — их нет
 	LLM []string
+	// OptionSource — набор вариантов, закреплённый за пунктом
+	// (cloze_items.option_source): list, llm или пусто — ещё не отдавали
+	OptionSource string
 	// Due — показ карточки слова наступил: ответ ляжет в график FSRS
 	Due bool
 	// Example — предложение Tatoeba с переводом и авторами (подпись
@@ -278,6 +345,7 @@ func (s *Store) ClozeItems(ctx context.Context, userID int64, ids []int64, now t
 	rows, err := s.pool.Query(ctx,
 		`SELECT i.id, i.user_id, i.term_id, t.lemma, i.source, i.lesson_id, i.material_id, i.generated_text_id,
 		        i.tatoeba_id, i.sentence, i.blank_start, i.blank_len, i.context_hash, i.distractors, d.options,
+		        coalesce(i.option_source, ''),
 		        coalesce(c.due_at <= $3, false), ts.author, r.id, r.text, r.author
 		 FROM unnest($2::bigint[]) WITH ORDINALITY AS want (id, ord)
 		 JOIN cloze_items i ON i.id = want.id AND i.user_id = $1
@@ -300,7 +368,7 @@ func (s *Store) ClozeItems(ctx context.Context, userID int64, ids []int64, now t
 		var translationID *int64
 		err := row.Scan(&it.ID, &it.UserID, &it.TermID, &it.Lemma, &it.Source, &it.LessonID, &it.MaterialID,
 			&it.GeneratedTextID, &it.TatoebaID, &it.Sentence, &it.Blank.Start, &it.Blank.Len, &it.ContextHash,
-			&it.Distractors, &it.LLM, &it.Due, &author, &translationID, &translation, &translationAuthor)
+			&it.Distractors, &it.LLM, &it.OptionSource, &it.Due, &author, &translationID, &translation, &translationAuthor)
 		if err == nil && it.TatoebaID != nil && translationID != nil {
 			it.Example = &Example{
 				ID: *it.TatoebaID, Text: it.Sentence, Author: *author,
@@ -309,6 +377,36 @@ func (s *Store) ClozeItems(ctx context.Context, userID int64, ids []int64, now t
 		}
 		return it, err
 	})
+}
+
+// Наборы вариантов пункта (cloze_items.option_source).
+const (
+	ClozeOptionsList = "list"
+	ClozeOptionsLLM  = "llm"
+)
+
+// LockClozeOptions закрепляет за пунктами пользователя набор вариантов
+// при первой отдаче (ADR-037): list — дистракторы словаря, llm —
+// LLM-дистракторы из кэша (закрепляются, только если запись кэша есть).
+// Пункт с уже закреплённым набором (параллельная выдача) не меняется:
+// после вызова набор пункта читается заново через ClozeItems.
+func (s *Store) LockClozeOptions(ctx context.Context, userID int64, list, llm []int64) error {
+	if len(llm) > 0 {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE cloze_items i SET option_source = 'llm' FROM cloze_distractors d
+			 WHERE i.user_id = $1 AND i.id = ANY($2) AND i.option_source IS NULL
+			   AND d.term_id = i.term_id AND d.context_hash = i.context_hash`, userID, llm); err != nil {
+			return err
+		}
+	}
+	if len(list) > 0 {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE cloze_items SET option_source = 'list'
+			 WHERE user_id = $1 AND id = ANY($2) AND option_source IS NULL`, userID, list); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SaveClozeDistractors кладёт проверенные LLM-дистракторы слова

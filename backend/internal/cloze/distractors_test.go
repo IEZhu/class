@@ -88,6 +88,24 @@ func TestPickDistractorsFallsBackToFrequentWords(t *testing.T) {
 	}
 }
 
+// Часть речи цели неизвестна (слова нет в OEWN) — годится словарь
+// целиком, наречие к нему тоже; служебные слова (the) не идут и тогда:
+// третий вариант — из частых слов, а не the.
+func TestPickDistractorsUnknownPOSUsesWholeList(t *testing.T) {
+	if lemma.POS("zorbix") != "" || lemma.POS("quickly") != "r" || !lemma.FunctionWord("the") {
+		t.Fatal("фикстура: zorbix вне OEWN, quickly — наречие, the — служебное")
+	}
+	target := Target{Lemma: "zorbix", Surface: "zorbix"}
+	sentence := "My brother bought a zorbix yesterday."
+	got := PickDistractors(target, words("banana", "quickly", "the"), sentence, []byte("seed"))
+	if len(got) != Distractors || !slices.Contains(got, "banana") || !slices.Contains(got, "quickly") {
+		t.Fatalf("дистракторы %q: весь словарь при неизвестной части речи", got)
+	}
+	if slices.Contains(got, "the") || !slices.Contains(frequentWords, got[2]) {
+		t.Fatalf("дистракторы %q: служебное слово вместо частого", got)
+	}
+}
+
 // Варианты: ответ ровно один раз, порядок стабилен у пункта и меняется
 // между пунктами — ответ не стоит всегда на одном месте.
 func TestOptionsShuffleDeterministically(t *testing.T) {

@@ -7,14 +7,18 @@ import type { CSSProperties, FormEvent } from "react";
 
 import type { ClozeAttemptResult, ClozeItem, ClozeOptions, ClozePage } from "../../../lib/api";
 import {
+  clozeCredit,
   clozeKeyAction,
+  distractorRequestIds,
   isAnswerOption,
+  itemOptions,
+  llmErrorNote,
   responseMs,
   scheduleText,
   sourceLabel,
   verdictText,
 } from "../../../lib/cloze-session";
-import type { ClozeMode } from "../../../lib/cloze-session";
+import type { ClozeCredit, ClozeMode } from "../../../lib/cloze-session";
 import { reviewId } from "../../../lib/review-session";
 import ClickableText from "../../clickable-text";
 import { RequestError, requestJson } from "../../forms";
@@ -29,15 +33,17 @@ function newAttemptId(): string {
   return reviewId(crypto.getRandomValues(new Uint8Array(16)));
 }
 
-type Options = Pick<ClozeItem, "options" | "distractor_source">;
+type Options = ClozeOptions["items"][number];
 
 // ClozeSession — проход выдачи: предложение с пропуском, ответ кнопкой
 // (клавиши 1–4) или вводом, итог и следующий пункт по Enter. attempt_id
 // заводится при первой попытке ответа и живёт до следующего пункта:
-// повтор после сбоя сети api засчитает один раз. С LLM-дистракторами
-// (llm_available) выдача просит их для пунктов после первого: первый уже
-// на экране, менять ему варианты на глазах нельзя. studentId — чей словарь
-// перекрашивает ответ (кэш статусов по студенту, ADR-026).
+// повтор после сбоя сети api засчитает один раз. С ключом LLM
+// (llm_available) у пунктов после первого вариантов в выдаче нет
+// (pending): страница сразу просит их одним POST
+// /practice/cloze/distractors, и у каждого пункта набор вариантов один
+// (ADR-037). Пока варианты не пришли, ответить можно вводом. studentId —
+// чей словарь перекрашивает ответ (кэш статусов по студенту, ADR-026).
 export default function ClozeSession({ page, studentId }: { page: ClozePage; studentId: number }) {
   const router = useRouter();
   const [index, setIndex] = useState(0);
@@ -48,40 +54,52 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tally, setTally] = useState({ correct: 0, wrong: 0 });
-  const [llmOptions, setLlmOptions] = useState<Record<number, Options>>({});
+  const [fetched, setFetched] = useState<Record<number, Options>>({});
+  const [fetchFailed, setFetchFailed] = useState(false);
   const [llmNote, setLlmNote] = useState<string | null>(null);
   const attemptRef = useRef<string | null>(null);
   const shownAt = useRef(0);
-  const indexRef = useRef(0);
   const item: ClozeItem | undefined = page.items[index];
   const total = page.items.length;
-  const options = item ? (llmOptions[item.id] ?? item).options : [];
+  // null — варианты пункта ещё не пришли (pending)
+  const options = item ? itemOptions(item, fetched) : [];
 
   // Время ответа — от показа пункта
   useEffect(() => {
-    indexRef.current = index;
     shownAt.current = performance.now();
   }, [index]);
 
-  useEffect(() => {
-    const ids = page.items.slice(1).filter((it) => it.distractor_source === "list").map((it) => it.id);
-    if (!page.llm_available || ids.length === 0) return;
-    let cancelled = false;
+  // fetchOptions — окончательные варианты pending-пунктов одним запросом.
+  // Повтор безопасен: api отдаёт уже закреплённый набор
+  function fetchOptions(ids: number[], isCancelled: () => boolean) {
+    setFetchFailed(false);
     requestJson<ClozeOptions>("/api/practice/cloze/distractors", "POST", { item_ids: ids })
       .then((res) => {
-        if (cancelled) return;
-        // Пункт, который уже на экране или пройден, вариантов не меняет
-        const shown = new Set(page.items.slice(0, indexRef.current + 1).map((it) => it.id));
-        setLlmOptions(Object.fromEntries(res.items.filter((it) => !shown.has(it.id)).map((it) => [it.id, it])));
+        if (isCancelled()) return;
+        setFetched((prev) => ({ ...prev, ...Object.fromEntries(res.items.map((it) => [it.id, it])) }));
+        setLlmNote(llmErrorNote(res.llm_error));
       })
       .catch((e: unknown) => {
-        // Лимит, сбой провайдера — пункты остаются с вариантами словаря
-        if (!cancelled) setLlmNote(`варианты от LLM недоступны: ${e instanceof Error ? e.message : "сбой"}`);
+        if (isCancelled()) return;
+        setFetchFailed(true);
+        setLlmNote(`варианты не загрузились: ${e instanceof Error ? e.message : "сбой"}`);
       });
+  }
+
+  useEffect(() => {
+    const ids = distractorRequestIds(page);
+    if (ids.length === 0) return;
+    let cancelled = false;
+    fetchOptions(ids, () => cancelled);
     return () => {
       cancelled = true;
     };
   }, [page]);
+
+  function retryOptions() {
+    const ids = distractorRequestIds(page).filter((id) => !fetched[id]);
+    if (ids.length > 0) fetchOptions(ids, () => false);
+  }
 
   function next(note: string | null) {
     attemptRef.current = null;
@@ -132,11 +150,11 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
       const target = e.target instanceof Element ? e.target : null;
       if (target?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
       if ((e.key === " " || e.key === "Enter") && target?.closest("button, a")) return;
-      const action = clozeKeyAction(e.key, result !== null, mode, options.length);
+      const action = clozeKeyAction(e.key, result !== null, mode, options?.length ?? 0);
       if (!action) return;
       e.preventDefault();
       if (action.kind === "next") next(null);
-      else void answer(options[action.index], "choice");
+      else if (options) void answer(options[action.index], "choice");
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -196,7 +214,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
       {error && <p style={{ color: "crimson" }}>{error}</p>}
       {item ? (
         <div style={cardStyle} key={item.id}>
-          <ItemSource item={item} />
+          <ItemSource item={item} credit={clozeCredit(item.attribution, result?.attribution ?? null)} />
           <p style={{ fontSize: "1.25rem", margin: "0.5rem 0 1rem" }}>
             {result ? (
               <ClickableText text={result.sentence} />
@@ -210,7 +228,21 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
               </>
             )}
           </p>
-          {mode === "choice" ? (
+          {mode === "choice" && options === null ? (
+            <p style={mutedStyle}>
+              {fetchFailed ? (
+                <>
+                  Варианты не загрузились.{" "}
+                  <button type="button" onClick={retryOptions} style={buttonStyle}>
+                    Повторить
+                  </button>{" "}
+                  Или впишите слово (режим «Ввод слова»).
+                </>
+              ) : (
+                "Подбираем варианты…"
+              )}
+            </p>
+          ) : mode === "choice" && options !== null ? (
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               {options.map((o, i) => (
                 <button
@@ -244,7 +276,13 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
               </button>
             </form>
           )}
-          {result && <Feedback result={result} attribution={item.attribution} onNext={() => next(null)} />}
+          {result && (
+            <Feedback
+              result={result}
+              credit={clozeCredit(item.attribution, result.attribution)}
+              onNext={() => next(null)}
+            />
+          )}
         </div>
       ) : (
         <div style={cardStyle}>
@@ -269,22 +307,27 @@ function optionColor(option: string, chosen: string | null, result: ClozeAttempt
   return option === chosen ? { background: "#ffe3e3", borderColor: "#e03131" } : {};
 }
 
-// ItemSource — откуда предложение; у Tatoeba — подпись автора (CC BY)
-function ItemSource({ item }: { item: ClozeItem }) {
+// ItemSource — откуда предложение; у Tatoeba — подпись автора и лицензия
+// (CC BY), ссылка на страницу предложения — только после ответа
+function ItemSource({ item, credit: c }: { item: ClozeItem; credit: ClozeCredit | null }) {
   const small = { ...mutedStyle, fontSize: "0.85em" };
-  const a = item.attribution;
+  const author = c ? c.author || "автор не указан" : "";
   return (
     <div style={small}>
       {item.lesson_id !== null ? <Link href={`/lesson/${item.lesson_id}`}>{sourceLabel(item.source)}</Link> : sourceLabel(item.source)}
-      {a && (
+      {c && (
         <>
           {" · "}
-          <a href={a.url} target="_blank" rel="noreferrer">
-            {a.author || "автор не указан"}
-          </a>
+          {c.url ? (
+            <a href={c.url} target="_blank" rel="noreferrer">
+              {author}
+            </a>
+          ) : (
+            author
+          )}
           {", "}
-          <a href={a.license_url} target="_blank" rel="noreferrer">
-            {a.license}
+          <a href={c.licenseUrl} target="_blank" rel="noreferrer">
+            {c.license}
           </a>
         </>
       )}
@@ -297,11 +340,11 @@ function ItemSource({ item }: { item: ClozeItem }) {
 // с графиком, перевод предложения Tatoeba с подписью его автора (CC BY)
 function Feedback({
   result,
-  attribution: a,
+  credit: c,
   onNext,
 }: {
   result: ClozeAttemptResult;
-  attribution: ClozeItem["attribution"];
+  credit: ClozeCredit | null;
   onNext: () => void;
 }) {
   return (
@@ -313,11 +356,11 @@ function Feedback({
       {result.translation && (
         <p style={{ margin: "0 0 0.5rem" }}>
           <ClickableText text={result.translation} />
-          {a && (
+          {c?.translation && (
             <span style={{ ...mutedStyle, fontSize: "0.8em" }}>
               {" · перевод: "}
-              <a href={a.translation_url} target="_blank" rel="noreferrer">
-                {a.translation_author || "автор не указан"}
+              <a href={c.translation.url} target="_blank" rel="noreferrer">
+                {c.translation.author || "автор не указан"}
               </a>
             </span>
           )}

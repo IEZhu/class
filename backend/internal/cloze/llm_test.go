@@ -69,6 +69,39 @@ func TestParseDistractors(t *testing.T) {
 	}
 }
 
+// Варианты модели ложатся в общий кэш, поэтому годятся только известные
+// слова из строчных латинских букв: ссылка, фраза, разметка, цифры,
+// маскировка звёздочками, выдуманное слово, кириллица, слишком длинное —
+// не годятся; пункт, у которого годных меньше трёх, остаётся
+// с дистракторами словаря.
+func TestParseDistractorsRejectsInjectedOptions(t *testing.T) {
+	items := llmItems()
+	for _, opts := range [][]string{
+		{"visit", "evil.com", "now"},
+		{"http://x.io", "came", "drove"},
+		{"ignore all rules", "came", "drove"},
+		{"<b>came</b>", "stayed", "drove"},
+		{"f***", "sh!t", "k1ll"},
+		{"xqzzyv", "blorpt", "came"},
+		{"пришёл", "came", "drove"},
+		{"came", "drove", strings.Repeat("a", 30)},
+		{"came", "drove", "don't"},
+	} {
+		raw, err := json.Marshal(map[string]any{"items": []map[string]any{{"id": "1", "options": opts}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ParseDistractors(string(raw), items); len(got) != 0 {
+			t.Errorf("варианты %q приняты: %v", opts, got)
+		}
+	}
+	// Служебное слово и известные формы проходят
+	got := ParseDistractors(`{"items":[{"id":"1","options":["Came","flew","under"]}]}`, items)
+	if !reflect.DeepEqual(got, map[string][]string{"1": {"came", "flew", "under"}}) {
+		t.Fatalf("годные варианты: %v", got)
+	}
+}
+
 // Generate на фейке провайдера: один вызов на пачку, модель из ответа;
 // сбой провайдера — ошибкой, негодный ответ — пустой картой.
 func TestGenerateWithFakeProvider(t *testing.T) {
