@@ -113,6 +113,73 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   (правило `not_due` решает S4-5); очередь и «забытые» — `srs_cards`
   (`due_at`, `lapses`, `state`).
 
+### S4-4 Cloze-генератор (2026-10-27)
+
+- Решение — [ADR-037](../architecture/decisions.md): тест — выдача
+  `GET /practice/cloze`, а не строка `cloze_tests`; пункт — свой у
+  студента. Новых зависимостей и ключей `.env` нет, джоб и путей S3 нет.
+- Миграция `backend/migrations/0022_cloze` (up/down): `cloze_items`
+  (пункт по слову и предложению: FK на `user_terms` с каскадом, источник
+  `lesson|material|generated|tatoeba` со ссылкой на урок, материал, текст
+  или предложение Tatoeba, снимок предложения, пропуск `blank_start` +
+  `blank_len`, `context_hash`, `distractors text[3]`; `UNIQUE (user_id,
+  term_id, context_hash)`), `cloze_distractors` (кэш LLM, S5-8 часть 2),
+  `cloze_attempts` (журнал ответов, `UNIQUE (user_id, client_id)`,
+  `review_id` → `srs_reviews`).
+- `backend/internal/cloze/` — `Sentences`, `Find` (пропуск формы слова:
+  ровно одно вхождение, не часть составного слова, 4–30 слов, до 200
+  символов, без разметки), `Parts`, `Hash`, `PickDistractors` (словарь
+  студента той же части речи, урок слова первым, затем 143 частых слова),
+  `Options` (порядок по ключу пункта); тесты `cloze_test.go`,
+  `distractors_test.go`. В `internal/lemma` — `WordSpans` (места слов
+  токенизатора `Words`) и `POS` (части речи OEWN).
+- Store (`backend/internal/store/cloze.go`): `ClozeTargets` (к показу,
+  шаги обучения, остальные), `ClozeWords`, `ClozeItemRefs`,
+  `ClozeLessonTexts` (реплики и материалы своих уроков одним проходом FTS
+  на все слова), `ClozeOtherTexts` (свои `generated_texts`, Tatoeba через
+  `Examples`), `CreateClozeItem`, `ClozeItems`.
+- `GET /practice/cloze?limit=` (student, 10, до 20;
+  `backend/internal/httpapi/cloze.go`) → `{items[{id, before, after,
+  options[4], distractor_source, source, lesson_id, attribution, due}],
+  due_total, llm_available}`; ответа (леммы, термина, перевода) в выдаче
+  нет. У слова — неотвеченный пункт, иначе новое предложение, иначе давний.
+- DoD «по словарю урока — валидный тест ≥ 5 пунктов» — тест
+  `TestClozeLessonDictionaryGivesTest` (`backend/internal/httpapi/cloze_test.go`):
+  пять слов урока, назначенных через `SaveUserTerm`, дают пять пунктов из
+  реплик урока, дистракторы — слова того же урока. В браузере на стенде
+  не прогонялось.
+
+### S4-5 Cloze-прохождение → FSRS (2026-10-27)
+
+- `POST /practice/cloze/{id}/attempts {attempt_id, answer, mode:
+  choice|typing, response_ms}` (student) → 201 `{item_id, term_id, lemma,
+  answer, sentence, correct, exact, rating, counted, duplicate, status,
+  card, translation}` / 200 повтор `attempt_id` / 409 `attempt_conflict`
+  / 404 чужой или нет пункта (или слово убрали) / 400.
+- Маппинг (`cloze.Check`, `cloze.Rate`): верна любая форма слова; неверно
+  — again, верно не дольше порога — easy (выбор 5 с, ввод 8 с; подобрать
+  по `cloze_attempts`), иначе good. Засчитывается ответ по карточке к
+  показу и промах по любой; верный ответ раньше показа — только в журнал
+  (`review_id` NULL). `not_due` у `POST /reviews` не тронут.
+- Запись — `store.RecordClozeAttempt`: та же транзакция, что у карточек
+  (`store.ReviewCard` разделён на `lockCard` и `applyReview`),
+  `srs_reviews.source = 'cloze'`, статус слова по карточке.
+- web: `/practice/cloze` (`web/app/practice/cloze/page.tsx`,
+  `cloze-session.tsx`): текст до и после пропуска через `<ClickableText>`,
+  после ответа — предложение целиком и перевод Tatoeba с подписью;
+  варианты кнопками и клавишами 1–4 или ввод слова, Enter — дальше,
+  прогресс «N из M», счётчики «верно/неверно», что стало с графиком.
+  `web/lib/cloze-session.ts` с тестами `npm test`; типы `ClozeItem`,
+  `ClozePage`, `ClozeOptions`, `ClozeAttemptResult` в `web/lib/api.ts`;
+  ссылка «Вставь слово» в шапке студента.
+- Тесты — `backend/internal/httpapi/cloze_test.go`: свои слова и тексты
+  (чужой урок не виден, урок слова раньше нового, материалы, Tatoeba,
+  смена предложения после ответа), оценки easy → ранний верный не в
+  графике → промах до показа (переобучение) → good → easy с картой,
+  совпадающей с планировщиком, журнал `source = 'cloze'`, повтор и
+  конфликт `attempt_id`, чужой пункт — 404, 401/403, 400, удаление слова,
+  откат и накат 0022. В браузере на стенде не прогонялось.
+
 ## Риски этапа
 
 Неправильный маппинг cloze→FSRS ломает график повторений — правило

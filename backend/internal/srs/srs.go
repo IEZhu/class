@@ -33,9 +33,12 @@ func ParseRating(s string) (Rating, bool) {
 	return r, ok
 }
 
-// SourceCard — источник оценки с карточек (srs_reviews.source); cloze
-// (S4-5) пишет в тот же график с источником cloze.
-const SourceCard = "card"
+// Источники оценки (srs_reviews.source): карточки (S4-3) и ответы cloze
+// (S4-5, ADR-037) двигают один и тот же график.
+const (
+	SourceCard  = "card"
+	SourceCloze = "cloze"
+)
 
 // State — этап карточки (srs_cards.state).
 type State string

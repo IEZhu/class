@@ -411,6 +411,38 @@ LLM с контекстом предложения — **закрывает до
   провайдера: ключей у стенда нет — с первым `LLM_API_KEY` объяснить
   слово в транскрипте и проверить DoD «отвечает с учётом контекста».
 
+### S5-8 LLM-дистракторы cloze, часть 2 (2026-10-27) — ◐
+
+- Решение — [ADR-037](../architecture/decisions.md). `POST
+  /practice/cloze/distractors {item_ids}` (student, до 20 своих пунктов;
+  `backend/internal/httpapi/cloze.go`) → 200 `{items[{id, options,
+  distractor_source: llm|list}]}`: один вызов LLM на пункты без кэша,
+  пункты — JSON внутри `<items>`, ответ — только JSON. Проверка
+  (`cloze.ParseDistractors`): одно слово, не ответ и не его форма, без
+  повторов, ровно три — иначе у пункта остаются дистракторы словаря.
+  Промпт и разбор — `backend/internal/cloze/llm.go` (`DistractorRequest`,
+  `ParseDistractors`, `Generate`), тесты на фейке `llmtest` —
+  `llm_test.go`.
+- Кэш — таблица `cloze_distractors` (миграция 0022, PK `(term_id,
+  context_hash)`, общий для всех студентов); `GET /practice/cloze` сам
+  отдаёт варианты из кэша. Store: `SaveClozeDistractors`.
+- Лимит — суточный счётчик «объясни» (`store.LLMKindExplain`,
+  `LLM_EXPLAIN_DAILY_LIMIT`): своего вида нет, его `CHECK` в 0024 после
+  0022; попадание в кэш лимит не тратит, сверх — 429. Без ключа — 503
+  `llm_not_configured`, выдача и ответы cloze работают без 503
+  (`llm_available: false`, web запрос не шлёт). Новых ключей `.env` нет.
+- web: `/practice/cloze` при `llm_available` просит варианты для пунктов
+  после первого; при 429/503 остаётся на вариантах словаря с пометкой
+  под пунктом.
+- Тесты — `TestClozeLLMDistractors`, `TestClozeWithoutLLMKey`
+  (`backend/internal/httpapi/cloze_test.go`): один вызов на пачку,
+  пункты данными, негодный ответ модели, общий кэш (другой студент того
+  же урока — без вызова), повтор без вызова и траты лимита, 429 сверх
+  лимита, 503 без ключа и при сбое провайдера, чужой пункт — 404.
+- **Для ☑ не хватает.** Живого вызова провайдера (обеих частей S5-8):
+  ключей у стенда нет — с первым `LLM_API_KEY` проверить DoD
+  «дистракторы правдоподобны» на выдаче cloze.
+
 ## Риски этапа
 
 Блокировка IP YouTube (рейт/cookies/backoff, fallback — домашняя машина,

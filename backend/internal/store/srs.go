@@ -126,26 +126,7 @@ type ReviewResult struct {
 func (s *Store) ReviewCard(ctx context.Context, sched *srs.Scheduler, r Review) (*ReviewResult, error) {
 	var res *ReviewResult
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// Строки берутся в порядке удаления слова (user_terms, затем
-		// каскадом карточка): параллельное «убрать из словаря» ждёт,
-		// а не ловит взаимную блокировку. Оценки одной карточки идут
-		// друг за другом, поэтому повтор ключа видит засчитанную оценку
-		var status int
-		err := tx.QueryRow(ctx,
-			`SELECT status FROM user_terms WHERE user_id = $1 AND term_id = $2 FOR NO KEY UPDATE`,
-			r.UserID, r.TermID).Scan(&status)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return err
-		}
-		var card srs.Card
-		err = tx.QueryRow(ctx, `SELECT `+cardColumns+` FROM srs_cards
-			WHERE user_id = $1 AND term_id = $2 FOR NO KEY UPDATE`, r.UserID, r.TermID).Scan(cardDest(&card)...)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+		status, card, err := lockCard(ctx, tx, r.UserID, r.TermID)
 		if err != nil {
 			return err
 		}
@@ -159,44 +140,75 @@ func (s *Store) ReviewCard(ctx context.Context, sched *srs.Scheduler, r Review) 
 		if card.Due.After(r.At) {
 			return ErrNotDue
 		}
-		next, err := sched.Review(card, r.Rating, r.At)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE srs_cards SET (`+cardColumns+`) = ($3, $4, $5, $6, $7, $8, $9, $10, $11)
-			WHERE user_id = $1 AND term_id = $2`, append([]any{r.UserID, r.TermID}, cardArgs(next)...)...); err != nil {
-			return err
-		}
-		var clientID *string
-		if r.ClientID != "" {
-			clientID = &r.ClientID
-		}
-		_, err = tx.Exec(ctx,
-			`INSERT INTO srs_reviews (user_id, term_id, client_id, rating, source, reviewed_at)
-			 VALUES ($1, $2, $3, $4, $5, $6)`, r.UserID, r.TermID, clientID, r.Rating, r.Source, r.At)
-		if PgErrorCode(err) == "23505" { // unique_violation
-			// Тот же ключ одновременно с другим словом: строки разные,
-			// блокировки друг друга не ждали, развёл уникальный индекс
-			return ErrReviewConflict
-		}
-		if err != nil {
-			return err
-		}
-		// updated_at — только при смене статуса, как у SaveUserTerm
-		status = srs.Status(next)
-		if _, err := tx.Exec(ctx,
-			`UPDATE user_terms SET status = $3,
-			     updated_at = CASE WHEN status = $3 THEN updated_at ELSE now() END
-			 WHERE user_id = $1 AND term_id = $2`, r.UserID, r.TermID, status); err != nil {
-			return err
-		}
-		res = &ReviewResult{Card: next, Status: status}
-		return nil
+		res, _, err = applyReview(ctx, tx, sched, r, card)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+// lockCard — статус слова и карточка пользователя под блокировкой до
+// конца транзакции. Строки берутся в порядке удаления слова (user_terms,
+// затем каскадом карточка): параллельное «убрать из словаря» ждёт, а не
+// ловит взаимную блокировку. Оценки одной карточки идут друг за другом,
+// поэтому повтор ключа видит засчитанную оценку. ErrNotFound — у
+// пользователя нет этого слова или его карточки.
+func lockCard(ctx context.Context, tx pgx.Tx, userID, termID int64) (int, srs.Card, error) {
+	var status int
+	var card srs.Card
+	err := tx.QueryRow(ctx,
+		`SELECT status FROM user_terms WHERE user_id = $1 AND term_id = $2 FOR NO KEY UPDATE`,
+		userID, termID).Scan(&status)
+	if err == nil {
+		err = tx.QueryRow(ctx, `SELECT `+cardColumns+` FROM srs_cards
+			WHERE user_id = $1 AND term_id = $2 FOR NO KEY UPDATE`, userID, termID).Scan(cardDest(&card)...)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, card, ErrNotFound
+	}
+	return status, card, err
+}
+
+// applyReview — оценка карточки card, взятой lockCard: пересчёт
+// планировщиком, строка srs_reviews, статус слова по карточке. Второе
+// значение — id записанной оценки.
+func applyReview(ctx context.Context, tx pgx.Tx, sched *srs.Scheduler, r Review, card srs.Card) (*ReviewResult, int64, error) {
+	next, err := sched.Review(card, r.Rating, r.At)
+	if err != nil {
+		return nil, 0, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE srs_cards SET (`+cardColumns+`) = ($3, $4, $5, $6, $7, $8, $9, $10, $11)
+		WHERE user_id = $1 AND term_id = $2`, append([]any{r.UserID, r.TermID}, cardArgs(next)...)...); err != nil {
+		return nil, 0, err
+	}
+	var clientID *string
+	if r.ClientID != "" {
+		clientID = &r.ClientID
+	}
+	var reviewID int64
+	err = tx.QueryRow(ctx,
+		`INSERT INTO srs_reviews (user_id, term_id, client_id, rating, source, reviewed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		r.UserID, r.TermID, clientID, r.Rating, r.Source, r.At).Scan(&reviewID)
+	if PgErrorCode(err) == "23505" { // unique_violation
+		// Тот же ключ одновременно с другим словом: строки разные,
+		// блокировки друг друга не ждали, развёл уникальный индекс
+		return nil, 0, ErrReviewConflict
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	// updated_at — только при смене статуса, как у SaveUserTerm
+	status := srs.Status(next)
+	if _, err := tx.Exec(ctx,
+		`UPDATE user_terms SET status = $3,
+		     updated_at = CASE WHEN status = $3 THEN updated_at ELSE now() END
+		 WHERE user_id = $1 AND term_id = $2`, r.UserID, r.TermID, status); err != nil {
+		return nil, 0, err
+	}
+	return &ReviewResult{Card: next, Status: status}, reviewID, nil
 }
 
 // reviewByClientID — ключ уже засчитан той же оценкой того же слова

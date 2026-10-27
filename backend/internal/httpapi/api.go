@@ -290,6 +290,13 @@ func (a *API) Router() http.Handler {
 	// S5-8: «объясни» в попапе слова — LLM по предложению, кэш по термину
 	// и предложению (ADR-039). Гостю события нет: вызов стоит денег
 	mux.Handle("POST /terms/{id}/explain", a.requireAnyRole(http.HandlerFunc(a.handleExplainTerm), explainRoles...))
+
+	// S4-4/S4-5, S5-8 (часть 2): cloze (ADR-037) — пункты по словам
+	// словаря студента, ответ → оценка FSRS его карточки, LLM-дистракторы
+	// к пунктам выдачи с кэшем и суточным лимитом
+	mux.Handle("GET /practice/cloze", student(a.handlePracticeCloze))
+	mux.Handle("POST /practice/cloze/{id}/attempts", student(a.handleClozeAttempt))
+	mux.Handle("POST /practice/cloze/distractors", student(a.handleClozeDistractors))
 	return mux
 }
 

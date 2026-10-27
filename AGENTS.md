@@ -15,7 +15,7 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   `internal/httpapi/` (routes, auth, middleware, groups, lessons, invites, rooms, users, guests
   and `/join`, media and material URLs, transcripts, word clicks, user terms,
   lesson dictionary (candidates, picker, assignment, ADR-033/034), practice texts and videos,
-  review queue and reviews,
+  review queue and reviews, cloze practice and LLM distractors (ADR-037),
   whiteboard, Google Calendar, LiveKit and AssemblyAI webhooks), `internal/store/` (Postgres via pgx),
   `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
   retries, ADR-013; periodic `Scheduler`, ADR-021), `internal/worker/` (job handlers by kind),
@@ -28,16 +28,18 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   providers, ADR-029), `internal/textgen/` (prompt and coverage validator, ADR-030),
   `internal/lessonterms/` (lesson dictionary candidates from whiteboard text, ADR-033),
   `internal/srs/` (FSRS scheduling over go-fsrs, ADR-036), `internal/explain/` (the popup
-  «объясни» prompt and output bounds, ADR-039),
+  «объясни» prompt and output bounds, ADR-039), `internal/cloze/` (cloze sentences, blanks,
+  distractors, answer rating and LLM distractor validation, ADR-037),
   `internal/testdb/` (the shared DB test harness),
   `migrations/` (golang-migrate `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a
   migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
   `app/admin`, `app/account`, `app/invite/[token]`, `app/dictionary`, `app/practice/text`,
   `app/practice/video` (YouTube embed and subtitle panel, ADR-038),
-  `app/practice/texts`, `app/practice/cards` (FSRS review cards), public `app/join/[token]` for
+  `app/practice/texts`, `app/practice/cards` (FSRS review cards), `app/practice/cloze` (fill in the
+  word, ADR-037), public `app/join/[token]` for
   event guests); `lib/api.ts` calls the API server-side; `lib/roles.ts`, `lib/lesson-phase.ts`,
-  `lib/lesson-title.ts`, `lib/review-session.ts`, `lib/timeline.ts` (player cue timing shared by
+  `lib/lesson-title.ts`, `lib/review-session.ts`, `lib/cloze-session.ts`, `lib/timeline.ts` (player cue timing shared by
   the transcript and video practice). Every text renders through
   `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
   functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr
@@ -88,7 +90,7 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `HARVESTER_DATABASE_URL` (the harvester's own least-privilege role, created by
   `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022),
   `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_DAILY_LIMIT` (api only: text generation,
-  503 without the key, ADR-029), `LLM_EXPLAIN_DAILY_LIMIT` (the popup «объясни», ADR-039). The api also
+  503 without the key, ADR-029), `LLM_EXPLAIN_DAILY_LIMIT` (the popup «объясни» and cloze LLM distractors, ADR-039, ADR-037). The api also
   reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
   `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
   `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots and `material_files_delete`

@@ -467,6 +467,8 @@ func TestSRSMigrationReversible(t *testing.T) {
 	if got := tables(); got != "srs_cards,srs_reviews" {
 		t.Fatalf("после наката: %q", got)
 	}
+	// Ответы cloze (0022) ссылаются на оценки: их откат — раньше, накат — после
+	testdb.Apply(t, conn, "0022_cloze.down.sql")
 	testdb.Apply(t, conn, "0021_srs.down.sql")
 	if got := tables(); got != "" {
 		t.Fatalf("откат оставил %q", got)
@@ -475,6 +477,7 @@ func TestSRSMigrationReversible(t *testing.T) {
 		t.Fatalf("откат задел словарь: %v, %v", st, err)
 	}
 	testdb.Apply(t, conn, "0021_srs.up.sql")
+	testdb.Apply(t, conn, "0022_cloze.up.sql")
 	if got := tables(); got != "srs_cards,srs_reviews" {
 		t.Fatalf("повторный накат: %q", got)
 	}

@@ -355,11 +355,15 @@ func TestTatoebaMigrationReverts(t *testing.T) {
 	if got := state(); got != want {
 		t.Fatalf("схема 0016:\n%s\nждали:\n%s", got, want)
 	}
+	// Пункты cloze (0022) ссылаются на предложения: их откат — раньше,
+	// накат — после
+	testdb.Apply(t, conn, "0022_cloze.down.sql")
 	testdb.Apply(t, conn, "0016_tatoeba.down.sql")
 	if got := state(); got != " " {
 		t.Fatalf("down оставил %q", got)
 	}
 	testdb.Apply(t, conn, "0016_tatoeba.up.sql")
+	testdb.Apply(t, conn, "0022_cloze.up.sql")
 	if got := state(); got != want {
 		t.Fatalf("повторный up: %s", got)
 	}
@@ -439,7 +443,9 @@ func TestTermClickExamples(t *testing.T) {
 		}
 	}
 
-	// Миграция откатилась (или ещё не применена): клик работает без примеров
+	// Миграция откатилась (или ещё не применена): клик работает без
+	// примеров. Пункты cloze (0022) ссылаются на корпус — уходят первыми
+	testdb.Apply(t, conn, "0022_cloze.down.sql")
 	testdb.Apply(t, conn, "0016_tatoeba.down.sql")
 	if got := clickExamples(t, h, student, "run"); len(got) != 0 {
 		t.Fatalf("без таблиц корпуса: %+v", got)
