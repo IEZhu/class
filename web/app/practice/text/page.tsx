@@ -2,12 +2,15 @@ import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { GeneratedText, User } from "../../../lib/api";
+import { ClickableTextScope } from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GenerateForm from "./generate-form";
 import GeneratedTextView from "./generated-text";
 
 // S5-6: учебный текст по целевым словам от LLM и история своих текстов.
 // Генерация — студенту и преподавателю (каждый вызов стоит денег).
+// Тексты кликаются; раскраска, «в мой словарь» и слова из словаря по
+// умолчанию — у студента (S3-1, S3-5).
 export default async function PracticeTextPage() {
   let me: User;
   try {
@@ -16,7 +19,8 @@ export default async function PracticeTextPage() {
     if (e instanceof ApiError && e.status === 401) redirect("/login");
     throw e;
   }
-  const allowed = me.role === "student" || me.role === "teacher";
+  const student = me.role === "student";
+  const allowed = student || me.role === "teacher";
   const texts = allowed ? await apiFetch<GeneratedText[]>("/practice/texts") : [];
 
   return (
@@ -24,12 +28,12 @@ export default async function PracticeTextPage() {
       <UserBar name={me.name} role={me.role} />
       <h1>Текст по словам</h1>
       {allowed ? (
-        <>
+        <ClickableTextScope studentId={student ? me.id : null}>
           <p style={{ color: "#666" }}>
             Модель пишет текст, где каждое слово встречается хотя бы дважды; текст сохраняется, если проверка это
             подтвердила.
           </p>
-          <GenerateForm />
+          <GenerateForm fromDictionary={student} />
           <h2>Мои тексты</h2>
           {texts.length === 0 && <p>Пока нет текстов.</p>}
           <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -37,7 +41,7 @@ export default async function PracticeTextPage() {
               <GeneratedTextView key={t.id} text={t} />
             ))}
           </div>
-        </>
+        </ClickableTextScope>
       ) : (
         <p>Генерация текстов доступна студентам и преподавателям.</p>
       )}

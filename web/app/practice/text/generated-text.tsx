@@ -1,8 +1,8 @@
 import type { GeneratedText } from "../../../lib/api";
+import ClickableText from "../../clickable-text";
 
 // Сгенерированный текст абзацами и итог валидатора покрытия (S5-6).
-// Пока простыми абзацами: кликабельным материалом его сделает
-// <ClickableText> (волна C), и замена — только в renderParagraph.
+// Абзацы — через <ClickableText>: текст кликается, как материал урока.
 
 const percent = new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractionDigits: 0 });
 
@@ -23,7 +23,7 @@ export const genres = Object.keys(genreLabels);
 function renderParagraph(text: string, key: number) {
   return (
     <p key={key} style={{ lineHeight: 1.6 }}>
-      {text}
+      <ClickableText text={text} />
     </p>
   );
 }
