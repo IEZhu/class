@@ -29,7 +29,7 @@ func main() {
 	links := flag.String("links", tatoeba.DefaultLinks, "URL (https://) или путь к eng-rus_links.tsv(.bz2)")
 	english := flag.String("english", tatoeba.DefaultEnglish, "URL или путь к eng_sentences_detailed.tsv(.bz2)")
 	russian := flag.String("russian", tatoeba.DefaultRussian, "URL или путь к rus_sentences_detailed.tsv(.bz2)")
-	restart := flag.Bool("restart", false, "начать незавершённый прогон заново")
+	restart := flag.Bool("restart", false, "бросить незавершённый прогон и начать новый")
 	maxRunes := flag.Int("max-runes", tatoeba.DefaultMaxRunes, "предложения длиннее (в символах) не берутся")
 	maxTranslations := flag.Int("max-translations", tatoeba.DefaultMaxTranslations, "русских переводов на английское предложение")
 	flag.Parse()
@@ -57,7 +57,8 @@ func main() {
 	defer pool.Close()
 
 	// Версия выгрузки — версии трёх файлов: продолжить прогон можно,
-	// только если не сменился ни один
+	// только если не сменился ни один. Import читает файлы по очереди,
+	// поэтому каждый открывается при первом чтении, а не все сразу
 	var versions []string
 	var opened []io.Closer
 	defer func() {
@@ -66,11 +67,11 @@ func main() {
 		}
 	}()
 	open := func(source string) io.Reader {
-		f, version, err := dumpfile.Open(ctx, source)
+		f, err := dumpfile.OpenLazy(ctx, source)
 		if err != nil {
 			log.Fatalf("tatoebaimport: %v", err)
 		}
-		versions = append(versions, version)
+		versions = append(versions, f.Version())
 		opened = append(opened, f)
 		return f
 	}

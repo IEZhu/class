@@ -17,13 +17,16 @@ CREATE TABLE tatoeba_imports (
     -- Строк файла фазы учтено; фиксируется в одной транзакции с пачкой
     lines_done     bigint      NOT NULL DEFAULT 0,
     finished_at    timestamptz,
+    -- Брошен запуском с -restart: записанное им уходит при завершении
+    -- следующего прогона, как всё от прошлых импортов
+    abandoned_at   timestamptz,
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
 -- Корпус один, поэтому и незавершённый прогон — один: повторный запуск
 -- продолжает его, а не начинает второй
 CREATE UNIQUE INDEX tatoeba_imports_running_key ON tatoeba_imports ((true))
-    WHERE finished_at IS NULL;
+    WHERE finished_at IS NULL AND abandoned_at IS NULL;
 
 CREATE TABLE tatoeba_sentences (
     -- id предложения в Tatoeba, а не свой (ADR-028): по нему ссылка

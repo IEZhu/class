@@ -104,3 +104,46 @@ func TestOpen(t *testing.T) {
 		t.Fatal("несуществующий файл открыт")
 	}
 }
+
+// Lazy знает версию до открытия, открывает файл при первом чтении и не
+// читает файл, сменившийся после начала импорта.
+func TestLazy(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dump.tsv")
+	if err := os.WriteFile(path, []byte("1\t2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := OpenLazy(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if !strings.HasPrefix(l.Version(), "size=4 mtime=") {
+		t.Fatalf("версия до открытия %q", l.Version())
+	}
+	if l.rc != nil {
+		t.Fatal("файл открыт до первого чтения")
+	}
+	if got, err := io.ReadAll(l); err != nil || string(got) != "1\t2\n" {
+		t.Fatalf("чтение: %q, %v", got, err)
+	}
+
+	changed, err := OpenLazy(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer changed.Close()
+	if err := os.WriteFile(path, []byte("1\t2\n3\t4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := changed.Read(make([]byte, 8)); !errors.Is(err, ErrChanged) {
+		t.Fatalf("файл сменился после OpenLazy: %v", err)
+	}
+
+	if _, err := OpenLazy(ctx, "http://example.com/dump.tsv"); err == nil {
+		t.Fatal("http-источник принят")
+	}
+	if _, err := OpenLazy(ctx, filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("версия несуществующего файла")
+	}
+}

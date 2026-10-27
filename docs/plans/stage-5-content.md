@@ -164,7 +164,8 @@ LLM с контекстом предложения — **закрывает до
   `import_id`; GIN `tatoeba_sentences_lemmas_idx` `WHERE lang = 'en'`),
   `tatoeba_links` (PK `(en_id, ru_id)`, `import_id`, индекс
   `tatoeba_links_ru_idx`), `tatoeba_imports` (`source_version`, `phase`
-  ru|en, `lines_done`, `finished_at`; один незавершённый —
+  ru|en, `lines_done`, `finished_at`, `abandoned_at` — брошен
+  `-restart`; один незавершённый —
   `tatoeba_imports_running_key`). Отступления от модели данных
   (`owner_skill` нет, есть `author` и `lemmas`) — ADR-028.
 - Импорт — пакет `backend/internal/tatoeba` (`Import`, `Lemmas`,
@@ -177,7 +178,9 @@ LLM с контекстом предложения — **закрывает до
   `eng_sentences_detailed.tsv.bz2`, `rus_sentences_detailed.tsv.bz2`
   (формат сверен с выгрузкой 2026-10-24). Загрузка и чтение дампов —
   общий с dictimport пакет `backend/internal/dumpfile` (`Open`,
-  `Decompress` — gzip и bzip2, `ReadLine`), вынесен из S3-4.
+  `Decompress` — gzip и bzip2, `ReadLine`), вынесен из S3-4; для
+  импорта Tatoeba добавлены `Stat` и `OpenLazy` — файл выгрузки
+  открывается при первом чтении, а не все три сразу.
 - `POST /terms/click` наполняет `examples`: до 2 предложений с леммой
   термина и русским переводом — `{text, translation, source: "tatoeba",
   attribution: {author, url, translation_author, translation_url,
@@ -187,11 +190,12 @@ LLM с контекстом предложения — **закрывает до
   и путей S3 нет; smoke worker-образа проверяет и `tatoebaimport`
   (`scripts/security/smoke_runtime.sh`).
 - Тесты: `backend/internal/tatoeba/tatoeba_test.go` (разбор строк,
-  леммы), `backend/internal/dumpfile/dumpfile_test.go`,
+  леммы), `backend/internal/dumpfile/dumpfile_test.go` (в том числе
+  `OpenLazy`: версия до открытия, сменившийся файл),
   `backend/internal/httpapi/tatoeba_test.go` на фикстуре
   `backend/internal/tatoeba/testdata/` (повтор — тот же корпус,
   испорченные строки, продолжение после обрыва в каждой фазе, смена
-  версии и потолков, `-restart`, пустая и недокачанная выгрузка, уборка
+  версии и потолков, `-restart` — и с меньшим потолком, пустая и недокачанная выгрузка, уборка
   устаревшего, один импорт за раз, обратимость 0016; клик: 2 кратчайших
   примера в любой форме слова, подпись, пустой список без корпуса и без
   таблиц, ни одного HTTP-запроса).

@@ -54,7 +54,7 @@ type Sources struct {
 
 // Options — параметры прогона.
 type Options struct {
-	// Restart — начать незавершённый прогон заново, с первой фазы
+	// Restart — бросить незавершённый прогон и начать новый
 	Restart    bool
 	BatchLines int
 	Limits     Limits
@@ -167,29 +167,37 @@ func beginRun(ctx context.Context, db *pgx.Conn, version string, restart bool) (
 	var st Stats
 	var was string
 	err := db.QueryRow(ctx,
-		`SELECT id, phase, lines_done, source_version FROM tatoeba_imports WHERE finished_at IS NULL`).
+		`SELECT id, phase, lines_done, source_version FROM tatoeba_imports
+		WHERE finished_at IS NULL AND abandoned_at IS NULL`).
 		Scan(&st.ImportID, &st.Phase, &st.Skipped, &was)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		st.Phase = phaseRussian
-		err = db.QueryRow(ctx,
-			`INSERT INTO tatoeba_imports (source_version, phase) VALUES ($1, $2) RETURNING id`,
-			version, st.Phase).Scan(&st.ImportID)
-		return st, err
+		return newRun(ctx, db, version)
 	case err != nil:
 		return st, err
 	case restart:
-		st.Phase, st.Skipped = phaseRussian, 0
-		_, err = db.Exec(ctx,
-			`UPDATE tatoeba_imports SET phase = $2, lines_done = 0, source_version = $3 WHERE id = $1`,
-			st.ImportID, st.Phase, version)
-		return st, err
+		// Новый прогон, а не прежний с первой фазы: записанное брошенным
+		// (другая выгрузка, другие потолки) остаётся под его id и уйдёт при
+		// завершении нового, если тот его не перезапишет
+		if _, err := db.Exec(ctx, `UPDATE tatoeba_imports SET abandoned_at = now() WHERE id = $1`,
+			st.ImportID); err != nil {
+			return st, err
+		}
+		return newRun(ctx, db, version)
 	case was != version:
 		return st, fmt.Errorf("tatoeba: незавершённый импорт %d начат на версии выгрузки %q, сейчас %q: продолжить нельзя, запустите с -restart",
 			st.ImportID, was, version)
 	}
 	st.Resumed = true
 	return st, nil
+}
+
+func newRun(ctx context.Context, db *pgx.Conn, version string) (Stats, error) {
+	st := Stats{Phase: phaseRussian}
+	err := db.QueryRow(ctx,
+		`INSERT INTO tatoeba_imports (source_version, phase) VALUES ($1, $2) RETURNING id`,
+		version, st.Phase).Scan(&st.ImportID)
+	return st, err
 }
 
 type run struct {

@@ -78,7 +78,7 @@ tatoeba_sentences(id, lang /*en|ru*/, text, author /*CC BY: имя автора,
                   lemmas text[] /*только en: леммы internal/lemma, GIN*/, import_id)
 tatoeba_links(en_id, ru_id, import_id, PRIMARY KEY(en_id, ru_id))
 tatoeba_imports(id, source_version, phase /*ru|en*/, lines_done /*контрольная точка*/,
-                finished_at, created_at)
+                finished_at, abandoned_at /*брошен -restart*/, created_at)
 
 -- практика
 generated_texts(id, group_id, level, genre, body_md, target_term_ids int[], model, created_at)

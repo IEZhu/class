@@ -24,10 +24,11 @@ import (
 // можно ли продолжить незавершённый прогон (ETag или Last-Modified у URL,
 // размер и время изменения у файла).
 func Open(ctx context.Context, source string) (io.ReadCloser, string, error) {
-	if strings.HasPrefix(source, "http://") {
-		return nil, "", fmt.Errorf("только https: дамп не должен подменяться по дороге")
+	isURL, err := checkSource(source)
+	if err != nil {
+		return nil, "", err
 	}
-	if !strings.HasPrefix(source, "https://") {
+	if !isURL {
 		f, err := os.Open(source)
 		if err != nil {
 			return nil, "", err
@@ -37,11 +38,60 @@ func Open(ctx context.Context, source string) (io.ReadCloser, string, error) {
 			f.Close()
 			return nil, "", err
 		}
-		return f, fmt.Sprintf("size=%d mtime=%d", fi.Size(), fi.ModTime().Unix()), nil
+		return f, fileVersion(fi), nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	resp, err := fetch(ctx, http.MethodGet, source)
 	if err != nil {
 		return nil, "", err
+	}
+	return resp.Body, httpVersion(resp.Header), nil
+}
+
+// Stat — версия источника без чтения: HEAD у URL, stat у файла.
+func Stat(ctx context.Context, source string) (string, error) {
+	isURL, err := checkSource(source)
+	if err != nil {
+		return "", err
+	}
+	if !isURL {
+		fi, err := os.Stat(source)
+		if err != nil {
+			return "", err
+		}
+		return fileVersion(fi), nil
+	}
+	resp, err := fetch(ctx, http.MethodHead, source)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	return httpVersion(resp.Header), nil
+}
+
+// checkSource — источник по https (true) или с диска; http не принимается.
+func checkSource(source string) (bool, error) {
+	if strings.HasPrefix(source, "http://") {
+		return false, fmt.Errorf("только https: дамп не должен подменяться по дороге")
+	}
+	return strings.HasPrefix(source, "https://"), nil
+}
+
+func fileVersion(fi os.FileInfo) string {
+	return fmt.Sprintf("size=%d mtime=%d", fi.Size(), fi.ModTime().Unix())
+}
+
+func httpVersion(h http.Header) string {
+	if v := h.Get("ETag"); v != "" {
+		return v
+	}
+	return h.Get("Last-Modified")
+}
+
+// fetch — запрос к источнику по https; ответ не 200 — ошибка.
+func fetch(ctx context.Context, method, source string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, source, nil)
+	if err != nil {
+		return nil, err
 	}
 	// Без общего таймаута: полный дамп качается минутами. Зависание
 	// соединения ловят таймауты установки и первого ответа.
@@ -53,17 +103,67 @@ func Open(ctx context.Context, source string) (io.ReadCloser, string, error) {
 	}}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, "", fmt.Errorf("GET %s: HTTP %d", source, resp.StatusCode)
+		return nil, fmt.Errorf("%s %s: HTTP %d", method, source, resp.StatusCode)
 	}
-	version := resp.Header.Get("ETag")
-	if version == "" {
-		version = resp.Header.Get("Last-Modified")
+	return resp, nil
+}
+
+// ErrChanged — источник Lazy к первому чтению сменил версию.
+var ErrChanged = errors.New("dumpfile: источник сменился после начала импорта")
+
+// Lazy — источник, который открывается при первом чтении, а версию знает
+// заранее (Stat). Импорт из нескольких файлов читает их по очереди, и
+// соединение, которое ждёт своей очереди непрочитанным, сервер выгрузок
+// может закрыть по таймауту посреди файла. Сменилась версия к открытию — чтение вернёт
+// ErrChanged: контрольная точка прогона относится к прежнему файлу.
+type Lazy struct {
+	ctx             context.Context
+	source, version string
+	rc              io.ReadCloser
+	err             error
+}
+
+// OpenLazy узнаёт версию источника; открывает его первое чтение.
+func OpenLazy(ctx context.Context, source string) (*Lazy, error) {
+	version, err := Stat(ctx, source)
+	if err != nil {
+		return nil, err
 	}
-	return resp.Body, version, nil
+	return &Lazy{ctx: ctx, source: source, version: version}, nil
+}
+
+// Version — версия источника на момент OpenLazy.
+func (l *Lazy) Version() string { return l.version }
+
+func (l *Lazy) Read(p []byte) (int, error) {
+	if l.rc == nil && l.err == nil {
+		rc, version, err := Open(l.ctx, l.source)
+		switch {
+		case err != nil:
+			l.err = err
+		case version != l.version:
+			rc.Close()
+			l.err = fmt.Errorf("%w: %s (была версия %q, теперь %q)", ErrChanged, l.source, l.version, version)
+		default:
+			l.rc = rc
+		}
+	}
+	if l.err != nil {
+		return 0, l.err
+	}
+	return l.rc.Read(p)
+}
+
+// Close закрывает источник, если его успели открыть.
+func (l *Lazy) Close() error {
+	if l.rc == nil {
+		return nil
+	}
+	return l.rc.Close()
 }
 
 // Decompress распознаёт gzip и bzip2 по сигнатуре: kaikki.org отдаёт

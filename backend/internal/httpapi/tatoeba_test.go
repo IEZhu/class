@@ -223,16 +223,36 @@ func TestTatoebaImportResumes(t *testing.T) {
 	// -restart: оборванный прогон новой версии начинается с первой фазы
 	src = files.sources("v2")
 	src.English = cutAt(files.english, "2 + 2")
-	if _, err := tatoeba.Import(ctx, a.store.Pool(), src, opt); !errors.Is(err, errCut) {
+	cut, err := tatoeba.Import(ctx, a.store.Pool(), src, opt)
+	if !errors.Is(err, errCut) {
 		t.Fatalf("второй обрыв: %v", err)
 	}
 	restarted, err := tatoeba.Import(ctx, a.store.Pool(), files.sources("v3"),
 		tatoeba.Options{BatchLines: 4, Restart: true})
-	if err != nil || restarted.Resumed || restarted.Phase != "ru" || restarted.Russian != 9 {
+	if err != nil || restarted.Resumed || restarted.Phase != "ru" || restarted.Russian != 9 ||
+		restarted.ImportID == cut.ImportID {
 		t.Fatalf("рестарт: %+v, %v", restarted, err)
 	}
 	if got := tatoebaSnapshot(t, conn); got != want {
 		t.Fatalf("рестарт разошёлся с чистым импортом:\n%s", got)
+	}
+
+	// -restart с меньшим потолком: пары и предложения, которые брошенный
+	// прогон записал по прежнему потолку, уходят при завершении нового
+	// («Он побежал домой.» — 17 символов при потолке 15, и «He ran home.»
+	// остаётся без перевода)
+	short := tatoeba.Options{BatchLines: 4, Limits: tatoeba.Limits{MaxRunes: 15}}
+	importTatoeba(t, clean, files.sources("v4"), short)
+	wantShort := tatoebaSnapshot(t, cleanConn)
+	src = files.sources("v4")
+	src.English = cutAt(files.english, "2 + 2")
+	if _, err := tatoeba.Import(ctx, a.store.Pool(), src, opt); !errors.Is(err, errCut) {
+		t.Fatalf("третий обрыв: %v", err)
+	}
+	short.Restart = true
+	importTatoeba(t, a, files.sources("v4"), short)
+	if got := tatoebaSnapshot(t, conn); got != wantShort {
+		t.Fatalf("рестарт с потолком 15 разошёлся с чистым импортом:\n%s\nчистый:\n%s", got, wantShort)
 	}
 }
 
@@ -327,7 +347,7 @@ func TestTatoebaMigrationReverts(t *testing.T) {
 		}
 		return s + " " + idx
 	}
-	want := "tatoeba_imports:created_at,finished_at,id,lines_done,phase,source_version " +
+	want := "tatoeba_imports:abandoned_at,created_at,finished_at,id,lines_done,phase,source_version " +
 		"tatoeba_links:en_id,import_id,ru_id " +
 		"tatoeba_sentences:author,id,import_id,lang,lemmas,text " +
 		"tatoeba_imports_pkey,tatoeba_imports_running_key,tatoeba_links_pkey,tatoeba_links_ru_idx," +
