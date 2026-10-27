@@ -3,23 +3,68 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/IEZhu/class/backend/internal/jobs"
 )
 
-// StartLessonRecording переводит урок scheduled → live и в той же транзакции
-// вызывает start — запуск Egress. Переход фиксируется только вместе
-// с успешным запуском: если start вернул ошибку, транзакция откатывается,
-// урок остаётся scheduled и следующая доставка вебхука повторит запуск
-// (ADR-012). Иначе сорванный старт навсегда оставлял бы урок без записи.
+// Запись урока — набор сегментов lesson_recordings (ADR-031): каждый запуск
+// Egress пишет свой файл, egress_ended закрывает сегмент, а не урок. Урок
+// живёт, пока открыто окно комнаты; после него closeLessonIfOver выбирает
+// запись и переводит урок дальше — по egress_ended или уборкой
+// SweepRecordings.
+
+const (
+	// RoomOpensBefore и RoomClosesAfter — окно комнаты урока (ADR-031):
+	// токен в комнату и запуск записи — только с starts_at − RoomOpensBefore
+	// до ends_at + RoomClosesAfter. Раньше комната пуста по смыслу, позже —
+	// урок кончился; запас после конца — на переподключение затянувшегося урока.
+	RoomOpensBefore = 15 * time.Minute
+	RoomClosesAfter = 15 * time.Minute
+	// recordingLostAfter — сегмент, по которому egress_ended не пришёл
+	// за столько после конца урока, считается потерянным: Egress уборка
+	// останавливает ещё на закрытии окна, LiveKit сдаётся с доставкой
+	// раньше, а урок не должен ждать его вечно.
+	recordingLostAfter = 3 * time.Hour
+)
+
+// RoomWindow — когда комната урока открыта (RoomOpensBefore, RoomClosesAfter).
+func RoomWindow(startsAt, endsAt time.Time) (opens, closes time.Time) {
+	return startsAt.Add(-RoomOpensBefore), endsAt.Add(RoomClosesAfter)
+}
+
+// ErrLessonBusy — строку урока держит другая транзакция (перенос, отмена,
+// параллельный запуск записи): запуск сейчас не сделать, а повтор доставки
+// вебхука его сделает (ADR-012).
+var ErrLessonBusy = errors.New("lesson row is locked by another transaction")
+
+// seconds — длительность для SQL: `$n::bigint * interval '1 second'`.
+func seconds(d time.Duration) int64 { return int64(d / time.Second) }
+
+// StartLessonRecording запускает сегмент записи: в одной транзакции
+// захватывает урок, вызывает start — запуск Egress в файл key — и пишет
+// сегмент active, урок становится live. Если start вернул ошибку,
+// транзакция откатывается, урок остаётся как был и следующая доставка
+// вебхука повторит запуск (ADR-012).
 //
-// SKIP LOCKED делает вызов идемпотентным и неблокирующим: пока один запуск
-// держит строку урока, параллельная доставка room_started не ждёт его
-// и не запускает второй Egress. ErrNotFound — урока нет, он уже не
-// scheduled или запуск идёт прямо сейчас, то есть запускать нечего.
-func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, start func(context.Context) error) error {
+// Запускать есть что, только пока окно комнаты открыто и урок не ушёл
+// в обработку, — ранний вход в будущий урок его не трогает. Сегмент
+// на сессию комнаты один: пока в сессии roomSID пишет Egress, запуск не
+// нужен; новая сессия (комната закрылась и открылась снова) пишется новым
+// сегментом, даже если egress_ended прошлой ещё не дошёл. Пустой sid
+// совпадает с любым.
+//
+// Строка урока захватывается FOR NO KEY UPDATE NOWAIT: параллельная
+// доставка room_started не ждёт идущий запуск и второй Egress не запускает,
+// а вход гостя (FOR KEY SHARE) захвату не мешает и не ждёт вызова LiveKit.
+// Занятая строка — ErrLessonBusy, а не пропуск: держать её может и перенос
+// или отмена урока, и тогда пропуск с ответом 200 оставил бы урок без
+// записи — LiveKit повторяет только не-2xx. ErrNotFound — урока нет, окно
+// закрыто или запись в этой сессии уже идёт, то есть запускать нечего.
+func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, roomSID, key string, start func(context.Context) (egressID string, err error)) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -28,21 +73,255 @@ func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, start 
 
 	var id int64
 	err = tx.QueryRow(ctx,
-		`UPDATE lessons SET status = 'live'
-		 WHERE id = (SELECT id FROM lessons
-		             WHERE id = $1 AND status = 'scheduled'
-		             FOR UPDATE SKIP LOCKED)
-		 RETURNING id`, lessonID).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
+		`SELECT id FROM lessons
+		 WHERE id = $1 AND status IN ('scheduled', 'live')
+		   AND now() BETWEEN starts_at - $2::bigint * interval '1 second' AND ends_at + $3::bigint * interval '1 second'
+		 FOR NO KEY UPDATE NOWAIT`,
+		lessonID, seconds(RoomOpensBefore), seconds(RoomClosesAfter)).Scan(&id)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case PgErrorCode(err) == "55P03": // lock_not_available
+		return ErrLessonBusy
+	case err != nil:
+		return err
+	}
+	// Отдельный запрос после захвата: его снимок свежее, и он видит
+	// сегменты, которые прежний владелец строки зафиксировал до захвата
+	var recording bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM lesson_recordings
+		                WHERE lesson_id = $1 AND status = 'active'
+		                  AND (room_sid = $2 OR room_sid = '' OR $2 = ''))`,
+		lessonID, roomSID).Scan(&recording); err != nil {
+		return err
+	}
+	if recording {
 		return ErrNotFound
 	}
+
+	egressID, err := start(ctx)
 	if err != nil {
 		return err
 	}
-	if err := start(ctx); err != nil {
+	// egress_ended мог обогнать фиксацию (Egress закончился за секунды)
+	// и уже завести сегмент — тогда он главнее
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO lesson_recordings (lesson_id, egress_id, room_sid, s3_key)
+		 VALUES ($1, $2, $3, $4) ON CONFLICT (egress_id) DO NOTHING`,
+		lessonID, egressID, roomSID, key); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE lessons SET status = 'live' WHERE id = $1`, lessonID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// RecordingResult — итог сегмента из egress_ended.
+type RecordingResult struct {
+	EgressID string
+	RoomSID  string
+	// Key — файл, который Egress записал; пусто — файла нет
+	Key  string
+	Size int64
+	// Error — непусто, если сегмент не удался: файла нет или он битый
+	Error string
+}
+
+// EndLessonRecording — Egress завершился: сегмент становится complete или
+// failed (Error), и урок, чьё окно уже закрылось, переходит дальше
+// (closeLessonIfOver). Сегмент, которого мы не заводили (запуск, чья
+// транзакция не зафиксировалась, ADR-012), заводится здесь же. Принятый
+// complete-сегмент повтор доставки не трогает; сегмент, который уборка
+// уже сочла потерянным, запоздавший complete оживляет — и запись
+// достаётся уроку, закрытому без неё.
+//
+// Всё одной транзакцией: сбой откатывает и сегмент, и переход урока,
+// а повтор доставки сделает то же заново. ErrNotFound — урока нет или
+// сегмент уже принят, менять нечего.
+func (s *Store) EndLessonRecording(ctx context.Context, lessonID int64, res RecordingResult) error {
+	status := "complete"
+	if res.Error != "" {
+		status = "failed"
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO lesson_recordings AS r
+		     (lesson_id, egress_id, room_sid, s3_key, status, size_bytes, error, ended_at)
+		 SELECT id, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''), now() FROM lessons WHERE id = $1
+		 ON CONFLICT (egress_id) DO UPDATE
+		     SET status = excluded.status, s3_key = COALESCE(excluded.s3_key, r.s3_key),
+		         size_bytes = excluded.size_bytes, error = excluded.error, ended_at = excluded.ended_at
+		     WHERE r.lesson_id = excluded.lesson_id AND r.status <> 'complete'`,
+		lessonID, res.EgressID, res.RoomSID, res.Key, status, res.Size, res.Error)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if _, err := closeLessonIfOver(ctx, tx, lessonID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// lessonToClose — условие на урок l, которому closeLessonIfOver нужен:
+// окно комнаты ($1 — RoomClosesAfter в секундах) закрылось, а урок ещё
+// не ушёл дальше. Это live; scheduled с сегментами — запуск записи, чья
+// транзакция не зафиксировалась (ADR-012): комната была, запись есть;
+// done без recording_s3_key и транскрипта, но с complete-сегментом —
+// запись дошла после того, как уборка сочла её потерянной (ADR-031).
+const lessonToClose = `now() > l.ends_at + $1::bigint * interval '1 second'
+	AND (l.status = 'live'
+	     OR (l.status = 'scheduled' AND EXISTS (SELECT 1 FROM lesson_recordings r WHERE r.lesson_id = l.id))
+	     OR (l.status = 'done' AND l.recording_s3_key IS NULL
+	         AND EXISTS (SELECT 1 FROM lesson_recordings r WHERE r.lesson_id = l.id AND r.status = 'complete')
+	         AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.lesson_id = l.id)))`
+
+// closeLessonIfOver завершает урок (lessonToClose), если ни один сегмент
+// больше не пишется: запись — самый большой complete-сегмент (лишние
+// короткие — обрывки до переподключения, ADR-031), урок уходит
+// в processing с джобой recording_ready; без записи — сразу done.
+// Возвращает, перешёл ли урок.
+//
+// Захват SKIP LOCKED: строку держит запуск нового сегмента — значит, урок
+// ещё идёт; кого пропустили, доберёт SweepRecordings. Сегменты читаются
+// отдельным запросом уже после захвата и видят свежие.
+func closeLessonIfOver(ctx context.Context, tx pgx.Tx, lessonID int64) (bool, error) {
+	var id int64
+	err := tx.QueryRow(ctx,
+		`SELECT id FROM lessons l WHERE `+lessonToClose+` AND id = $2
+		 FOR NO KEY UPDATE SKIP LOCKED`,
+		seconds(RoomClosesAfter), lessonID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var active bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM lesson_recordings WHERE lesson_id = $1 AND status = 'active')`,
+		lessonID).Scan(&active); err != nil {
+		return false, err
+	}
+	if active {
+		return false, nil
+	}
+
+	// Доска закрывается вместе с переходом (whiteboardOpen): сцена уже
+	// окончательная, её слова — в кандидаты словаря урока (S3-7)
+	if err := scheduleWhiteboardTerms(ctx, tx, lessonID); err != nil {
+		return false, err
+	}
+	var key string
+	err = tx.QueryRow(ctx,
+		`SELECT s3_key FROM lesson_recordings WHERE lesson_id = $1 AND status = 'complete'
+		 ORDER BY size_bytes DESC NULLS LAST, id DESC LIMIT 1`, lessonID).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Записи нет: плеер ответит no_recording, ASR нечего отдавать
+		_, err := tx.Exec(ctx, `UPDATE lessons SET status = 'done' WHERE id = $1`, lessonID)
+		return err == nil, err
+	}
+	if err != nil {
+		return false, err
+	}
+	// Точка вставки ASR (S1-5, ADR-013): processing вместе с джобой
+	// recording_ready — урок не застрянет в processing без неё
+	if _, err := tx.Exec(ctx,
+		`UPDATE lessons SET recording_s3_key = $2, status = 'processing' WHERE id = $1`,
+		lessonID, key); err != nil {
+		return false, err
+	}
+	if _, err := jobs.Enqueue(ctx, tx, JobRecordingReady, RecordingReady{LessonID: lessonID}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// JobRecordingSweep — периодическая уборка записей (ADR-031), payload {}.
+const JobRecordingSweep = "recording_sweep"
+
+// ActiveRecording — сегмент, который Egress ещё пишет.
+type ActiveRecording struct {
+	LessonID int64
+	EgressID string
+}
+
+// RecordingsPastWindow — active-сегменты уроков, чьё окно комнаты
+// закрылось: их Egress уборка останавливает раньше, чем SweepRecordings
+// сочтёт сегмент потерянным (ADR-031). Комнату держит любой, кто не закрыл
+// вкладку, а токен ограничивает только новые входы.
+func (s *Store) RecordingsPastWindow(ctx context.Context) ([]ActiveRecording, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT r.lesson_id, r.egress_id FROM lesson_recordings r JOIN lessons l ON l.id = r.lesson_id
+		 WHERE r.status = 'active' AND now() > l.ends_at + $1::bigint * interval '1 second'
+		 ORDER BY r.id`, seconds(RoomClosesAfter))
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[ActiveRecording])
+}
+
+// SweepRecordings доводит уроки, которые egress_ended сам не завершил:
+// комната опустела до конца урока, запись упала, egress_ended потерялся.
+// Сегмент, по которому egress_ended не пришёл за recordingLostAfter после
+// конца урока, помечается failed; затем каждый урок lessonToClose
+// проходит closeLessonIfOver в своей транзакции — сбой одного не держит
+// остальных. Повтор безопасен: переходы условные. Возвращает число
+// завершённых уроков.
+func (s *Store) SweepRecordings(ctx context.Context) (int, error) {
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE lesson_recordings r
+		 SET status = 'failed', error = 'egress_ended не пришёл', ended_at = now()
+		 FROM lessons l
+		 WHERE l.id = r.lesson_id AND r.status = 'active'
+		   AND now() > l.ends_at + $1::bigint * interval '1 second'`,
+		seconds(recordingLostAfter)); err != nil {
+		return 0, err
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id FROM lessons l WHERE `+lessonToClose+` ORDER BY id`, seconds(RoomClosesAfter))
+	if err != nil {
+		return 0, err
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return 0, err
+	}
+	finished := 0
+	var errs []error
+	for _, id := range ids {
+		closed, err := s.closeLesson(ctx, id)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("урок %d: %w", id, err))
+			continue
+		}
+		if closed {
+			finished++
+		}
+	}
+	return finished, errors.Join(errs...)
+}
+
+func (s *Store) closeLesson(ctx context.Context, lessonID int64) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	closed, err := closeLessonIfOver(ctx, tx, lessonID)
+	if err != nil {
+		return false, err
+	}
+	return closed, tx.Commit(ctx)
 }
 
 // JobRecordingReady — точка вставки ASR (S1-5, ADR-013): запись принята,
@@ -54,35 +333,6 @@ const JobRecordingReady = "recording_ready"
 // RecordingReady — payload джобы JobRecordingReady.
 type RecordingReady struct {
 	LessonID int64 `json:"lesson_id"`
-}
-
-// FinishLessonRecording — запись готова: путь в бакете, статус processing
-// и джоба JobRecordingReady одной транзакцией — урок не застрянет
-// в processing без джобы, которая его оттуда выведет. Условие на статус
-// делает вызов идемпотентным: повторная доставка egress_ended не поставит
-// вторую джобу и не вернёт done-урок в processing. ErrNotFound — урока нет
-// либо запись уже принята.
-func (s *Store) FinishLessonRecording(ctx context.Context, lessonID int64, s3Key string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	tag, err := tx.Exec(ctx,
-		`UPDATE lessons SET recording_s3_key = $2, status = 'processing'
-		 WHERE id = $1 AND status IN ('scheduled', 'live')`,
-		lessonID, s3Key)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	if _, err := jobs.Enqueue(ctx, tx, JobRecordingReady, RecordingReady{LessonID: lessonID}); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
 }
 
 // FinishLessonProcessing — обработка записи завершена, урок done. Повторный

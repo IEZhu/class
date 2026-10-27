@@ -10,20 +10,16 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"io"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/IEZhu/class/backend/internal/dictionary"
+	"github.com/IEZhu/class/backend/internal/dumpfile"
 )
 
 func main() {
@@ -58,7 +54,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	src, version, err := open(ctx, *source)
+	src, version, err := dumpfile.Open(ctx, *source)
 	if err != nil {
 		log.Fatalf("dictimport: %v", err)
 	}
@@ -79,49 +75,4 @@ func main() {
 	}
 	log.Printf("dictimport: прогон %d завершён за %s: строк %d, записано статей %d, испорченных строк %d, удалено устаревших %d",
 		st.ImportID, time.Since(started).Round(time.Second), st.Lines, st.Entries, st.Malformed, st.Removed)
-}
-
-// open открывает источник и возвращает его версию: по ней импорт решает,
-// можно ли продолжить незавершённый прогон.
-func open(ctx context.Context, source string) (io.ReadCloser, string, error) {
-	if strings.HasPrefix(source, "http://") {
-		return nil, "", fmt.Errorf("только https: словарь не должен подменяться по дороге")
-	}
-	if !strings.HasPrefix(source, "https://") {
-		f, err := os.Open(source)
-		if err != nil {
-			return nil, "", err
-		}
-		fi, err := f.Stat()
-		if err != nil {
-			f.Close()
-			return nil, "", err
-		}
-		return f, fmt.Sprintf("size=%d mtime=%d", fi.Size(), fi.ModTime().Unix()), nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	// Без общего таймаута: полный дамп качается минутами. Зависание
-	// соединения ловят таймауты установки и первого ответа.
-	client := &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   30 * time.Second,
-		ResponseHeaderTimeout: time.Minute,
-	}}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, "", fmt.Errorf("GET %s: HTTP %d", source, resp.StatusCode)
-	}
-	version := resp.Header.Get("ETag")
-	if version == "" {
-		version = resp.Header.Get("Last-Modified")
-	}
-	return resp.Body, version, nil
 }

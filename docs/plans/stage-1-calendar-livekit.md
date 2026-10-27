@@ -40,6 +40,9 @@ scope `calendar.events`; `POST /auth/google/callback`; refresh token
 policy по [05-storage-s3.md](../architecture/05-storage-s3.md). Закрывает
 долг D-4: `materials.s3_key` + загрузка файлов материалов.
 **DoD:** приватный файл отдаётся браузеру только по presigned URL.
+*Объём сужен по ходу:* S1-3 сделал presigned GET и `GET /media/{lesson_id}/url`;
+presigned PUT и файлы материалов остались долгом D-4 и закрыты отдельной
+работой по долгам D-4/D-5 ([ADR-024](../architecture/decisions.md), «Факт»).
 
 ### S1-4 LiveKit Cloud: комнаты
 Ключи в `.env`; `GET /lessons/{id}/room-token` (identity = user_id,
@@ -91,6 +94,30 @@ teacher — только студенты своих групп (состав г
 **DoD:** приглашённый переходит по ссылке, задаёт пароль и попадает
 в кабинет залогиненным; повторный переход по той же ссылке — 410.
 
+### S1-11 Открытые события и гостевые ссылки
+Пробел проектирования: звать людей со стороны, не заводя им учёток.
+Событие — урок без группы (`lessons.group_id` nullable, `title`), гость —
+четвёртая роль `guest` (миграции `0005_open_events`, `0006_event_constraints`).
+Многоразовая гостевая ссылка (в БД только sha256), выпуск, перевыпуск
+и отзыв под организатором (admin или teacher события), публичные
+`GET/POST /join/{token}`: имя → участник события и сессия до конца события
+плюс 2 часа. Границы — [ADR-010](../architecture/decisions.md), уточнения
+ревью — ADR-032.
+**DoD:** организатор выпускает ссылку, человек заходит по ней, назвав имя,
+и попадает в комнату события; отозванная или перевыпущенная ссылка — 404,
+после конца события — 410; у урока с группой ссылки нет (409 в api,
+`CHECK` в БД).
+
+### S1-12 UI события и гостевой ссылки
+Форма на `/lessons`: без группы — открытое событие с обязательным
+названием, с группой — обычный урок. На странице события организатору —
+выпуск, копирование, перевыпуск и отзыв ссылки, пока событие не кончилось.
+Публичная страница `/join/{token}` предупреждает о записи до ввода имени.
+**DoD:** преподаватель создаёт событие из UI и выдаёт ссылку; гость
+на `/join/{token}` видит название, время и предупреждение о записи, вводит
+имя и попадает на страницу события; перезагрузка страницы организатором
+не ломает уже разосланную ссылку.
+
 ## Выходные артефакты
 
 | Артефакт | Потребитель |
@@ -102,10 +129,11 @@ teacher — только студенты своих групп (состав г
 | Комнаты LiveKit + room-token | — (готово для уроков) |
 | Плеер в `/lesson/{id}` | S2-4 (синхронизация с транскриптом) |
 | Бэкапы PG | эксплуатация |
+| Открытые события (урок без группы, `title`), роль `guest`, `GET/POST /join/{token}` и страница `/join/{token}` | S2-5 (гость — обычный участник с `user_id`), эксплуатация |
 
 ## Definition of Done этапа
 
-- [ ] S1-1…S1-10 закрыты в [INDEX](../tasks/README.md)
+- [ ] S1-1…S1-12 закрыты в [INDEX](../tasks/README.md)
 - [ ] Сквозной сценарий: урок в календаре → комната → запись в S3 → плеер
 - [ ] «Факт» заполнен (ключи `.env`, имена джоб, пути S3)
 
@@ -256,8 +284,8 @@ teacher — только студенты своих групп (состав г
   Ссылка **многоразовая**, в отличие от приглашений S1-10. Сессия гостя
   живёт до конца события плюс 2 часа.
 - Гости скрыты из `ListUsers`: 50 студентов не должны тонуть в посетителях.
-- Email гостя синтетический (`guest+<хэш>@guests.local`): колонка
-  UNIQUE NOT NULL, а адреса у гостя мы не спрашиваем.
+- Email гостя синтетический (`guest+<32 случайных hex>@guests.local`):
+  колонка UNIQUE NOT NULL, а адреса у гостя мы не спрашиваем.
 - По ревью PR #11 — миграция `0006_event_constraints` (0005 уже на стенде):
   `lessons_named` требует непустой `title` у события,
   `lessons_title_event_only` запрещает `title` у урока с группой,
@@ -323,7 +351,8 @@ teacher — только студенты своих групп (состав г
   параллельные пакеты `go test ./...` падали на `CREATE EXTENSION` (23505).
 - calendar_sync не сделан — долг D-7, закрывает S1-1 (вне MVP).
 - Глобальная уборка протухших сессий (ADR-006) не сделана — нет
-  периодических джоб, долг D-15.
+  периодических джоб, долг D-15 (закрыт в S5-7 джобой `session_cleanup`,
+  ADR-035).
 
 ### S1-7 Бэкапы Postgres (2026-10-26)
 
@@ -495,7 +524,9 @@ teacher — только студенты своих групп (состав г
   в api — за интерфейсом `objectStore` (`api.go`). `GET /lessons/{id}`
   прячет неподтверждённые файлы от участников.
 - Джоба `material_files_delete` (`store.JobMaterialFilesDelete`, payload
-  `{"keys": [постоянные ключи]}`): ставят `store.CancelLesson` в транзакции
+  `{"keys": [постоянные ключи], "objects": [прочие объекты урока]}` —
+  `objects` с ревью волны A: снимок доски отменённого урока, удаляется как
+  есть, ADR-020): ставят `store.CancelLesson` в транзакции
   отмены урока и `store.DeleteMaterial`, когда api не удалось удалить
   объект; хендлер — `worker.RegisterMaterialFiles` в
   `backend/internal/worker/worker.go` (оба объекта каждого ключа),
@@ -528,6 +559,103 @@ teacher — только студенты своих групп (состав г
   списки, снапшот, `RemoveParticipant` на httptest-фейке LiveKit,
   обратимость 0013); `storage/s3_test.go` — точный набор заголовков
   подписи PUT, `Stat`/`Copy`/`Delete` на httptest.
+
+### Ревью раунда 1, F1: сегменты записи, окно комнаты, вебхук LiveKit (2026-10-26)
+
+Решения — [ADR-031](../architecture/decisions.md); правки текста ADR-009,
+ADR-010, ADR-012 на месте.
+- Миграция `0018_lesson_recordings` (обратима: down удаляет таблицу, джобы
+  и расписание `recording_sweep`): таблица `lesson_recordings` — сегмент
+  на каждый запуск Egress (`egress_id` UNIQUE, `room_sid`, `s3_key`,
+  `status` active/complete/failed, `size_bytes`, `error`, `ended_at`).
+- S3: сегмент `recordings/{lesson_id}/{YYYYMMDDTHHMMSSZ}-{16 hex}.mp4|.ogg`
+  (`storage.NewRecordingKey`; `RecordingKey` с фиксированным `room.*`
+  удалён). `lessons.recording_s3_key` — выбранный сегмент.
+- `store.StartLessonRecording(ctx, lessonID, roomSID, key, start)`: только
+  в окне `starts_at` − 15 мин … `ends_at` + 15 мин
+  (`store.RoomOpensBefore`/`RoomClosesAfter`, `store.RoomWindow`), урок
+  в scheduled или live, без active-сегмента той же сессии комнаты;
+  захват `FOR NO KEY UPDATE SKIP LOCKED` вместо `FOR UPDATE` из S1-5,
+  а `JoinAsGuest` читает урок `FOR KEY SHARE` вместо `FOR SHARE` из S1-11:
+  вход гостя больше не ждёт вызова LiveKit.
+- `store.EndLessonRecording` (вместо `FinishLessonRecording`): upsert
+  сегмента по `egress_id`, затем `closeLessonIfOver` — после окна и без
+  active-сегментов урок → processing с самым большим complete-сегментом
+  и джобой `recording_ready`, без записи → done. Условие на урок —
+  `store.lessonToClose`, одно на вебхук и уборку: live, scheduled
+  с сегментами (ADR-012) и, после ревью волны B, done без
+  `recording_s3_key` и транскрипта с complete-сегментом — запоздавший
+  `egress_ended` отдаёт уроку запись.
+- Джоба `recording_sweep` (`store.SweepRecordings`,
+  `worker.RegisterRecordingSweep(runner, scheduler, st, egress)`, каждые
+  5 мин через `jobs.Scheduler`, только роль core): сначала
+  `store.RecordingsPastWindow` и `livekitapi.Client.StopEgress`
+  (`livekit.Egress/StopEgress`) для каждого active-сегмента урока
+  с закрытым окном — после ревью волны B; затем закрывает уроки с закрытым
+  окном, active-сегмент старше `ends_at` + 3 ч помечает failed
+  «egress_ended не пришёл». Worker читает `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+  `LIVEKIT_API_SECRET` (compose передаёт их и worker'у; без них остановки
+  нет, строка в журнале).
+- `POST /webhooks/livekit`: тело ≤ 1 MiB до проверки подписи (413);
+  `egress_ended` с `EGRESS_FAILED`/`EGRESS_ABORTED` или без файлов — 200,
+  сегмент failed; `lessonIDFromRoom` — только каноническое `lesson-{id}`.
+- `GET /lessons/{id}/room-token`: 409 `room_not_open` до окна,
+  `lesson_finished` после; TTL токена — до конца окна, не больше 3 ч.
+- Хранилище: `storage.New` без `S3_ENDPOINT` отвергает пустой регион
+  и `auto` (`ErrNoRegion`), `Client.Region()` — разрешённый регион, его же
+  получает Egress. Compose: `S3_REGION: ${S3_REGION:-}` у api и worker.
+  Новых ключей `.env` и зависимостей нет.
+- Тесты (схема `security_test`): `httpapi/webhooks_test.go` — сегменты
+  посреди урока, новая сессия комнаты, уборка; сбои Egress и потерянный
+  сегмент; 401 на подделки без изменений; потолок тела; окно комнаты;
+  вход гостя не ждёт вызова LiveKit при запуске записи; обратимость 0018;
+  после ревью волны B — остановка Egress после окна
+  (`TestSweepStopsEgressAfterWindow`), запоздавший сегмент после уборки
+  (`TestLateSegmentAfterSweepAttachesRecording`), путь ADR-012
+  (`TestScheduledLessonWithUncommittedSegment`), охранные условия
+  сегментов (`TestSegmentGuards`), `livekitapi/egress_test.go`
+  (`TestStopEgress`); `httpapi/media_test.go` — матрица доступа к записи;
+  `egress_jobs_test.go` и `transcripts_test.go` (ASR) — на сегментах после
+  окна; `storage/s3_test.go` — ключ сегмента и регион.
+- Долг D-20: плеер и ASR — только самый большой сегмент.
+
+### Ревью раунда 1: события, гости, документация (2026-10-26)
+
+Решения — [ADR-032](../architecture/decisions.md), отложенное — долг D-21.
+
+- `backend/migrations/0006_event_constraints.up.sql` — правка на месте
+  (стенд на версии 5, `0006` там не выполнялась): до `ADD CONSTRAINT`
+  `title` у урока с группой → `NULL`, гостевая ссылка урока с группой
+  отзывается, событие с пустым названием получает `Событие #<id>`.
+  `TestMigration0006NormalizesStandRows` накатывает 0001–0005
+  (`testdb.DSNBefore`), кладёт такие строки и применяет `0006`.
+- `store.JoinAsGuest` — потолок `MaxGuestsPerEvent` = 100 гостей
+  на событие (счёт под блокировкой строки урока), сверх — 409 `event_full`;
+  срок сессии — `ends_at` + `GuestSessionGrace` (2 ч) по заблокированной
+  строке. `store.RescheduleLesson` сдвигает сессии гостей события.
+  Cookie гостя — `sessionTTL`, срок держит БД. Синтетический email —
+  из отдельных 128 случайных бит, а не из хэша сессии.
+- `PATCH /auth/me` — гостю имя не длиннее 60 (`maxGuestNameLen`).
+- `GET /lessons/{id}` — организатору события `has_guest_link`
+  (`store.LessonDetail.HasGuestLink`).
+- Web: `web/app/lesson/[id]/guest-link.tsx` — флаг `hasLink` с сервера,
+  перевыпуск выпущенной ссылки только после подтверждения, «Отозвать»
+  без нового выпуска; блок виден до `ends_at`. `web/lib/roles.ts` — роль
+  `guest` («гость»); «Люди и группы» в шапке — только admin и teacher;
+  `/lessons` запрашивает группы только у преподавателя.
+- Plyr без cdn.plyr.io: `web/scripts/plyr-assets.mjs` (в `predev`
+  и `prebuild`) копирует `node_modules/plyr/dist/plyr.svg` в git-ignored
+  `web/public/plyr/`; в `lesson-player.tsx` — `iconUrl: "/plyr/plyr.svg"`,
+  `blankVideo: ""`.
+- Тесты в `httpapi/guests_test.go` на схеме `security_test`:
+  `TestLessonDetailHasGuestLinkForOwnerOnly`,
+  `TestGuestLimitsEmailAndAdminList` (потолок, `PATCH /auth/me`, email,
+  гости вне `GET /users` и `?archived=1`), `TestRescheduleMovesGuestSessions`.
+- Доки: `docs/security-ci.md` переписан по `security.yml` и ADR-011;
+  задачи и DoD S1-11/S1-12, DoD этапа S1-1…S1-12, выходные артефакты;
+  `AGENTS.md` — необязательные ключи и раскладка; ADR-009 и ADR-012 —
+  `aws-sdk-go-v2` и свой Twirp-клиент; ADR-010 — срок сессии гостя.
+- Новых таблиц, ключей `.env`, джоб, путей S3 и зависимостей нет.
 
 ## Риски этапа
 

@@ -36,9 +36,39 @@ export default function UserBar({ name, role }: { name: string; role: Role }) {
       </Link>
       <span>
         {/* Админка — только тем, у кого api всё равно не ответит 403 */}
-        {role !== "student" && (
+        {(role === "admin" || role === "teacher") && (
           <Link href="/admin" style={{ marginRight: "0.75rem" }}>
             Люди и группы
+          </Link>
+        )}
+        {/* Личный словарь — только у студента (S3-5) */}
+        {role === "student" && (
+          <Link href="/dictionary" style={{ marginRight: "0.75rem" }}>
+            Словарь
+          </Link>
+        )}
+        {/* S4-3: карточки повторения — по словам личного словаря студента */}
+        {role === "student" && (
+          <Link href="/practice/cards" style={{ marginRight: "0.75rem" }}>
+            Карточки
+          </Link>
+        )}
+        {/* S4-4/S4-5: «вставь слово» — по словам личного словаря студента */}
+        {role === "student" && (
+          <Link href="/practice/cloze" style={{ marginRight: "0.75rem" }}>
+            Вставь слово
+          </Link>
+        )}
+        {/* S5-6/S5-7: тексты для практики и генерация — студенту и преподавателю */}
+        {(role === "student" || role === "teacher") && (
+          <Link href="/practice/texts" style={{ marginRight: "0.75rem" }}>
+            Тексты
+          </Link>
+        )}
+        {/* S5-5: видео-практика — студенту и преподавателю */}
+        {(role === "student" || role === "teacher") && (
+          <Link href="/practice/video" style={{ marginRight: "0.75rem" }}>
+            Видео
           </Link>
         )}
         <Link href="/account" style={{ marginRight: "0.75rem" }}>

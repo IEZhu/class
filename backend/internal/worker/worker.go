@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/harvester"
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/lessonterms"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 )
@@ -78,27 +81,127 @@ func RegisterHarvester(r *jobs.Runner, s *jobs.Scheduler, h *harvester.Harvester
 	s.Every(harvester.JobSubtitlesFetch, harvester.FetchEvery)
 }
 
+// HarvesterRole — runner и расписание процесса с ролью harvester: только
+// джобы сборщика, потолок попытки — harvester.JobTimeout. С потолком
+// по умолчанию (5 мин) subtitles_fetch не берётся ни за одно видео.
+func HarvesterRole(db jobs.DB, h *harvester.Harvester) (*jobs.Runner, *jobs.Scheduler) {
+	runner := jobs.NewRunner(db, jobs.Config{HandlerTimeout: harvester.JobTimeout})
+	scheduler := jobs.NewScheduler(db)
+	RegisterHarvester(runner, scheduler, h)
+	return runner, scheduler
+}
+
 // MaterialFiles — то, что worker'у нужно от хранилища (storage.Client).
 type MaterialFiles interface {
 	Delete(ctx context.Context, key string) error
 }
 
 // materialFilesDelete удаляет постоянный объект и загрузку под
-// materials-pending/ каждого ключа. Отсутствующий ключ — не ошибка, поэтому
-// повтор после сбоя хранилища доделывает то, что не успела прошлая попытка.
+// materials-pending/ каждого ключа материала и прочие объекты урока как
+// есть. Отсутствующий ключ — не ошибка, поэтому повтор после сбоя
+// хранилища доделывает то, что не успела прошлая попытка.
 func materialFilesDelete(objects MaterialFiles) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p store.MaterialFilesDelete
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("payload: %w", err)
 		}
+		var keys []string
 		for _, key := range p.Keys {
-			for _, k := range storage.MaterialFileKeys(key) {
-				if err := objects.Delete(ctx, k); err != nil {
-					return err
-				}
+			keys = append(keys, storage.MaterialFileKeys(key)...)
+		}
+		for _, k := range append(keys, p.Objects...) {
+			if err := objects.Delete(ctx, k); err != nil {
+				return err
 			}
 		}
 		return nil
 	}
+}
+
+// recordingSweepEvery — период уборки записей: урок уходит дальше
+// не позже чем через 5 минут после закрытия окна комнаты.
+const recordingSweepEvery = 5 * time.Minute
+
+// EgressStopper — остановка записи LiveKit (*livekitapi.Client); stopped —
+// остановил этот вызов, false — запись уже кончалась.
+type EgressStopper interface {
+	StopEgress(ctx context.Context, egressID string) (stopped bool, err error)
+}
+
+// RegisterRecordingSweep — F1 (ADR-031): уборка записей. Сначала
+// останавливается Egress, который пишет после закрытия окна комнаты:
+// кто-то не закрыл вкладку, а урок кончился, — egress_ended тогда придёт
+// с файлом сразу, а не после того, как сегмент сочтут потерянным. Сбой
+// остановки не держит уборку: сегмент остаётся active, и следующий тик
+// попробует снова. egress == nil — LiveKit у worker'а не настроен, Egress
+// пишет, пока комната не опустеет. Затем урок, чьё окно закрылось, а
+// egress_ended его не завершил (комната опустела до конца урока, запись
+// упала, вебхук потерялся), уходит в processing с выбранной записью или
+// в done без неё. Джоба периодическая, расписание ставится рядом
+// с хендлером (ADR-021).
+func RegisterRecordingSweep(r *jobs.Runner, s *jobs.Scheduler, st *store.Store, egress EgressStopper) {
+	r.Handle(store.JobRecordingSweep, func(ctx context.Context, _ jobs.Job) error {
+		if egress != nil {
+			overdue, err := st.RecordingsPastWindow(ctx)
+			if err != nil {
+				return err
+			}
+			for _, rec := range overdue {
+				stopped, err := egress.StopEgress(ctx, rec.EgressID)
+				switch {
+				case err != nil:
+					log.Printf("worker: уборка записей: урок %d: %v", rec.LessonID, err)
+				case stopped:
+					log.Printf("worker: уборка записей: урок %d, окно закрыто — egress %s остановлен", rec.LessonID, rec.EgressID)
+				}
+			}
+		}
+		n, err := st.SweepRecordings(ctx)
+		if n > 0 {
+			log.Printf("worker: уборка записей завершила уроков: %d", n)
+		}
+		return err
+	})
+	s.Every(store.JobRecordingSweep, recordingSweepEvery)
+}
+
+// RegisterLessonTerms — S3-7: джоба whiteboard_terms разбирает доску
+// кончившегося урока в кандидатов словаря урока (ADR-033). Повтор над той
+// же сценой ничего не меняет, поэтому доставка at-least-once безопасна.
+func RegisterLessonTerms(r *jobs.Runner, st *store.Store) {
+	r.Handle(store.JobWhiteboardTerms, func(ctx context.Context, job jobs.Job) error {
+		var p store.WhiteboardTermsJob
+		if err := json.Unmarshal(job.Payload, &p); err != nil {
+			return fmt.Errorf("payload: %w", err)
+		}
+		n, err := lessonterms.CollectWhiteboard(ctx, st, p.LessonID)
+		if err == nil {
+			log.Printf("worker: урок %d: кандидатов с доски %d", p.LessonID, n)
+		}
+		return err
+	})
+}
+
+// Уборка протухших сессий (долг D-15, ADR-035): раз в час, пачками по
+// 1000 строк, не больше 100 пачек за запуск — запуск укладывается
+// в таймаут хендлера и при накопившемся хвосте.
+const (
+	sessionCleanupEvery      = time.Hour
+	sessionCleanupBatch      = 1000
+	sessionCleanupMaxBatches = 100
+)
+
+// RegisterSessionCleanup — долг D-15 (ADR-006, ADR-035): глобальная уборка
+// протухших сессий, в том числе гостевых. Джоба периодическая, расписание
+// ставится рядом с хендлером (ADR-021).
+func RegisterSessionCleanup(r *jobs.Runner, s *jobs.Scheduler, st *store.Store) {
+	r.Handle(store.JobSessionCleanup, func(ctx context.Context, _ jobs.Job) error {
+		n, err := st.CleanupExpiredSessions(ctx, sessionCleanupBatch, sessionCleanupMaxBatches)
+		if n > 0 {
+			log.Printf("worker: уборка сессий удалила протухших: %d", n)
+		}
+		return err
+	})
+	s.Every(store.JobSessionCleanup, sessionCleanupEvery)
 }

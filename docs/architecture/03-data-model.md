@@ -14,6 +14,7 @@ users(id, email, role /*admin|teacher|student|guest, ADR-007/010*/, name,
       google_refresh_token /*bytea, только у teachers, AES-256-GCM, ADR-023*/,
       deactivated_at /*архив вместо удаления, ADR-024*/)
 sessions(id, user_id, token_hash /*sha256*/, created_at, expires_at)  -- ADR-006
+         /* индекс по expires_at — уборка session_cleanup (D-15, 0020, ADR-035) */
 invites(id, token_hash /*sha256*/, email, name, role, group_id, created_by,
         created_at, expires_at, accepted_at, accepted_user_id)        -- ADR-008
 groups(id, name, level /*CEFR*/);  group_members(group_id, user_id)
@@ -26,10 +27,15 @@ lessons(id, group_id /*NULL у открытого события, ADR-010*/,
         livekit_room, recording_s3_key, transcript_id,
         guest_token_hash /*sha256 гостевой ссылки, только у события*/)
 lesson_participants(lesson_id, user_id, attended bool)
+-- сегменты записи урока (0018, ADR-031): свой файл на каждый запуск Egress
+lesson_recordings(id, lesson_id, egress_id /*UNIQUE*/, room_sid /*сессия комнаты*/,
+                  s3_key, status /*active|complete|failed*/, size_bytes, error,
+                  created_at, ended_at)
 materials(id, lesson_id, kind /*homework|material*/, title, body_md,
           s3_key /*materials/{lesson_id}/…, ADR-024*/, file_name, file_content_type,
           file_size, file_uploaded_at /*загрузка подтверждена*/,
-          file_etag /*ETag объекта при подтверждении*/)
+          file_etag /*ETag объекта при подтверждении*/,
+          body_tsv /*хранимые лексемы body_md, GIN; поиск cloze, 0022, ADR-037*/)
 
 -- очередь фоновых задач (этап 1); выполненная джоба удаляется (ADR-013)
 jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by,
@@ -40,9 +46,19 @@ job_schedules(kind, slot /*период, за который джоба уже �
 terms(id, lang /*en*/, lemma /*ключ, ADR-017*/, surface /*форма первого клика*/,
       translation_cache jsonb /*{"ru": {text, source, at}}*/, created_at,
       UNIQUE(lang, lemma))
-user_terms(user_id, term_id, status /*1..5: new..known*/, source_lesson_id, added_at)
-lesson_term_candidates(lesson_id, term_id, source /*click|whiteboard|manual*/, added_by)
-lesson_terms(lesson_id, term_id)          -- подтверждённый «словарь урока»
+-- личный словарь (0015, ADR-027): одна строка на (user_id, term_id);
+-- источник — первый урок, отмена урока его обнуляет
+user_terms(user_id, term_id, status /*1..5: new..known*/, source_lesson_id nullable,
+           added_at, updated_at, PRIMARY KEY(user_id, term_id))
+-- кандидаты словаря урока (0019, ADR-033): строка на (урок, термин, источник);
+-- count — разные кликнувшие участники / вхождения на доске при последнем разборе / 1
+lesson_term_candidates(lesson_id, term_id, source /*click|whiteboard|manual*/, surface,
+                       count, added_by, first_seen_at, last_seen_at,
+                       PRIMARY KEY(lesson_id, term_id, source))
+-- кто из участников уже кликнул слово на уроке (0019, ADR-033)
+lesson_term_clicks(lesson_id, term_id, user_id, PRIMARY KEY(lesson_id, term_id, user_id))
+-- подтверждённый «словарь урока» (0019, ADR-034)
+lesson_terms(lesson_id, term_id, confirmed_by, confirmed_at, PRIMARY KEY(lesson_id, term_id))
 -- словарный датасет из Wiktextract (S3-4, ADR-019); с terms связан по lemma
 definitions(id, word, lemma /*lemma.Normalize(word), индекс*/, pos, etymology,
             glosses text[], translations_ru text[], source_line, import_id,
@@ -50,10 +66,14 @@ definitions(id, word, lemma /*lemma.Normalize(word), индекс*/, pos, etymol
 definition_imports(id, source, source_version, lines_done /*контрольная точка*/,
                    entries, finished_at, abandoned_at /*брошен -restart*/, created_at)
 
--- SRS (FSRS)
+-- SRS (FSRS, 0021, ADR-036): карточка — часть слова словаря, FK на
+-- user_terms с каскадом; поля — карточка go-fsrs
 srs_cards(user_id, term_id, due_at, stability, difficulty,
-          reps, lapses, state, last_review_at, PRIMARY KEY(user_id, term_id))
-srs_reviews(id, user_id, term_id, rating /*again|hard|good|easy*/, reviewed_at, source /*card|cloze*/)
+          scheduled_days /*0 — шаг обучения в минутах*/, reps, lapses,
+          state /*new|learning|review|relearning*/, remaining_steps,
+          last_review_at, created_at, PRIMARY KEY(user_id, term_id))
+srs_reviews(id, user_id, term_id, client_id /*uuid клиента, UNIQUE(user_id, client_id)*/,
+            rating /*again|hard|good|easy*/, reviewed_at, source /*card|cloze*/)
 
 -- транскрипты (0008, ADR-015): один на урок; external_id — id у провайдера,
 -- error — причина сбоя (ADR-016)
@@ -61,7 +81,9 @@ transcripts(id, lesson_id /*UNIQUE*/, provider /*assemblyai*/,
             status /*queued|submitted|fetching|completed|error*/,
             external_id, vtt_s3_key, error, created_at)
 utterances(transcript_id, idx, speaker_label, user_id nullable /*ручной маппинг A→Иван*/,
-           start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx))
+           start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx),
+           edited_at, edited_by /*правка текста преподавателем, 0014, ADR-025*/,
+           text_tsv /*хранимые лексемы text, GIN; поиск cloze, 0022, ADR-037*/)
 
 -- индекс субтитров (практика-видео); состояние сборщика — ADR-022
 videos(id, source /*youtube|ted*/, external_id, title, channel, duration_s, lang, added_at,
@@ -73,15 +95,41 @@ subtitle_segments(video_id, idx, start_ms, end_ms, text,
 subtitle_sources(id, kind /*channel|playlist*/, external_id, title, enabled,
                  polled_at, last_error, created_at)  -- seed сборщика в 0011
 
--- корпус Tatoeba
-tatoeba_sentences(id, lang, text, owner_skill smallint)
-tatoeba_links(sentence_id, translation_id)
+-- корпус Tatoeba (S5-4, ADR-028): английские предложения с русским переводом;
+-- id — id предложения в Tatoeba (ссылка атрибуции, upsert импорта)
+tatoeba_sentences(id, lang /*en|ru*/, text, author /*CC BY: имя автора, '' — без владельца*/,
+                  lemmas text[] /*только en: леммы internal/lemma, GIN*/, import_id)
+tatoeba_links(en_id, ru_id, import_id, PRIMARY KEY(en_id, ru_id))
+tatoeba_imports(id, source_version, phase /*ru|en*/, lines_done /*контрольная точка*/,
+                finished_at, abandoned_at /*брошен -restart*/, created_at)
 
 -- практика
-generated_texts(id, group_id, level, genre, body_md, target_term_ids int[], model, created_at)
-cloze_tests(id, source /*lesson|generated_text*/, source_id, term_ids int[])
-cloze_items(test_id, idx, sentence, answer_term_id, distractor_term_ids int[])
-cloze_attempts(id, test_id, user_id, answers jsonb, score, finished_at)
+-- текст LLM по целевым словам (0017, ADR-030): только прошедший валидатор
+generated_texts(id, user_id, level, genre, max_words, target_lemmas text[] /*= terms.lemma*/,
+                lemmas text[] /*леммы всего текста для поиска S5-7 (0020, ADR-035); NULL — до 0020*/,
+                body /*абзацы без разметки*/, word_count, coverage, occurrences jsonb,
+                unknown_share, attempts, provider, model, created_at)
+llm_usage(user_id, day /*UTC*/, kind /*generate|explain, 0024*/, requests)
+                                            -- суточные лимиты LLM (ADR-029, ADR-039)
+-- кэш «объясни» (0024, ADR-039): ключ — термин и sha256 формы слова и нормализованного предложения
+term_explanations(term_id, context_hash, context, body /*простой текст*/, provider, model,
+                  created_at, PRIMARY KEY(term_id, context_hash))
+-- cloze (0022, ADR-037): пункт — свой у студента, тест — выдача GET /practice/cloze
+cloze_items(id, user_id, term_id /*ответ — лемма; FK на user_terms с каскадом*/,
+            source /*lesson|material|generated|tatoeba*/,
+            lesson_id, material_id, generated_text_id, tatoeba_id /*ровно свой источник*/,
+            sentence /*снимок, до 300 символов*/, blank_start, blank_len /*символы*/,
+            context_hash /*sha256 пропуска и предложения*/, distractors text[3] /*леммы*/,
+            option_source /*list|llm — набор вариантов, отданный пункту; NULL — ещё нет*/,
+            created_at, UNIQUE(user_id, term_id, context_hash))
+cloze_misses(user_id, term_id, checked_at, PRIMARY KEY(user_id, term_id))
+                    -- отрицательный кэш: нового предложения слову не нашлось
+cloze_distractors(term_id, context_hash, options text[3], provider, model, created_at,
+                  PRIMARY KEY(term_id, context_hash))  -- кэш LLM-дистракторов, общий
+cloze_attempts(id, item_id, user_id, client_id /*uuid, UNIQUE(user_id, client_id)*/,
+               mode /*choice|typing*/, answer, correct, response_ms,
+               rating /*again|good|easy*/, review_id /*→ srs_reviews; NULL — не засчитан*/,
+               created_at)
 
 whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены Excalidraw
            /* + room_id, room_key, scene jsonb, scene_version, snapshot_version,
@@ -98,12 +146,19 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | колонки lessons.title, guest_token_hash; роль guest; CHECK правил события (0006) | 1 | S1-11 |
 | jobs (миграция `0007_jobs`); колонка users.google_refresh_token (миграция `0012_google_calendar`, ADR-023) | 1 | S1-2 / S1-1 |
 | колонки файла materials.file_*, users.deactivated_at (`0013_material_files_archive`) | 1 | долги D-4, D-5 |
+| lesson_recordings (миграция `0018_lesson_recordings`, ADR-031) | 1 | ревью раунда 1, F1 |
 | transcripts, utterances (миграция `0008_transcripts`); FK lessons.transcript_id | 2 | S2-1…S2-3 |
+| колонки utterances.edited_at, edited_by (миграция `0014_utterance_edits`) | 2 | S2-4 |
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
-| user_terms, lesson_term_candidates, lesson_terms, whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
-| srs_cards, srs_reviews, cloze_tests, cloze_items, cloze_attempts | 4 | S4-1…S4-5 |
+| user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_term_clicks, lesson_terms (миграция `0019_lesson_terms`), whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
+| srs_cards, srs_reviews (миграция `0021_srs`, ADR-036) | 4 | S4-1…S4-3 |
+| cloze_items, cloze_misses, cloze_attempts; колонки utterances.text_tsv, materials.body_tsv с GIN-индексами (миграция `0022_cloze`, ADR-037; `cloze_tests` не заводится — тест есть выдача) | 4 | S4-4, S4-5 |
+| cloze_distractors (миграция `0022_cloze`, ADR-037) | 5 | S5-8 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
-| tatoeba_sentences, tatoeba_links, generated_texts | 5 | S5-4, S5-6 |
+| tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
+| generated_texts, llm_usage (миграция `0017_generated_texts`) | 5 | S5-6 |
+| колонка generated_texts.lemmas, индекс sessions_expires_idx (миграция `0020_text_practice`, ADR-035) | 5 | S5-7, долг D-15 |
+| term_explanations, колонка llm_usage.kind (миграция `0024_term_explanations`) | 5 | S5-8 |
 
 ## Инварианты модели
 
@@ -113,7 +168,9 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   (1..5: new..known) и вешает клик-попап.
 - `lessons.status` — единственный источник состояния урока:
   `scheduled → live → processing → done` (см.
-  [flows/lesson-lifecycle.md](flows/lesson-lifecycle.md)).
+  [flows/lesson-lifecycle.md](flows/lesson-lifecycle.md)). Сегменты
+  `lesson_recordings` статус не заменяют: `recording_s3_key` — выбранная
+  из них запись (самый большой complete), её играет плеер и получает ASR.
 - Открытое событие — урок без группы (ADR-010): только у него есть
   `title` (непустой) и `guest_token_hash`; у урока с группой оба `NULL`,
   подпись берётся из группы. Держат `CHECK` `lessons_named`,
@@ -123,11 +180,25 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   (ADR-017). Дефиниции не копируются в terms, а ищутся в `definitions`
   по лемме при клике. Персональное состояние —
   только в `user_terms`; словарь конкретного урока — `lesson_terms` (после
-  подтверждения преподавателем из `lesson_term_candidates`).
+  подтверждения преподавателем из `lesson_term_candidates`: только
+  кандидаты этого урока). Назначение словаря урока студентам пишет
+  `user_terms` тем же upsert'ом, что «в мой словарь» (`SaveUserTerm`),
+  и не понижает статус уже известного слова (ADR-034).
 - `srs_cards` — по одной карточке на пару (user, term); cloze-результаты
-  пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS.
+  пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS:
+  ответ по карточке к показу и промах по любой, верный ответ раньше показа
+  — только в `cloze_attempts` с `review_id` NULL (ADR-037).
+  Карточка заводится в одной транзакции со строкой `user_terms`
+  (`store.SaveUserTerm`) и удаляется вместе со словом; слова без карточки
+  (до 0021) добирает бэкфилл worker при старте. Оценка ставит
+  `user_terms.status` по карточке (ADR-036).
 - FTS: `subtitle_segments.tsv` — GENERATED tsvector + GIN-индекс; поиск
   для видео-практики только по нему.
+- Корпус Tatoeba (ADR-028): у английского предложения `lemmas` непустой,
+  у русского — `NULL` (`CHECK tatoeba_sentences_lemmas_en`); примеры
+  ищутся по `lemmas @> ARRAY[лемма термина]` (GIN `WHERE lang = 'en'`)
+  и показываются только через пару в `tatoeba_links` — русское
+  предложение без пары, оставшееся от незавершённого импорта, не видно.
 - `users.google_refresh_token` хранится шифрованным (AES-256-GCM, ключ
   `GOOGLE_TOKEN_KEY` в `.env`, id пользователя в associated data — ADR-023),
   есть только у teachers; NULL — календарь не подключён.
@@ -146,5 +217,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   задваивает `utterances`. Статус транскрипта меняют только условные
   переходы `store` (ADR-015); `vtt_s3_key` есть только у `completed`
   (CHECK в 0008).
+- Текст реплики правит только teacher урока, правка ставит перерендер
+  VTT; `utterances.user_id` — teacher урока или участник его снапшота,
+  одна метка спикера — один человек (ADR-025).
 
 Связано: [04-api.md](04-api.md) · планы этапов [../plans/](../plans/)

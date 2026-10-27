@@ -118,8 +118,12 @@ type asrStand struct {
 	asr      *fakeASR
 	files    *storagetest.Server
 	lessonID int64
+	// recording — ключ сегмента, который «записал» Egress
+	recording string
 	// Сессии: участник, teacher урока, админ, чужие студент и teacher
 	student, teacher, admin, outsider, otherTeacher *http.Cookie
+	// id тех же людей — автор правки и маппинг спикеров (S2-4, S2-5)
+	studentID, teacherID, outsiderID, otherTeacherID int64
 }
 
 func newASRStand(t *testing.T, maxAttempts int) *asrStand {
@@ -130,9 +134,10 @@ func newASRStand(t *testing.T, maxAttempts int) *asrStand {
 	teacherID, teacher := securityUser(t, base, conn, store.RoleTeacher, "asr-teacher")
 	studentID, student := securityUser(t, base, conn, store.RoleStudent, "asr-student")
 	_, s.admin = securityUser(t, base, conn, store.RoleAdmin, "asr-admin")
-	_, s.outsider = securityUser(t, base, conn, store.RoleStudent, "asr-outsider")
-	_, s.otherTeacher = securityUser(t, base, conn, store.RoleTeacher, "asr-other-teacher")
+	s.outsiderID, s.outsider = securityUser(t, base, conn, store.RoleStudent, "asr-outsider")
+	s.otherTeacherID, s.otherTeacher = securityUser(t, base, conn, store.RoleTeacher, "asr-other-teacher")
 	s.student, s.teacher = student, teacher
+	s.studentID, s.teacherID = studentID, teacherID
 	var groupID int64
 	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('asr','B1') RETURNING id`).Scan(&groupID); err != nil {
 		t.Fatal(err)
@@ -146,6 +151,11 @@ func newASRStand(t *testing.T, maxAttempts int) *asrStand {
 	}
 	s.lessonID = lesson.ID
 	if _, err := conn.Exec(ctx, `UPDATE lessons SET status = 'live' WHERE id = $1`, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+	// egress_ended придёт после окна комнаты: урок завершается сразу (ADR-031)
+	moveLesson(t, conn, lesson.ID, -2*time.Hour)
+	if s.recording, err = storage.NewRecordingKey(lesson.ID, "mp4"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,9 +190,10 @@ func (s *asrStand) egressEnded(t *testing.T) {
 	t.Helper()
 	w := httptest.NewRecorder()
 	s.h.ServeHTTP(w, signedWebhook(t, &livekit.WebhookEvent{Event: eventEgressEnded, EgressInfo: &livekit.EgressInfo{
+		EgressId:    "EG_asr",
 		RoomName:    roomName(s.lessonID),
 		Status:      livekit.EgressStatus_EGRESS_COMPLETE,
-		FileResults: []*livekit.FileInfo{{Filename: storage.RecordingKey(s.lessonID, "mp4"), Size: 1 << 20}},
+		FileResults: []*livekit.FileInfo{{Filename: s.recording, Size: 1 << 20}},
 	}}))
 	expectStatus(t, w, http.StatusOK)
 }
@@ -311,7 +322,7 @@ func TestASRSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "/" + storagetest.Bucket + "/" + storage.RecordingKey(s.lessonID, "mp4"); audio.Path != want ||
+	if want := "/" + storagetest.Bucket + "/" + s.recording; audio.Path != want ||
 		audio.Query().Get("X-Amz-Expires") != "86400" || audio.Query().Get("X-Amz-Signature") == "" {
 		t.Errorf("audio_url = %s", audio)
 	}
@@ -400,6 +411,31 @@ func TestASRWebhookStoresUtterancesOnce(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "error") {
 		t.Errorf("в ответе вьюеру есть поле ошибки: %s", w.Body.String())
+	}
+}
+
+// Данные AssemblyAI внешние: реплика с отрицательным началом, концом
+// раньше начала и NUL в тексте и метке не роняет транскрипт —
+// время зажимается в 0 ≤ start ≤ end (utterances_time_order), NUL
+// вырезается (Postgres не принимает его в text).
+func TestASRResultSanitizesUtterances(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.asr.respond(`{"id":"tr_fixture","status":"completed","utterances":[
+		{"speaker":"A\u0000","start":-300,"end":-100,"confidence":0.9,"text":"Neg\u0000ative","words":[]},
+		{"speaker":"B","start":5000,"end":4000,"confidence":0.9,"text":"Back\u0000wards","words":[]}]}`, 0)
+	s.fetched(t)
+	tr := s.transcript(t)
+	if tr.status != store.TranscriptCompleted || tr.utterances != 2 {
+		t.Fatalf("транскрипт %+v", tr)
+	}
+	var got string
+	if err := s.conn.QueryRow(context.Background(),
+		`SELECT string_agg(format('%s|%s|%s|%s|%s', idx, speaker_label, start_ms, end_ms, text), ';' ORDER BY idx)
+		 FROM utterances WHERE transcript_id = $1`, tr.id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if want := "0|A|0|0|Negative;1|B|5000|5000|Backwards"; got != want {
+		t.Fatalf("реплики %s, хотели %s", got, want)
 	}
 }
 
@@ -778,13 +814,20 @@ func TestTranscriptsMigrationReverts(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
+	// 0022 (S4-4, лексемы) и 0014 (S2-4) надстраивают utterances — их
+	// снимаем первыми, как golang-migrate
+	apply("0022_cloze.down.sql")
+	apply("0014_utterance_edits.down.sql")
 	check()
 	apply("0008_transcripts.down.sql")
 	if got := columns("transcripts") + columns("utterances"); got != "" {
 		t.Fatalf("после отката остались колонки %s", got)
 	}
 	var fk bool
-	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'lessons_transcript_fk')`).Scan(&fk); err != nil || fk {
+	// Только своя схема: у параллельных пакетов (internal/jobs) в той же базе
+	// свои схемы с этим же FK
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint
+		WHERE conname = 'lessons_transcript_fk' AND conrelid = 'lessons'::regclass)`).Scan(&fk); err != nil || fk {
 		t.Fatalf("FK lessons.transcript_id после отката: %v (%v)", fk, err)
 	}
 	apply("0008_transcripts.up.sql")

@@ -10,7 +10,7 @@
 
 ```text
 s3://lingua/
-  recordings/{lesson_id}/room.mp4        (или audio.ogg при audio-only egress)
+  recordings/{lesson_id}/{время UTC}-{random}.mp4  (.ogg при audio-only; сегмент на запуск Egress, ADR-031)
   transcripts/{lesson_id}.vtt
   whiteboards/{lesson_id}.json
   materials/{lesson_id}/{random}.{ext}  (ключ выбирает api, ADR-024)
@@ -111,7 +111,8 @@ s3://lingua/
 - Сцены досок и VTT уже лежат в S3 — отдельно не бэкапим. Снимок доски
   `whiteboards/{lesson_id}.json` (файл `.excalidraw`) пишет worker джобой
   `whiteboard_snapshot`: не чаще раза в минуту, пока рисуют, и сразу
-  по `room_finished`; рабочая сцена — в Postgres (ADR-020).
+  по `room_finished`; рабочая сцена — в Postgres (ADR-020). Снимок
+  отменённого урока удаляет worker (`material_files_delete`).
 - RTO для hobby: «пересоздать compose за час» из бэкапа.
 
 Связано: [01-topology.md](01-topology.md) ·

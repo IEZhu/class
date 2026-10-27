@@ -26,10 +26,10 @@ export default async function LessonsPage() {
     throw e;
   }
 
-  // Группы нужны только форме создания — студенту их не показываем
-  // и не запрашиваем (ему api ответит 403).
+  // Группы нужны только форме создания, а она есть лишь у преподавателя:
+  // студенту и гостю api ответит 403, админу форма не показывается.
   let groups: Group[] = [];
-  if (me.role !== "student") {
+  if (me.role === "teacher") {
     groups = await apiFetch<Group[]>("/groups").catch(() => []);
   }
 

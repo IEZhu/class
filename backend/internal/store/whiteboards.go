@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,13 +72,13 @@ func (s *Store) WhiteboardScene(ctx context.Context, lessonID int64) (json.RawMe
 }
 
 // SaveWhiteboardScene сливает присланные элементы с сохранёнными (правило —
-// mergeElements) и ставит снимок не позже чем через snapshotDelay. Строка
-// доски захвачена до конца транзакции: сохранения одной доски идут по
-// очереди, и ни одно не затирает элементы другого. Если слияние ничего
-// не изменило, версия и очередь не трогаются. Возвращает версию сцены;
-// ErrNotFound — доску не открывали, ErrBadScene — мусор в элементах,
-// ErrSceneTooLarge — слитая сцена больше maxBytes (сохранённая остаётся
-// как была).
+// mergeElements), укладывает итог в maxBytes (fitScene) и ставит снимок
+// не позже чем через snapshotDelay. Строка доски захвачена до конца
+// транзакции: сохранения одной доски идут по очереди, и ни одно не затирает
+// элементы другого. Если слияние ничего не изменило, версия и очередь
+// не трогаются. Возвращает версию сцены; ErrNotFound — доску не открывали,
+// ErrBadScene — мусор в элементах, ErrSceneTooLarge — живые элементы
+// слитой сцены больше maxBytes (сохранённая остаётся как была).
 func (s *Store) SaveWhiteboardScene(ctx context.Context, lessonID int64, incoming []json.RawMessage, maxBytes int, snapshotDelay time.Duration) (int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -107,15 +108,12 @@ func (s *Store) SaveWhiteboardScene(ctx context.Context, lessonID int64, incomin
 	if !changed {
 		return version, nil
 	}
-	scene, err := json.Marshal(merged)
-	if err != nil {
-		return 0, err
-	}
 	// Слияние элементы только добавляет, поэтому предел — на итог, а не
 	// на одно сохранение: иначе сохранения по частям растили бы сцену
 	// без конца
-	if len(scene) > maxBytes {
-		return 0, fmt.Errorf("%w: %d байт", ErrSceneTooLarge, len(scene))
+	scene, err := fitScene(merged, maxBytes)
+	if err != nil {
+		return 0, err
 	}
 	if err := tx.QueryRow(ctx,
 		`UPDATE whiteboards SET scene = $2, scene_version = scene_version + 1, updated_at = now()
@@ -173,12 +171,43 @@ func (s *Store) WhiteboardForSnapshot(ctx context.Context, lessonID int64) (*Whi
 }
 
 // MarkWhiteboardSnapshot — в хранилище лежит сцена версии version.
-// GREATEST: запоздавший повтор старой джобы не откатит отметку назад.
+// Отметка ставится как есть, без GREATEST: если две джобы снимка
+// разошлись (захват брошенной джобы) и старая записала и отметила свою
+// сцену последней, отметка откатывается вместе с объектом, и следующая
+// джоба (сохранение, конец урока) снимок перепишет, а не пропустит как
+// свежий. Узкий случай остаётся: старая записала объект раньше, чем
+// новая отметилась, — тогда старый объект под новой отметкой живёт
+// до следующего изменения доски.
+//
+// Доски уже нет — урок отменили, пока снимок выгружался, и CancelLesson
+// не знал этого ключа: key уходит в JobMaterialFilesDelete той же
+// транзакцией, а возвращается ErrNotFound. Урок захватывается FOR KEY
+// SHARE: отмена (FOR UPDATE) либо уже зафиксирована и строки нет, либо
+// ждёт отметки и затем сама найдёт ключ в строке доски — между удалением
+// доски и урока отметка не вклинится, и объект без строки не останется.
 func (s *Store) MarkWhiteboardSnapshot(ctx context.Context, lessonID int64, key string, version int64) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE whiteboards SET scene_s3_key = $2, snapshot_version = GREATEST(snapshot_version, $3)
-		 WHERE lesson_id = $1`, lessonID, key, version)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE whiteboards SET scene_s3_key = $2, snapshot_version = $3
+		 WHERE lesson_id = (SELECT id FROM lessons WHERE id = $1 FOR KEY SHARE)`, lessonID, key, version)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return tx.Commit(ctx)
+	}
+	if err := queueMaterialFilesDelete(ctx, tx, MaterialFilesDelete{Objects: []string{key}}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return ErrNotFound
 }
 
 // WhiteboardFile — сцена в формате файла .excalidraw: снимок открывается
@@ -202,6 +231,66 @@ type elementHeader struct {
 	VersionNonce *int64 `json:"versionNonce"`
 	// Index — дробный индекс z-порядка (base62, сравнивается как строка)
 	Index *string `json:"index"`
+	// IsDeleted — удалённый элемент (надгробие); Updated — время последнего
+	// изменения, мс от эпохи: по нему fitScene выбирает самые давние
+	IsDeleted bool    `json:"isDeleted"`
+	Updated   float64 `json:"updated"`
+}
+
+// fitScene — элементы сцены одним JSON-массивом не больше maxBytes.
+// Удалённые элементы хранятся, чтобы удаление не воскресло от сохранения
+// отставшего участника, но очищенная доска не должна весить, как
+// нарисованная: если сцена не влезает в предел, уходят надгробия, самые
+// давние первыми (по updated), пока не влезет. Ушедшее надгробие может
+// воскресить отставший участник — это цена предела, а давнее удаление
+// у всех на связи уже есть. Живые элементы не трогаются — без надгробий
+// больше предела значит ErrSceneTooLarge.
+func fitScene(elements []json.RawMessage, maxBytes int) ([]byte, error) {
+	scene, err := json.Marshal(elements)
+	if err != nil || len(scene) <= maxBytes {
+		return scene, err
+	}
+	type tombstone struct {
+		i       int
+		size    int
+		updated float64
+	}
+	var tombstones []tombstone
+	for i, raw := range elements {
+		h, err := parseHeader(raw)
+		if err != nil {
+			return nil, err
+		}
+		if !h.IsDeleted {
+			continue
+		}
+		// Размер элемента в массиве — как его запишет json.Marshal, плюс запятая
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return nil, err
+		}
+		tombstones = append(tombstones, tombstone{i: i, size: len(b) + 1, updated: h.Updated})
+	}
+	slices.SortStableFunc(tombstones, func(a, b tombstone) int { return cmp.Compare(a.updated, b.updated) })
+	drop := make(map[int]bool, len(tombstones))
+	size := len(scene)
+	for _, t := range tombstones {
+		if size <= maxBytes {
+			break
+		}
+		drop[t.i] = true
+		size -= t.size
+	}
+	if size > maxBytes {
+		return nil, fmt.Errorf("%w: %d байт без удалённых элементов", ErrSceneTooLarge, size)
+	}
+	kept := make([]json.RawMessage, 0, len(elements)-len(drop))
+	for i, raw := range elements {
+		if !drop[i] {
+			kept = append(kept, raw)
+		}
+	}
+	return json.Marshal(kept)
 }
 
 func parseHeader(raw json.RawMessage) (elementHeader, error) {

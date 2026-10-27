@@ -15,6 +15,8 @@ import (
 	"github.com/IEZhu/class/backend/internal/assemblyai"
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
+	"github.com/IEZhu/class/backend/internal/llm"
+	"github.com/IEZhu/class/backend/internal/srs"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/translate"
@@ -46,6 +48,14 @@ type Config struct {
 	// WhiteboardEnabled — в compose поднят ретранслятор доски (профиль
 	// whiteboard, S3-6). Без него доска отвечает 503, остальное работает.
 	WhiteboardEnabled bool
+	// LLM (S5-6) — провайдер генерации текстов из llm.New; nil — ключа
+	// нет, генерация отвечает 503. LLMDailyLimit — генераций на
+	// пользователя в сутки; 0 — DefaultLLMDailyLimit (ADR-029).
+	LLM           llm.Provider
+	LLMDailyLimit int
+	// LLMExplainDailyLimit — объяснений слов (S5-8) на пользователя в
+	// сутки, свой счётчик; 0 — DefaultLLMExplainDailyLimit (ADR-039).
+	LLMExplainDailyLimit int
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -72,6 +82,16 @@ type API struct {
 	google  *gcal.Client // nil, если Google Calendar не настроен
 	// translator — nil, если LibreTranslate не настроен
 	translator *translate.LibreTranslate
+	// llm — nil, если ключ LLM не задан (S5-6)
+	llm                  llm.Provider
+	llmDailyLimit        int
+	llmExplainDailyLimit int
+	// srs — планировщик FSRS карточек (S4-3, ADR-036); now — часы оценок
+	// и очереди, тесты подставляют свои
+	srs *srs.Scheduler
+	now func() time.Time
+	// learningWords — слова и веса видео-практики (S5-5, ADR-038)
+	learningWords learningWordSource
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -97,11 +117,25 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		livekit:    livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
 		google:     google,
 		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
+		srs:        srs.NewScheduler(),
+		now:        time.Now,
+	}
+	a.learningWords = s
+	a.llm, a.llmDailyLimit = cfg.LLM, cfg.LLMDailyLimit
+	if a.llmDailyLimit <= 0 {
+		a.llmDailyLimit = DefaultLLMDailyLimit
+	}
+	a.llmExplainDailyLimit = cfg.LLMExplainDailyLimit
+	if a.llmExplainDailyLimit <= 0 {
+		a.llmExplainDailyLimit = DefaultLLMExplainDailyLimit
 	}
 	// Без ключей storage.New отдаёт nil-указатель; в интерфейс его класть
 	// нельзя — проверка a.storage == nil перестала бы его видеть
 	if st != nil {
 		a.storage = st
+		// Egress пишет в тот же бакет: регион тот же, каким подписаны
+		// ссылки, — пустой S3_REGION у R2 доходит до LiveKit как auto
+		a.cfg.Storage.Region = st.Region()
 	}
 	return a, nil
 }
@@ -195,6 +229,10 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST /webhooks/assemblyai", a.handleAssemblyAIWebhook)
 	mux.Handle("GET /lessons/{id}/transcript", user(a.handleGetTranscript))
 
+	// S2-4/S2-5: правка реплик и маппинг спикеров — teacher урока (ADR-025)
+	mux.Handle("PATCH /lessons/{id}/transcript/utterances/{idx}", teacher(a.handleEditUtterance))
+	mux.Handle("PUT /lessons/{id}/transcript/speakers/{label}", teacher(a.handleMapSpeaker))
+
 	// S3-2: клик по слову — лемма, перевод, дефиниции (flows/word-click.md).
 	// Любой вошедший, включая гостя события: попап есть во всех текстах
 	mux.Handle("POST /terms/click", user(a.handleTermClick))
@@ -205,6 +243,60 @@ func (a *API) Router() http.Handler {
 	mux.Handle("GET /lessons/{id}/whiteboard/scene", user(a.handleWhiteboardScene))
 	mux.Handle("PUT /lessons/{id}/whiteboard/scene", user(a.handleSaveWhiteboardScene))
 	mux.Handle("GET /whiteboard/auth", user(a.handleWhiteboardAuth))
+
+	// S3-5: личный словарь (ADR-027) — только у студента (04-api.md);
+	// lookup — статусы слов видимого текста для раскраски ClickableText
+	// (ADR-026), POST: пачка слов в GET-строку не влезает
+	student := func(h http.HandlerFunc) http.Handler { return a.requireAnyRole(h, store.RoleStudent) }
+	mux.Handle("POST /user-terms", student(a.handleSaveUserTerm))
+	mux.Handle("GET /user-terms", student(a.handleListUserTerms))
+	mux.Handle("DELETE /user-terms/{term_id}", student(a.handleDeleteUserTerm))
+	mux.Handle("POST /user-terms/lookup", student(a.handleLookupUserTerms))
+
+	// S3-7/S3-8: словарь урока — кандидаты из кликов, доски и ручного
+	// ввода (ADR-033), чеклист преподавателя урока → lesson_terms →
+	// назначение студентам в user_terms (ADR-034). Словарь урока читают
+	// все участники, собирает и назначает только teacher урока
+	mux.Handle("GET /lessons/{id}/term-candidates", teacher(a.handleListCandidates))
+	mux.Handle("POST /lessons/{id}/term-candidates", teacher(a.handleAddManualCandidates))
+	mux.Handle("POST /lessons/{id}/term-candidates/whiteboard", teacher(a.handleCollectWhiteboard))
+	mux.Handle("GET /lessons/{id}/terms", user(a.handleGetLessonTerms))
+	mux.Handle("PUT /lessons/{id}/terms", teacher(a.handleSetLessonTerms))
+	mux.Handle("POST /lessons/{id}/terms/assignments", teacher(a.handleAssignLessonTerms))
+
+	// S5-6: генерация учебного текста LLM и история своих текстов
+	// (ADR-029, ADR-030). Студент и преподаватель: гостю события и
+	// админу генерация не нужна, а каждый вызов стоит денег
+	learner := func(h http.HandlerFunc) http.Handler {
+		return a.requireAnyRole(h, store.RoleStudent, store.RoleTeacher)
+	}
+	mux.Handle("POST /practice/generate-text", learner(a.handleGenerateText))
+	mux.Handle("GET /practice/texts", learner(a.handleListGeneratedTexts))
+
+	// S4-2/S4-3: очередь повторений и оценка карточек FSRS (ADR-036) —
+	// у студента: карточки заводятся по словам личного словаря
+	mux.Handle("GET /practice/queue", student(a.handlePracticeQueue))
+	mux.Handle("POST /reviews", student(a.handleReview))
+
+	// S5-7: тексто-практика — свои сгенерированные тексты и предложения
+	// Tatoeba по словам личного словаря или ?words= (ADR-035)
+	mux.Handle("GET /practice/texts/search", learner(a.handleSearchPracticeTexts))
+
+	// S5-5: видео-практика (ADR-038) — подбор видео корпуса субтитров
+	// под слова вызывающего и субтитры одного видео для плеера
+	mux.Handle("GET /practice/videos", learner(a.handlePracticeVideos))
+	mux.Handle("GET /practice/videos/{id}", learner(a.handlePracticeVideo))
+
+	// S5-8: «объясни» в попапе слова — LLM по предложению, кэш по термину
+	// и предложению (ADR-039). Гостю события нет: вызов стоит денег
+	mux.Handle("POST /terms/{id}/explain", a.requireAnyRole(http.HandlerFunc(a.handleExplainTerm), explainRoles...))
+
+	// S4-4/S4-5, S5-8 (часть 2): cloze (ADR-037) — пункты по словам
+	// словаря студента, ответ → оценка FSRS его карточки, LLM-дистракторы
+	// к пунктам выдачи с кэшем и суточным лимитом
+	mux.Handle("GET /practice/cloze", student(a.handlePracticeCloze))
+	mux.Handle("POST /practice/cloze/{id}/attempts", student(a.handleClozeAttempt))
+	mux.Handle("POST /practice/cloze/distractors", student(a.handleClozeDistractors))
 	return mux
 }
 

@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/excalidraw-assets.mjs",
+    "predev": "node scripts/excalidraw-assets.mjs && node scripts/plyr-assets.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/excalidraw-assets.mjs",
+    "prebuild": "node scripts/excalidraw-assets.mjs && node scripts/plyr-assets.mjs",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"lib/*.test.ts\""
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",

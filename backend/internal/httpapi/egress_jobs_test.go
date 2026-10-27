@@ -15,10 +15,11 @@ import (
 	"github.com/IEZhu/class/backend/internal/worker"
 )
 
-// egress_ended — точка вставки ASR (S1-5, S1-2): путь записи, processing
-// и джоба recording_ready атомарно; без ключа AssemblyAI worker сразу
-// доводит урок до done и транскрипт не заводит (S2-1). Повторная доставка
-// и вебхука, и джобы ничего не ломает.
+// egress_ended после окна комнаты — точка вставки ASR (S1-5, S1-2,
+// ADR-031): сегмент, путь записи, processing и джоба recording_ready
+// атомарно; без ключа AssemblyAI worker сразу доводит урок до done
+// и транскрипт не заводит (S2-1). Повторная доставка и вебхука, и джобы
+// ничего не ломает.
 func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	a, conn := securityDB(t)
 	ctx := context.Background()
@@ -34,9 +35,15 @@ func TestEgressEndedQueuesRecordingJob(t *testing.T) {
 	if _, err := conn.Exec(ctx, `UPDATE lessons SET status = 'live' WHERE id = $1`, lesson.ID); err != nil {
 		t.Fatal(err)
 	}
+	// Урок затянулся: комната закрылась уже после окна
+	moveLesson(t, conn, lesson.ID, -2*time.Hour)
 
-	key := storage.RecordingKey(lesson.ID, "mp4")
+	key, err := storage.NewRecordingKey(lesson.ID, "mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
 	event := &livekit.WebhookEvent{Event: eventEgressEnded, EgressInfo: &livekit.EgressInfo{
+		EgressId:    "EG_recorded",
 		RoomName:    roomName(lesson.ID),
 		Status:      livekit.EgressStatus_EGRESS_COMPLETE,
 		FileResults: []*livekit.FileInfo{{Filename: key, Size: 1 << 20}},

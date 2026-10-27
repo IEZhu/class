@@ -17,7 +17,7 @@ func TestRoomTokenGrants(t *testing.T) {
 	)
 	u := &store.User{ID: 42, Name: "Тест Учитель", Role: store.RoleTeacher}
 
-	jwt, err := roomToken(apiKey, apiSecret, roomName(7), u)
+	jwt, err := roomToken(apiKey, apiSecret, roomName(7), u, roomTokenTTL)
 	if err != nil {
 		t.Fatalf("roomToken: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestRoomTokenGrants(t *testing.T) {
 // Чужим ключом токен проверяться не должен.
 func TestRoomTokenRejectsWrongSecret(t *testing.T) {
 	jwt, err := roomToken("APIkey", "correct-secret-at-least-32-bytes-long", roomName(1),
-		&store.User{ID: 1, Name: "X"})
+		&store.User{ID: 1, Name: "X"}, roomTokenTTL)
 	if err != nil {
 		t.Fatalf("roomToken: %v", err)
 	}

@@ -45,6 +45,15 @@ type Execer interface {
 // а не пропускает молча проверки границ доступа.
 func DSN(t testing.TB) string {
 	t.Helper()
+	return DSNBefore(t, "")
+}
+
+// DSNBefore — то же, но накат останавливается перед первой миграцией,
+// чьё имя не меньше stop (например "0006"): тест миграции кладёт в схему
+// строки прежней версии и накатывает следующую сам, через Apply.
+// Пустой stop — все миграции.
+func DSNBefore(t testing.TB, stop string) string {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		if os.Getenv("CI") != "" {
@@ -102,7 +111,11 @@ func DSN(t testing.TB) string {
 	}
 	sort.Strings(files)
 	for _, file := range files {
-		Apply(t, conn, filepath.Base(file))
+		name := filepath.Base(file)
+		if stop != "" && name >= stop {
+			break
+		}
+		Apply(t, conn, name)
 	}
 	return u.String()
 }

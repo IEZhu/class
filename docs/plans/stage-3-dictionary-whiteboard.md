@@ -188,10 +188,14 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - `backend/internal/store/whiteboards.go` — `OpenWhiteboard`
   (`WhiteboardRoom`: имя и ключ комнаты), `WhiteboardScene`,
   `SaveWhiteboardScene` (поэлементное слияние `mergeElements` по правилу
-  `reconcileElements`, порядок по `index`; итог больше предела —
-  `ErrSceneTooLarge`, сцена не меняется),
+  `reconcileElements`, порядок по `index`; итог в предел укладывает
+  `fitScene` — после ревью волны A уходят самые давние надгробия, — живые
+  элементы больше предела — `ErrSceneTooLarge`, сцена не меняется),
   `ScheduleWhiteboardSnapshot`, `WhiteboardForSnapshot`,
-  `MarkWhiteboardSnapshot`, `WhiteboardFile` (формат `.excalidraw`).
+  `MarkWhiteboardSnapshot` (отметка ставится как есть, без `GREATEST`),
+  `WhiteboardFile` (формат `.excalidraw`).
+  `store.CancelLesson` ставит ключ снимка в `material_files_delete`
+  (`objects`).
   Джоба `whiteboard_snapshot` (`store.JobWhiteboardSnapshot`, payload
   `{"lesson_id"}`).
 - `backend/internal/jobs/jobs.go` — `EnqueueOnce`: одна ждущая джоба
@@ -231,6 +235,171 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   после перезапуска контейнера `whiteboard` сцена на месте и совпадает
   со снимком. Ретранслятор занимает ~12 MiB RAM.
 - Долг D-11: образ ретранслятора вне блокирующего скана.
+
+### S3-1 `<ClickableText>` (2026-10-26)
+
+- Решение — [ADR-026](../architecture/decisions.md): токенизация в
+  браузере, леммы и статусы — от api.
+- `web/lib/tokenize.ts` — `tokenize` (слова и всё между ними, склейка
+  токенов = исходный текст), `wordKey`, `uniqueKeys`, `sentenceAround`
+  (`context_sentence` ≤ 1000 символов); `web/lib/term-status.ts` —
+  `TermStatuses` (кэш статусов на вкладку, ключ — id студента, пачки
+  lookup по 2000 слов), `TermStatus`, `STATUS_LABELS`;
+  `web/lib/selection.ts` — `isTextSelection` (клик-выделение — не жест).
+  Тесты — `web/lib/tokenize.test.ts`, `web/lib/term-status.test.ts`,
+  `web/lib/selection.test.ts`, `npm test` (`node --test`, шаг web
+  в `.github/workflows/ci.yml`).
+- `web/app/clickable-text.tsx` — `ClickableText` (по умолчанию) и
+  `ClickableTextScope` (`lessonId`, `studentId`); попап — лемма и форма,
+  перевод, статус, дефиниции с подписью «Wiktionary, CC BY-SA», примеры
+  Tatoeba с переводом и подписью (`ExampleAuthors`: авторы предложения и
+  перевода со ссылками на tatoeba.org, под списком «Tatoeba, CC BY 2.0 FR»,
+  ADR-028), если есть. `web/app/term-status-control.tsx`
+  — `TermStatusControl` и общий кэш `termStatuses`. `term_id` 0 (слово
+  api не знает, термин не заведён) — попап без «в мой словарь» и статуса.
+- Обёрнуты: тексты материалов и домашки (`body_md`) на странице урока —
+  её видят и гости события. Контекст урока —
+  `web/app/lesson/[id]/layout.tsx` (раскраска и статус — у студента).
+- Транскрипт (интеграция волны B, 2026-10-27): `UtteranceText`
+  (`web/app/lesson/[id]/utterance-text.tsx`) рендерит реплику
+  `<ClickableText text={u.text} />`, урок и раскраску даёт layout урока.
+  Клик по слову (`stopPropagation` в `ClickableText`) и клики в попапе
+  не всплывают в перемотку реплики S2-4. Проверено `tsc` и сборкой
+  (WEB_CI_OK), в браузере после интеграции не прогонялось.
+- Для S3-7: клик на странице урока уходит в `POST /terms/click` с
+  `lesson_id`, api проверяет урок в `checkClickLesson` — запись
+  кандидата `source='click'` добавляется там же, web менять не нужно.
+- Проверено в браузере (Chromium, Playwright, одноразовый стенд
+  `classci-b2`): один lookup на все тексты страницы, клик → попап с
+  дефиницией и атрибуцией → «в мой словарь» → Running/ran/runs
+  перекрашены, статус 3 перекрасил все формы и пережил перезагрузку;
+  слово дефиниции переводит тот же попап; у преподавателя попап без
+  статуса и без запросов `/user-terms`.
+- Долг D-17: `body_md` показывается текстом, разметка markdown не
+  рендерится.
+
+### S3-5 user_terms и личный словарь (2026-10-26)
+
+- Решение — [ADR-027](../architecture/decisions.md). Миграция
+  `backend/migrations/0015_user_terms` (up/down): таблица `user_terms`
+  (user_id, term_id, status 1..5, source_lesson_id `ON DELETE SET NULL`,
+  added_at, updated_at; PK `(user_id, term_id)`, индекс
+  `user_terms_user_added_idx`).
+- `backend/internal/store/user_terms.go` — `SaveUserTerm` (upsert:
+  статус, первый урок-источник), `DeleteUserTerm`, `GetUserTerm`,
+  `ListUserTerms` (фильтр по статусам, курсор), `UserTermStatus`,
+  `UserTermStatusesByLemma`; `MinTermStatus`/`MaxTermStatus`.
+- `backend/internal/httpapi/user_terms.go`, только student:
+  `POST /user-terms` (201/200), `GET /user-terms?status=&limit=&cursor=`
+  → `{items, next_cursor}`, `DELETE /user-terms/{term_id}`,
+  `POST /user-terms/lookup {words ≤ 2000}` → `{lemmas, statuses}`.
+  `POST /terms/click` отдаёт `status` (у не-студента `null`).
+- web: страница `/dictionary` (`web/app/dictionary/page.tsx`, фильтры
+  «Все», «Учу (1–4)», 1…5, урок-источник, страницы по курсору),
+  `dictionary-status.tsx`; ссылка «Словарь» в шапке у студента.
+- Тесты — `internal/httpapi/user_terms_test.go`: добавление, смена и
+  удаление; 400 на статус вне 1..5 и кривые фильтры, CHECK и PK в схеме;
+  параллельные добавления — одна строка; урок-источник (чужой — 403,
+  нет — 404, первый не переписывается, отмена урока обнуляет);
+  страницы курсора; lookup отдаёт только статусы вошедшего, пачка
+  2000 слов — 72 мс под `-race`; 401/403 для гостя, преподавателя,
+  админа; откат и повторный накат 0015.
+- Для S3-8: назначение слов — `store.SaveUserTerm(ctx, studentID,
+  termID, &1, &lessonID)`; для S4-1 — строки `user_terms`.
+
+### S3-7 Кандидаты словаря урока (2026-10-27)
+
+- Решение — [ADR-033](../architecture/decisions.md). Миграция
+  `backend/migrations/0019_lesson_terms` (up/down; down снимает и ждущие
+  джобы `whiteboard_terms`): таблица `lesson_term_candidates` (lesson_id
+  `ON DELETE CASCADE`, term_id, source click/whiteboard/manual, surface,
+  count, added_by, first_seen_at, last_seen_at; PK
+  `(lesson_id, term_id, source)`) и `lesson_term_clicks` (lesson_id,
+  term_id, user_id — кто уже кликнул слово; добавлена по ревью волны C);
+  в той же миграции `lesson_terms` (S3-8).
+- Клики: `POST /terms/click` с `lesson_id`
+  (`backend/internal/httpapi/terms.go`, `recordClickCandidate`) —
+  у знакомого слова `store.RecordClickCandidate`
+  (`backend/internal/store/lesson_terms.go`): upsert со счётчиком разных
+  кликнувших, только участник из `lesson_participants`, не преподаватель
+  урока, только в окне комнаты урока, не больше `MaxClickCandidates` = 300
+  кандидатов-кликов на урок; чеклист `LessonCandidates` — не больше
+  `MaxCandidatesPerSource` = 500 на источник плюс подтверждённые (ревью
+  волны C).
+- Доска: пакет `backend/internal/lessonterms` — `SceneTexts` (живые
+  элементы `type: "text"`, `originalText`, иначе `text`), `TextWords`
+  (`lemma.Words`, без `lemma.FunctionWord`, по леммам со счётчиком),
+  `Known` (OEWN или `store.DefinedLemmas`), `Terms` (`EnsureTerm`),
+  `CollectWhiteboard` (не больше `MaxWhiteboardTerms` = 500, счётчик —
+  вхождения в текущей сцене). Образец сцены —
+  `backend/internal/lessonterms/testdata/scene.json`.
+- Токенизатор и служебные слова перенесены из `internal/textgen`
+  в `backend/internal/lemma/words.go` (`lemma.Words`, `lemma.FunctionWord`;
+  тест `words_test.go`), `lemma.Lang = "en"`; валидатор покрытия S5-6
+  зовёт их же.
+- Джоба `whiteboard_terms` (`store.JobWhiteboardTerms`, payload
+  `{lesson_id}`): ставится в транзакции перехода урока из live
+  (`closeLessonIfOver`, `backend/internal/store/recordings.go`), если
+  доску открывали; хендлер — `worker.RegisterLessonTerms`
+  (`backend/internal/worker/worker.go`, вызов в `cmd/worker`), ключей
+  не требует.
+- Эндпоинты (`backend/internal/httpapi/lesson_terms.go`, teacher урока):
+  `GET /lessons/{id}/term-candidates` → `{items[{term_id, lemma, surface,
+  translation, source, count, first_seen_at, last_seen_at, confirmed}]}`;
+  `POST /lessons/{id}/term-candidates {words[] ≤ 100}` → `{added[{term_id,
+  lemma, surface}], rejected[{word, reason: not_a_word|unknown}]}`;
+  `POST /lessons/{id}/term-candidates/whiteboard` → `{candidates}`.
+- Тесты: `internal/lessonterms/lessonterms_test.go` (тексты сцены-образца,
+  слова по леммам), `internal/httpapi/lesson_terms_test.go`
+  (`TestClickCandidatesFromParticipants`: формы и 20 параллельных кликов —
+  один счётчик, незнакомое слово, клик без урока, клик преподавателя и
+  чужого студента — без кандидата; `TestWhiteboardCandidatesFromScene`:
+  разбор по кнопке и повтор, 401/403/404, урок без доски, конец урока
+  через уборку записей → джоба → кандидаты;
+  `TestManualCandidatesByLessonTeacher`: rejected, повтор, 400/401/403/404;
+  `TestLessonTermsMigrationReversible`; `TestDictionaryMigrationReverts`
+  откатывает и 0019 — она ссылается на `terms`). Новых ключей `.env` нет.
+- Долг D-22: кандидаты — только одиночные слова.
+
+### S3-8 Post-lesson word picker (2026-10-27) — ◐
+
+- Решение — [ADR-034](../architecture/decisions.md). Таблица `lesson_terms`
+  (lesson_id `ON DELETE CASCADE`, term_id, confirmed_by, confirmed_at;
+  PK `(lesson_id, term_id)`), миграция `0019_lesson_terms`.
+- Store (`backend/internal/store/lesson_terms.go`): `LessonCandidates`,
+  `SetLessonTerms` (словарь целиком, только кандидаты урока),
+  `LessonTerms`, `AssignLessonTerms` — по паре
+  `SaveUserTerm(ctx, studentID, termID, nil, &lessonID)`: новое слово —
+  статус 1 и урок-источник, у существующего статус не меняется.
+- Эндпоинты (`backend/internal/httpapi/lesson_terms.go`):
+  `GET /lessons/{id}/terms` (участники) и `PUT /lessons/{id}/terms
+  {term_ids[]}` (teacher урока) → `{items[{term_id, lemma, surface,
+  translation, confirmed_at}]}`, 400 `not_candidates`;
+  `POST /lessons/{id}/terms/assignments {all: true} | {student_ids[]}`
+  (teacher урока) → `{students, terms, added, kept}`, 400 `not_student`,
+  409 `no_lesson_terms` / `no_students`.
+- web: `web/app/lesson/[id]/term-picker.tsx` (`TermPicker`: группы
+  «Клики учеников», «С доски», «Добавлены вручную», слова через
+  `<ClickableText>`, сохранение, ручной ввод, «Собрать слова с доски»,
+  назначение всем/выбранным) — у преподавателя урока с фазы live;
+  `web/app/lesson/[id]/lesson-dictionary.tsx` — словарь урока у остальных
+  участников; типы `TermCandidate`, `ManualCandidatesResult`,
+  `LessonTerm`, `AssignResult` в `web/lib/api.ts`.
+- Тесты: `TestPickerConfirmAndAssign` — не кандидаты (400), снятие
+  термина, назначение выбранной студентке (слово со статусом 4 остаётся
+  4, источник заполнен), Боб без слов, повтор (`added: 0`, `updated_at`
+  на месте), всем, слова в `GET /user-terms` с уроком-источником, 400/
+  401/403/409, чтение словаря урока участниками, удаление урока уносит
+  кандидатов и словарь, но не `user_terms`. Проверено `tsc` и сборкой
+  (WEB_CI_OK), в браузере не прогонялось.
+- Для S4-1 (долг D-3): хук карточек — в `store.SaveUserTerm` при
+  `created = true`; назначение S3-8 идёт через него
+  (`store.AssignLessonTerms`). Для S4-4 — слова урока в `lesson_terms`.
+- **Для ☑ не хватает.** Пикер в браузере не прогонялся (DoD проверен
+  только API-тестом `TestPickerConfirmAndAssign`): на стенде преподаватель
+  урока на `/lesson/{id}` отмечает кандидатов, «Сохранить словарь урока»,
+  «Назначить» всем или выбранным студентам — слова у них в «Словаре»
+  и в «Карточках» (DoD).
 
 ## Риски этапа
 

@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 # Один Go-модуль, целевые образы по бинарям (ADR-002): `api` и `worker`
-# (в образе worker'а — ещё разовая команда dictimport, S3-4), плюс
+# (в образе worker'а — ещё разовые команды dictimport, S3-4, и tatoebaimport,
+# S5-4), плюс
 # `harvester` — worker с yt-dlp для сборщика субтитров (ADR-022).
 # api — последняя стадия, поэтому сборка без --target по-прежнему даёт api.
 
@@ -9,7 +10,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/api ./cmd/worker ./cmd/dictimport
+RUN CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/api ./cmd/worker ./cmd/dictimport ./cmd/tatoebaimport
 
 FROM alpine:3.24 AS worker
 RUN apk upgrade --no-cache && adduser -D -u 10001 app
@@ -18,6 +19,8 @@ COPY --from=build /out/worker /usr/local/bin/worker
 # S3-4: разовый импорт словаря запускается из образа worker'а
 # (docker compose run --entrypoint dictimport worker …, deploy/README.md)
 COPY --from=build /out/dictimport /usr/local/bin/dictimport
+# S5-4: разовый импорт корпуса Tatoeba — так же (deploy/README.md)
+COPY --from=build /out/tatoebaimport /usr/local/bin/tatoebaimport
 ENTRYPOINT ["worker"]
 
 # S5-2: pip живёт только в этой стадии. Колёса закреплены версией и sha256

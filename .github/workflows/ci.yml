@@ -63,6 +63,8 @@ jobs:
           package-manager-cache: false
       - run: npm ci --no-audit
       - run: npx --no-install tsc --noEmit
+      # S3-1/S3-5: токенизация и кэш статусов ClickableText (node --test, ADR-026)
+      - run: npm test
       - run: npm run build
 
   shell:

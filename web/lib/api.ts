@@ -3,7 +3,9 @@
 // Клиентские компоненты используют относительный /api (через caddy).
 import { cookies } from "next/headers";
 
+import type { Rating } from "./review-session";
 import type { Role } from "./roles";
+import type { TermStatus } from "./term-status";
 
 const API_BASE = process.env.INTERNAL_API_URL ?? "http://api:8080";
 
@@ -89,7 +91,35 @@ export interface Material {
 export interface LessonDetail extends Lesson {
   teacher_name: string;
   materials: Material[];
-  participants: { user_id: number; email: string; name: string; role: string }[];
+  // archived — учётка в архиве (ADR-024): в снапшоте урока остаётся
+  participants: { user_id: number; email: string; name: string; role: string; archived: boolean }[];
+  // Только организатору события: выпущена ли гостевая ссылка (сама она
+  // не восстанавливается — в БД лишь хэш). Остальным поле не приходит.
+  has_guest_link?: boolean;
+}
+
+// Реплика транскрипта (S2-2…S2-5); время — миллисекунды от начала записи.
+export interface Utterance {
+  idx: number;
+  // метка спикера от ASR: A, B, C…
+  speaker_label: string;
+  // null, пока преподаватель не сопоставил метку с человеком урока (S2-5)
+  user_id: number | null;
+  speaker_name: string | null;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  // null — текст как его распознал ASR; иначе время правки (S2-4)
+  edited_at: string | null;
+}
+
+// GET /lessons/{id}/transcript. queued | submitted | fetching — готовится,
+// error — транскрипта не будет (ADR-016); vtt_url — presigned на 30 мин.
+export interface Transcript {
+  status: "queued" | "submitted" | "fetching" | "completed" | "error";
+  utterances: Utterance[];
+  vtt_url: string | null;
+  vtt_expires_at: string | null;
 }
 
 // Google Calendar преподавателя (S1-1, ADR-023): available — ключи Google
@@ -103,6 +133,316 @@ export interface GoogleCalendarStatus {
 // не отозван, доступ преподаватель снимает в аккаунте Google сам.
 export interface GoogleDisconnectResult {
   revoked: boolean;
+}
+
+// Ответ POST /terms/click (S3-2) — содержимое попапа <ClickableText>.
+export interface TermClick {
+  // 0 — слово api не знает и термина не заводил: попап без «в мой словарь»
+  term_id: number;
+  lemma: string;
+  surface: string;
+  // null — перевода нет в кэше, а LibreTranslate не настроен или не ответил
+  translation: { text: string; source: string } | null;
+  definitions: { word: string; pos: string; glosses: string[]; translations_ru: string[] }[];
+  // До двух примеров Tatoeba с переводом (S5-4, ADR-028); корпус
+  // не импортирован или слово незнакомо — пустой список
+  examples: TermExample[];
+  // Статус в личном словаре студента (S3-5); null — слова там нет
+  status: TermStatus | null;
+  // Показывать ли «объясни» (S5-8): термин есть, LLM настроен, зритель
+  // не гость события (ADR-039)
+  explain_available: boolean;
+}
+
+// Ответ POST /terms/{id}/explain (S5-8, ADR-039): объяснение слова в
+// предложении простым текстом, абзацы через пустую строку; cached — из
+// кэша, без вызова LLM.
+export interface TermExplanation {
+  term_id: number;
+  lemma: string;
+  explanation: string;
+  cached: boolean;
+  provider: string;
+  model: string;
+  created_at: string;
+}
+
+// Пример Tatoeba в ответе клика. CC BY 2.0 FR разрешает показ, только
+// назвав автора: у предложения и у перевода — автор и страница на
+// tatoeba.org; пустой автор — у предложения нет владельца.
+export interface TermExample {
+  text: string;
+  translation: string;
+  source: "tatoeba";
+  attribution: {
+    author: string;
+    url: string;
+    translation_author: string;
+    translation_url: string;
+    license: string;
+    license_url: string;
+  };
+}
+
+// Слово личного словаря (GET/POST /user-terms, S3-5, ADR-027).
+export interface UserTerm {
+  term_id: number;
+  lemma: string;
+  surface: string;
+  translation: string | null;
+  status: TermStatus;
+  // Урок, на котором слово добавили; null — вне урока или урок отменён
+  source_lesson: (Pick<Lesson, "id" | "title" | "group_id" | "group_name" | "starts_at">) | null;
+  added_at: string;
+  updated_at: string;
+}
+
+export interface UserTermPage {
+  items: UserTerm[];
+  // null — страница последняя
+  next_cursor: string | null;
+}
+
+// Текст, сгенерированный LLM по целевым словам (S5-6, ADR-029/030).
+// body — абзацы через пустую строку; coverage — доля целевых лемм,
+// встреченных не реже двух раз; unknown_share — доля слов вне словаря.
+export interface GeneratedText {
+  id: number;
+  level: string;
+  genre: string;
+  max_words: number;
+  target_lemmas: string[];
+  body: string;
+  word_count: number;
+  coverage: number;
+  occurrences: Record<string, number>;
+  unknown_share: number;
+  attempts: number;
+  provider: string;
+  model: string;
+  created_at: string;
+}
+
+// Карточка FSRS (S4-2/S4-3, ADR-036): этап, следующий показ, интервал
+// в днях (0 — шаг обучения в минутах) и счётчики.
+export interface SrsCard {
+  state: "new" | "learning" | "review" | "relearning";
+  due_at: string;
+  scheduled_days: number;
+  reps: number;
+  lapses: number;
+  // null — карточку ещё не повторяли
+  last_review_at: string | null;
+}
+
+// Карточка очереди GET /practice/queue: лицо — лемма, оборот — перевод
+// из кэша, статьи словаря и примеры Tatoeba, как в попапе слова.
+export interface PracticeCard {
+  term_id: number;
+  lemma: string;
+  surface: string;
+  translation: string | null;
+  definitions: TermClick["definitions"];
+  examples: TermExample[];
+  status: TermStatus;
+  card: SrsCard;
+}
+
+export interface PracticeQueue {
+  items: PracticeCard[];
+  // Карточек к показу сейчас всего, не только в выдаче
+  due_total: number;
+  // Ближайший показ после сейчас; null — будущих нет
+  next_due_at: string | null;
+}
+
+// Ответ POST /reviews: карточка и статус слова после оценки; duplicate —
+// оценку с этим review_id уже засчитали.
+export interface ReviewResult {
+  term_id: number;
+  rating: Rating;
+  duplicate: boolean;
+  status: TermStatus;
+  card: SrsCard;
+}
+
+// Кандидат словаря урока (S3-7, ADR-033): click — клики участников,
+// whiteboard — вхождения на доске при последнем разборе, manual — ввод
+// преподавателя. Один термин может прийти из нескольких источников.
+export type CandidateSource = "click" | "whiteboard" | "manual";
+
+export interface TermCandidate {
+  term_id: number;
+  lemma: string;
+  // форма, в которой слово встретилось первым
+  surface: string;
+  translation: string | null;
+  source: CandidateSource;
+  count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  // термин уже в словаре урока
+  confirmed: boolean;
+}
+
+// Ответ POST /lessons/{id}/term-candidates: rejected — не одно слово
+// (not_a_word) или слово, которого api не знает (unknown).
+export interface ManualCandidatesResult {
+  added: { term_id: number; lemma: string; surface: string }[];
+  rejected: { word: string; reason: "not_a_word" | "unknown" }[];
+}
+
+// Слово подтверждённого словаря урока (S3-8, ADR-034).
+export interface LessonTerm {
+  term_id: number;
+  lemma: string;
+  surface: string;
+  translation: string | null;
+  confirmed_at: string;
+}
+
+// Итог назначения словаря урока: added — слов легло в словари впервые,
+// kept — у студента уже было, статус не тронут.
+export interface AssignResult {
+  students: number;
+  terms: number;
+  added: number;
+  kept: number;
+}
+
+// Строка тексто-практики (GET /practice/texts/search, S5-7, ADR-035):
+// свой сгенерированный текст или предложение Tatoeba с переводом и
+// подписью. matched — слова поиска (леммы), которые есть в тексте.
+export type PracticeText =
+  | {
+      source: "generated";
+      id: number;
+      text: string;
+      matched: string[];
+      level: string;
+      genre: string;
+      word_count: number;
+      created_at: string;
+    }
+  | {
+      source: "tatoeba";
+      id: number;
+      text: string;
+      matched: string[];
+      translation: string;
+      attribution: TermExample["attribution"];
+    };
+
+// words — леммы, по которым шёл поиск; hint — почему выдача пуста, если
+// искать было не по чему (нет невыученных слов в словаре).
+export interface PracticeTextsPage {
+  words: string[];
+  items: PracticeText[];
+  next_cursor: string | null;
+  hint: string | null;
+}
+
+// Видео-практика (S5-5, ADR-038). Цели подбора: слова из ?words= (вес 1)
+// или невыученные слова словаря с весами по карточкам FSRS или статусу.
+export interface VideoTargets {
+  weighting: "words" | "srs" | "status";
+  words: { lemma: string; weight: number }[];
+}
+
+// Сегмент субтитров; words — леммы целей, найденных в нём.
+export interface VideoSegment {
+  idx: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  words: string[];
+}
+
+// Видео корпуса субтитров: youtube_id — для встраивания, url — страница
+// ролика на YouTube (подпись источника); coverage — доля веса найденных
+// целей, per_minute — их вхождений на минуту. В подборе segments — лучшие
+// места видео, в GET /practice/videos/{id} — все сегменты по порядку.
+export interface PracticeVideo {
+  id: number;
+  youtube_id: string;
+  url: string;
+  title: string;
+  channel: string | null;
+  duration_ms: number;
+  subtitles: "manual" | "auto";
+  coverage: number;
+  occurrences: number;
+  per_minute: number;
+  matched_words: string[];
+  segments: VideoSegment[];
+}
+
+export interface PracticeVideosPage extends VideoTargets {
+  items: PracticeVideo[];
+  next_cursor: string | null;
+}
+
+export interface PracticeVideoDetail extends VideoTargets {
+  video: PracticeVideo;
+}
+
+// Пункт cloze (GET /practice/cloze, S4-4/S4-5, ADR-037): предложение
+// вокруг пропуска и перемешанные варианты в нижнем регистре; ни слова,
+// ни перевода до ответа в нём нет. Варианты словаря — словарные формы,
+// от LLM — в форме пропуска; набор у пункта один за всё время. pending —
+// вариантов ещё нет (options пуст): их отдаст POST
+// /practice/cloze/distractors. due — ответ сдвинет карточку слова (иначе
+// засчитается только промах).
+export interface ClozeItem {
+  id: number;
+  before: string;
+  after: string;
+  options: string[];
+  distractor_source: "list" | "llm" | "pending";
+  source: "lesson" | "material" | "generated" | "tatoeba";
+  // Урок реплики или материала; null у остальных
+  lesson_id: number | null;
+  // Автор и лицензия предложения Tatoeba (CC BY) — без ссылок на его
+  // страницу: там предложение целиком. null у остальных
+  attribution: Pick<TermExample["attribution"], "author" | "license" | "license_url"> | null;
+  due: boolean;
+}
+
+export interface ClozePage {
+  items: ClozeItem[];
+  // Карточек к повторению сейчас всего
+  due_total: number;
+  // Можно просить LLM-дистракторы (POST /practice/cloze/distractors)
+  llm_available: boolean;
+}
+
+// Ответ POST /practice/cloze/distractors: окончательные варианты пунктов
+// (distractor_source "list" — ответ модели не прошёл проверку или
+// вызова не было: llm_error — почему).
+export interface ClozeOptions {
+  items: Pick<ClozeItem, "id" | "options" | "distractor_source">[];
+  llm_error: "rate_limited" | "llm_unavailable" | "llm_failed" | null;
+}
+
+// Ответ POST /practice/cloze/{id}/attempts: answer — форма слова
+// в предложении, exact — введена именно она; counted — ответ ушёл
+// в график FSRS; translation и attribution (со ссылками на предложение
+// и перевод) — у предложения Tatoeba.
+export interface ClozeAttemptResult {
+  item_id: number;
+  term_id: number;
+  lemma: string;
+  answer: string;
+  sentence: string;
+  correct: boolean;
+  exact: boolean;
+  rating: Exclude<Rating, "hard">;
+  counted: boolean;
+  duplicate: boolean;
+  status: TermStatus;
+  card: SrsCard;
+  translation: string | null;
+  attribution: TermExample["attribution"] | null;
 }
 
 const API_TIMEOUT_MS = 5000;

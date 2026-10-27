@@ -10,6 +10,8 @@ out/
 *.tsbuildinfo
 # шрифты доски копируются из пакета при сборке (web/scripts/excalidraw-assets.mjs)
 web/public/excalidraw/
+# спрайт Plyr — тоже из пакета при сборке (web/scripts/plyr-assets.mjs)
+web/public/plyr/
 
 # backend
 bin/

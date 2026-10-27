@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,7 +14,8 @@ import (
 
 const (
 	// roomTokenTTL — урок 60 минут плюс запас на опоздания и переподключения.
-	// Токен одноразово выдаётся на вход; истёк — страница берёт новый.
+	// Токен одноразово выдаётся на вход; истёк — страница берёт новый. Дольше
+	// окна комнаты он не живёт (handleRoomToken).
 	roomTokenTTL = 3 * time.Hour
 	// roomNamePrefix — комната на урок: lesson-{id} (integrations/livekit.md).
 	roomNamePrefix = "lesson-"
@@ -53,14 +55,24 @@ func (a *API) handleRoomToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "нет доступа к этому уроку")
 		return
 	}
-	// В комнату пускаем до тех пор, пока урок не ушёл в обработку записи:
-	// после этого заходить некуда, а лишний участник продлил бы сессию.
-	if d.Status == "processing" || d.Status == "done" {
+	// В комнату пускаем только в окне урока (ADR-031) и пока урок не ушёл
+	// в обработку записи. Раньше вход открыл бы комнату и запись урока,
+	// которого ещё нет; позже заходить некуда, а лишний участник продлил бы
+	// сессию. Токен живёт не дольше окна.
+	now := time.Now()
+	opens, closes := store.RoomWindow(d.StartsAt, d.EndsAt)
+	switch {
+	case d.Status == "processing" || d.Status == "done" || now.After(closes):
 		writeError(w, http.StatusConflict, "lesson_finished", "урок уже завершён")
+		return
+	case now.Before(opens):
+		writeError(w, http.StatusConflict, "room_not_open",
+			fmt.Sprintf("комната откроется за %d минут до начала урока", int(store.RoomOpensBefore.Minutes())))
 		return
 	}
 
-	token, err := roomToken(a.cfg.LiveKitAPIKey, a.cfg.LiveKitAPISecret, roomName(lessonID), u)
+	token, err := roomToken(a.cfg.LiveKitAPIKey, a.cfg.LiveKitAPISecret, roomName(lessonID), u,
+		min(roomTokenTTL, closes.Sub(now)))
 	if err != nil {
 		internalError(w, "room token", err)
 		return
@@ -76,7 +88,7 @@ func roomName(lessonID int64) string {
 
 // roomToken — JWT LiveKit: identity = user_id (по нему участник сопоставляется
 // с учёткой при маппинге спикеров в S2-5), имя — для подписи в комнате.
-func roomToken(apiKey, apiSecret, room string, u *store.User) (string, error) {
+func roomToken(apiKey, apiSecret, room string, u *store.User, ttl time.Duration) (string, error) {
 	canPublish := true
 	canSubscribe := true
 	grant := &auth.VideoGrant{
@@ -89,6 +101,6 @@ func roomToken(apiKey, apiSecret, room string, u *store.User) (string, error) {
 		SetIdentity(strconv.FormatInt(u.ID, 10)).
 		SetName(u.Name).
 		SetVideoGrant(grant).
-		SetValidFor(roomTokenTTL).
+		SetValidFor(ttl).
 		ToJWT()
 }

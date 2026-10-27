@@ -21,6 +21,17 @@ export async function requestJson<T>(path: string, method: string, body?: unknow
   return (await res.json()) as T;
 }
 
+// RequestError — api ответил не 2xx. Код нужен, когда ответ — обычное
+// состояние, а не сбой: например 404 у урока без транскрипта.
+export class RequestError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function call(path: string, method: string, body?: unknown): Promise<Response> {
   let res: Response;
   try {
@@ -34,7 +45,7 @@ async function call(path: string, method: string, body?: unknown): Promise<Respo
   }
   if (!res.ok) {
     const parsed = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(parsed?.error ?? `ошибка ${res.status}`);
+    throw new RequestError(res.status, parsed?.error ?? `ошибка ${res.status}`);
   }
   return res;
 }

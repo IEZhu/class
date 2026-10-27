@@ -3,6 +3,7 @@
 import "plyr/dist/plyr.css";
 
 import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 
 import { requestJson } from "../../forms";
 
@@ -14,8 +15,17 @@ type Resume = { at: number; playing: boolean };
 // Плеер записи урока (S1-6). Файл идёт хранилище ↔ браузер по presigned
 // GET, минуя VPS; перемотка работает на Range-запросах, которые R2 отдаёт
 // сам — отсюда обычный <video> под Plyr, без стриминговой обвязки.
-export default function LessonPlayer({ lessonId }: { lessonId: number }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+// videoRef и onTime — связь с транскриптом (S2-4): по ref он мотает запись,
+// через onTime узнаёт позицию в миллисекундах для подсветки реплики.
+export default function LessonPlayer({
+  lessonId,
+  videoRef,
+  onTime,
+}: {
+  lessonId: number;
+  videoRef: RefObject<HTMLVideoElement | null>;
+  onTime: (ms: number) => void;
+}) {
   const resumeRef = useRef<Resume | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +69,12 @@ export default function LessonPlayer({ lessonId }: { lessonId: number }) {
           controls: ["play-large", "play", "progress", "current-time", "mute", "volume", "settings", "fullscreen"],
           speed: { selected: 1, options: [0.75, 1, 1.25, 1.5, 2] },
           i18n: { restart: "Сначала", play: "Смотреть", pause: "Пауза", mute: "Без звука", speed: "Скорость" },
+          // Ничего с cdn.plyr.io (ADR-032): спрайт — своя копия из пакета
+          // (scripts/plyr-assets.mjs), а пустышку blank.mp4 Plyr ставит в src
+          // только в destroy(), чтобы оборвать загрузку, — у нас destroy()
+          // бывает лишь при снятии плеера со страницы, и пустого src хватает.
+          iconUrl: "/plyr/plyr.svg",
+          blankVideo: "",
         });
       })
       // Чанк не догрузился (сеть, выкатка новой сборки) или Plyr упал при
@@ -108,6 +124,8 @@ export default function LessonPlayer({ lessonId }: { lessonId: number }) {
               .then((media) => setSrc(media.url))
               .catch(() => setError("запись недоступна, обновите страницу"));
           }}
+          onTimeUpdate={(e) => onTime(e.currentTarget.currentTime * 1000)}
+          onSeeked={(e) => onTime(e.currentTarget.currentTime * 1000)}
           // Новый src грузится асинхронно, и до его метаданных currentTime
           // относится к старому источнику: перематываем только здесь.
           onLoadedMetadata={() => {

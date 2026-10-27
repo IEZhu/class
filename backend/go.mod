@@ -9,6 +9,7 @@ require (
 	github.com/aws/smithy-go v1.27.6
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/livekit/protocol v1.53.0
+	github.com/open-spaced-repetition/go-fsrs/v4 v4.0.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/protobuf v1.36.12

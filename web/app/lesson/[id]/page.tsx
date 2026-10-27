@@ -1,16 +1,19 @@
 import { notFound, redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../../lib/api";
-import type { LessonDetail, Material, User } from "../../../lib/api";
+import type { LessonDetail, LessonTerm, Material, User } from "../../../lib/api";
 import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
+import ClickableText from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
-import LessonPlayer from "./lesson-player";
+import LessonDictionary from "./lesson-dictionary";
+import LessonReplay from "./lesson-replay";
 import LessonRoom from "./lesson-room";
 import { DeleteMaterial, FileDownload, MaterialUpload } from "./material-files";
 import LiveTabs from "./live-tabs";
+import TermPicker from "./term-picker";
 import Whiteboard from "./whiteboard";
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
@@ -27,10 +30,10 @@ const phaseTitles: Record<LessonPhase, string> = {
   done: "Прошёл",
 };
 
-// Живой урок шире колонки страницы (640px): доске и видео нужно место.
-// Секция выходит за колонку симметрично — до 1200px или почти всего экрана.
-const liveSectionStyle = {
-  border: "2px solid #2a7",
+// Живой урок и запись с транскриптом шире колонки страницы (640px): доске,
+// видео и транскрипту рядом с ним нужно место. Секция выходит за колонку
+// симметрично — до 1200px или почти всего экрана.
+const wideSectionStyle = {
   borderRadius: 8,
   padding: "1rem",
   boxSizing: "border-box",
@@ -38,7 +41,10 @@ const liveSectionStyle = {
   margin: "1rem 0 1rem calc((100% - min(96vw, 1200px)) / 2)",
 } as const;
 
-// общий вид секций-заглушек будущих этапов (S1-5/S1-6/S2-4)
+const liveSectionStyle = { ...wideSectionStyle, border: "2px solid #2a7" } as const;
+const replaySectionStyle = { ...wideSectionStyle, border: "1px solid #ddd" } as const;
+
+// общий вид секций-заглушек будущих этапов
 const placeholderSectionStyle = {
   border: "1px solid #ddd",
   borderRadius: 8,
@@ -75,6 +81,14 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
   const isTeacher = me.id === lesson.teacher_id;
   const materials = lesson.materials.filter((m) => m.kind === "material");
   const homework = lesson.materials.filter((m) => m.kind === "homework");
+  // Словарь урока (S3-8): преподаватель собирает его в чеклисте, когда урок
+  // начался; остальным участникам — подтверждённые слова. Сбой запроса
+  // (например, миграция 0019 не применена) — страница без словаря
+  const lessonTerms = isTeacher
+    ? []
+    : await apiFetch<{ items: LessonTerm[] }>(`/lessons/${lesson.id}/terms`)
+        .then((r) => r.items)
+        .catch(() => []);
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
@@ -86,14 +100,17 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
         {dateFmt.format(new Date(lesson.starts_at))} (UTC) · преподаватель: {lesson.teacher_name}
       </p>
       {/* Гостевой ссылкой распоряжается организатор, и только у открытого
-          события: в урок с группой посторонних не зовут (ADR-010) */}
-      {lesson.group_id === null && (me.role === "admin" || me.id === lesson.teacher_id) && phase !== "done" && (
-        <GuestLink lessonId={lesson.id} />
-      )}
+          события: в урок с группой посторонних не зовут (ADR-010). После
+          ends_at api ссылку уже не пускает (410) — и выпускать её незачем */}
+      {lesson.group_id === null &&
+        (me.role === "admin" || me.id === lesson.teacher_id) &&
+        new Date(lesson.ends_at).getTime() > Date.now() && (
+          <GuestLink lessonId={lesson.id} hasLink={lesson.has_guest_link ?? false} />
+        )}
 
       {phase === "live" && (
         <section style={liveSectionStyle}>
-          {/* Доска — только на живом уроке (S3-6); словарь урока приедет в S3-7 */}
+          {/* Доска — только на живом уроке (S3-6); словарь урока — ниже (S3-8) */}
           <LiveTabs
             room={<LessonRoom lessonId={lesson.id} />}
             board={<Whiteboard lessonId={lesson.id} userName={me.name} />}
@@ -108,15 +125,18 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       )}
 
       {phase === "done" && (
-        <>
-          <section style={placeholderSectionStyle}>
-            <LessonPlayer lessonId={lesson.id} />
-          </section>
-          <section style={placeholderSectionStyle}>
-            {/* Транскрипт по спикерам оживёт в S2-4 */}
-            <p>📝 Транскрипт по спикерам появится на этапе 2 (S2-4).</p>
-          </section>
-        </>
+        <section style={replaySectionStyle}>
+          {/* Запись и транскрипт по спикерам (S2-4). Правит реплики и
+              сопоставляет спикеров с людьми урока только его преподаватель */}
+          <LessonReplay
+            lessonId={lesson.id}
+            canEdit={isTeacher}
+            people={[
+              { user_id: lesson.teacher_id, name: lesson.teacher_name },
+              ...lesson.participants.map((p) => ({ user_id: p.user_id, name: p.name })),
+            ]}
+          />
+        </section>
       )}
 
       {phase === "ended" && (
@@ -124,6 +144,16 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
           <p>Урок завершён. Запись и транскрипт будут появляться здесь начиная с этапов 1–2.</p>
         </section>
       )}
+
+      {isTeacher && phase !== "scheduled" && (
+        <TermPicker
+          lessonId={lesson.id}
+          students={lesson.participants
+            .filter((p) => p.role === "student" && !p.archived)
+            .map((p) => ({ user_id: p.user_id, name: p.name }))}
+        />
+      )}
+      <LessonDictionary items={lessonTerms} />
 
       {isTeacher && <MaterialUpload lessonId={lesson.id} />}
       <MaterialsSection title="Материалы" items={materials} isTeacher={isTeacher} />
@@ -147,9 +177,13 @@ function MaterialsSection({ title, items, isTeacher }: { title: string; items: M
             <h3 style={{ marginTop: 0 }}>{m.title}</h3>
             {isTeacher && <DeleteMaterial materialId={m.id} title={m.title} />}
           </div>
-          {/* body_md рендерится как текст; настоящий markdown-рендер придёт
-              вместе с <ClickableText> (S3-1) — единственным рендером текста */}
-          {m.body_md && <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0 }}>{m.body_md}</pre>}
+          {/* body_md — текстом с переносами строк: разметка markdown пока
+              не рендерится (долг D-17) */}
+          {m.body_md && (
+            <div>
+              <ClickableText text={m.body_md} />
+            </div>
+          )}
           {m.file && <FileDownload materialId={m.id} file={m.file} />}
         </article>
       ))}

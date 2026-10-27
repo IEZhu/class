@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,12 +11,9 @@ import (
 	"github.com/IEZhu/class/backend/internal/store"
 )
 
-// guestSessionGrace — сколько сессия гостя живёт после конца события.
-// Нужен запас на переподключение и на то, что урок затянулся.
-const guestSessionGrace = 2 * time.Hour
-
 // maxGuestNameLen — имя гость вводит сам, и оно попадёт в комнату
-// и в транскрипт; ограничиваем, чтобы не растянуть вёрстку.
+// и в транскрипт; ограничиваем, чтобы не растянуть вёрстку. Тот же предел
+// держит PATCH /auth/me: иначе после входа имя растягивается без границ.
 const maxGuestNameLen = 60
 
 type guestLinkResponse struct {
@@ -96,19 +95,20 @@ func (a *API) handleGuestJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ссылку и конец события проверяет сам JoinAsGuest под блокировкой
+	// строки урока: отдельная выборка до него ничего бы не гарантировала.
 	tokenHash := hashToken(r.PathValue("token"))
-	e, err := a.store.GuestEventByToken(r.Context(), tokenHash)
-	if !writeGuestLookupError(w, err) {
-		return
-	}
-
 	sessionToken, sessionTokenHash, err := newToken()
 	if err != nil {
 		internalError(w, "new session", err)
 		return
 	}
-	u, lessonID, err := a.store.JoinAsGuest(r.Context(), tokenHash, name,
-		guestEmail(sessionTokenHash), sessionTokenHash, e.EndsAt.Add(guestSessionGrace))
+	email, err := guestEmail()
+	if err != nil {
+		internalError(w, "guest email", err)
+		return
+	}
+	u, lessonID, err := a.store.JoinAsGuest(r.Context(), tokenHash, name, email, sessionTokenHash)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "событие не найдено")
@@ -116,12 +116,18 @@ func (a *API) handleGuestJoin(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrEventOver):
 		writeError(w, http.StatusGone, "event_over", "событие уже закончилось")
 		return
+	case errors.Is(err, store.ErrEventFull):
+		writeError(w, http.StatusConflict, "event_full", "на событии уже нет мест для гостей")
+		return
 	case err != nil:
 		internalError(w, "join as guest", err)
 		return
 	}
 
-	http.SetCookie(w, sessionCookieFor(sessionToken, int(time.Until(e.EndsAt.Add(guestSessionGrace)).Seconds())))
+	// Срок сессии держит БД (ends_at + store.GuestSessionGrace) и сдвигает
+	// при переносе события. Cookie живёт как обычная сессия: срок,
+	// вычисленный при входе, отрезал бы гостя от перенесённого события.
+	http.SetCookie(w, sessionCookieFor(sessionToken, int(sessionTTL.Seconds())))
 	writeJSON(w, http.StatusCreated, struct {
 		userResponse
 		LessonID int64 `json:"lesson_id"`
@@ -132,9 +138,15 @@ func (a *API) handleGuestJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 // guestEmail — синтетический адрес: колонка UNIQUE NOT NULL, а настоящего
-// адреса у гостя мы не спрашиваем. Берём хэш его сессии — он уже уникален.
-func guestEmail(sessionTokenHash string) string {
-	return "guest+" + sessionTokenHash[:32] + "@guests.local"
+// адреса у гостя мы не спрашиваем. Отдельные 128 случайных бит, а не хэш
+// сессии: адрес видят все участники события (participants[].email),
+// и производным от секрета он быть не должен.
+func guestEmail() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "guest+" + hex.EncodeToString(b) + "@guests.local", nil
 }
 
 // lessonForOwner — гостевой ссылкой распоряжается преподаватель события

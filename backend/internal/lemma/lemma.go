@@ -18,11 +18,16 @@ import (
 	"compress/gzip"
 	"embed"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"unicode"
 )
+
+// Lang — язык лемматизатора и словаря terms (terms.lang): только
+// английский.
+const Lang = "en"
 
 //go:generate go run ./gen -zip english-wordnet-2025.zip -out oewn
 
@@ -255,3 +260,50 @@ func Known(word string) bool {
 	_, ok := load().lemmas[word]
 	return ok
 }
+
+// POS — части речи леммы в OEWN буквами n, v, a, r (существительное,
+// глагол, прилагательное, наречие) в этом порядке: у run — «nv». Пусто —
+// леммы нет в OEWN (служебные слова, имена). Так cloze подбирает
+// дистракторы той же части речи (S4-4, ADR-037): какой именно в
+// предложении, лемматизатор не знает, поэтому сравниваются наборы.
+func POS(word string) string {
+	e := load().lemmas[word]
+	var b strings.Builder
+	for _, p := range posOrder {
+		if e.pos&p != 0 {
+			b.WriteByte(posLetter[p])
+		}
+	}
+	return b.String()
+}
+
+var posLetter = map[pos]byte{noun: 'n', verb: 'v', adj: 'a', adv: 'r'}
+
+// Forms — неправильные формы леммы из списков исключений OEWN, которые
+// Lemma сводит именно к ней (run → ran, go → gone, went; mouse → mice),
+// по алфавиту. Обратный ход Lemma для поиска по тексту (видео-практика,
+// ADR-038): стеммер полнотекстового поиска находит runs и running, но не
+// ran. Правильные формы не перечисляются; у леммы без исключений — nil.
+func Forms(lemma string) []string {
+	return slices.Clone(irregularForms()[lemma])
+}
+
+// irregularForms — лемма → её неправильные формы; строится один раз.
+// Форма берётся, только если клик по ней дал бы ту же лемму: better
+// записано и у good, и у well, а термин у него один.
+var irregularForms = sync.OnceValue(func() map[string][]string {
+	out := map[string][]string{}
+	for _, byForm := range load().exceptions {
+		for form, lemmas := range byForm {
+			for _, l := range lemmas {
+				if l != form && Lemma(form) == l && !slices.Contains(out[l], form) {
+					out[l] = append(out[l], form)
+				}
+			}
+		}
+	}
+	for _, forms := range out {
+		slices.Sort(forms)
+	}
+	return out
+})

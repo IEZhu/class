@@ -14,6 +14,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/harvester"
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/livekitapi"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/worker"
@@ -47,22 +48,43 @@ func main() {
 	}
 	defer st.Close()
 
-	scheduler := jobs.NewScheduler(st.Pool())
 	var runner *jobs.Runner
+	var scheduler *jobs.Scheduler
 	if role == "harvester" {
-		runner = jobs.NewRunner(st.Pool(), jobs.Config{HandlerTimeout: harvester.JobTimeout})
-		worker.RegisterHarvester(runner, scheduler, harvester.New(st, harvester.Config{
+		runner, scheduler = worker.HarvesterRole(st.Pool(), harvester.New(st, harvester.Config{
 			Fetcher: harvester.YTDLP{Cookies: os.Getenv("HARVESTER_COOKIES")},
 		}))
 	} else {
-		runner = jobs.NewRunner(st.Pool(), jobs.Config{})
+		runner, scheduler = jobs.NewRunner(st.Pool(), jobs.Config{}), jobs.NewScheduler(st.Pool())
 		registerCore(runner, st)
+		// F1: уроки, которые egress_ended сам не завершил, и Egress, пишущий
+		// после окна комнаты (ADR-031)
+		worker.RegisterRecordingSweep(runner, scheduler, st, egressFromEnv())
+		backfillSRSCards(ctx, st)
+		// D-15: протухшие сессии всех учёток, в том числе гостей (ADR-035)
+		worker.RegisterSessionCleanup(runner, scheduler, st)
 	}
 	go scheduler.Run(ctx)
 
 	log.Printf("worker: started, role %s", role)
 	runner.Run(ctx)
 	log.Printf("worker: stopped")
+}
+
+// backfillSRSCards — карточки FSRS словам словаря без карточки (S4-1,
+// долг D-3, ADR-036): словам до миграции 0021 и добавленным старым api,
+// пока шёл выкат. Идемпотентно, поэтому на каждом старте; сбой (миграция
+// ещё не применена) — строка в журнале, остальные джобы работают.
+// Ненулевое число после первого выката — путь записи слов в обход
+// store.SaveUserTerm.
+func backfillSRSCards(ctx context.Context, st *store.Store) {
+	n, err := st.BackfillSRSCards(ctx)
+	switch {
+	case err != nil:
+		log.Printf("worker: карточки FSRS не заведены: %v", err)
+	case n > 0:
+		log.Printf("worker: заведено карточек FSRS для слов без карточки: %d", n)
+	}
 }
 
 // registerCore — джобы стенда (роль core). Ключи интеграций читает только
@@ -113,6 +135,22 @@ func registerCore(runner *jobs.Runner, st *store.Store) {
 	} else {
 		log.Printf("worker: хранилище не настроено — снимки досок и удаление файлов материалов ждут в очереди")
 	}
+
+	// S3-7: слова доски кончившегося урока — в кандидаты словаря урока
+	// (ADR-033); хранилище не нужно, сцена лежит в Postgres
+	worker.RegisterLessonTerms(runner, st)
+}
+
+// egressFromEnv — серверный API LiveKit для остановки записи после окна
+// комнаты (ADR-031): те же LIVEKIT_*, что у api. Без них уборка Egress
+// не останавливает, остальное работает.
+func egressFromEnv() worker.EgressStopper {
+	url, key, secret := os.Getenv("LIVEKIT_URL"), os.Getenv("LIVEKIT_API_KEY"), os.Getenv("LIVEKIT_API_SECRET")
+	if url == "" || key == "" || secret == "" {
+		log.Printf("worker: LIVEKIT_* не заданы — уборка записей не останавливает Egress после окна комнаты")
+		return nil
+	}
+	return livekitapi.New(url, key, secret)
 }
 
 // asrFromEnv — транскрибация AssemblyAI (S2-1, ADR-015). Без ключа —
