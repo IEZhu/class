@@ -73,3 +73,75 @@ export function sourceLabel(source: "lesson" | "material" | "generated" | "tatoe
 export function isAnswerOption(option: string, result: { answer: string; lemma: string }): boolean {
   return option === result.answer.toLowerCase() || option === result.lemma;
 }
+
+// Пункт для набора вариантов — что из него нужно этим помощникам
+interface OptionsOf {
+  id: number;
+  options: string[];
+  distractor_source: "list" | "llm" | "pending";
+}
+
+// distractorRequestIds — пункты, чьи варианты страница просит у POST
+// /practice/cloze/distractors: только pending и только с ключом LLM. Без
+// ключа выдача сразу отдаёт варианты всем пунктам, и запроса нет.
+export function distractorRequestIds(page: { items: OptionsOf[]; llm_available: boolean }): number[] {
+  if (!page.llm_available) return [];
+  return page.items.filter((it) => it.distractor_source === "pending").map((it) => it.id);
+}
+
+// itemOptions — варианты пункта на экране: из выдачи, а у pending — из
+// ответа POST /practice/cloze/distractors; null — ещё не пришли. Набор у
+// пункта один (ADR-037): пришедший позже не заменяет уже отданный
+// выдачей.
+export function itemOptions(item: OptionsOf, fetched: Record<number, OptionsOf>): string[] | null {
+  if (item.distractor_source !== "pending") return item.options;
+  const got = fetched[item.id];
+  return got && got.distractor_source !== "pending" ? got.options : null;
+}
+
+const LLM_ERRORS: Record<string, string> = {
+  rate_limited: "лимит подсказок LLM на сегодня исчерпан",
+  llm_unavailable: "LLM временно недоступен",
+  llm_failed: "LLM не справился с запросом",
+};
+
+// llmErrorNote — подпись, почему у пунктов варианты словаря, а не LLM.
+export function llmErrorNote(code: string | null): string | null {
+  if (!code) return null;
+  return `варианты из словаря: ${LLM_ERRORS[code] ?? "LLM недоступен"}`;
+}
+
+// Подпись предложения Tatoeba (CC BY 2.0 FR): автор и лицензия всегда;
+// ссылки на страницу предложения и перевод — только после ответа, их
+// присылает попытка: на странице предложение целиком, с ответом.
+export interface ClozeCredit {
+  author: string;
+  url: string | null;
+  license: string;
+  licenseUrl: string;
+  translation: { author: string; url: string } | null;
+}
+
+export function clozeCredit(
+  before: { author: string; license: string; license_url: string } | null,
+  after: {
+    author: string;
+    url: string;
+    translation_author: string;
+    translation_url: string;
+    license: string;
+    license_url: string;
+  } | null,
+): ClozeCredit | null {
+  if (after) {
+    return {
+      author: after.author,
+      url: after.url,
+      license: after.license,
+      licenseUrl: after.license_url,
+      translation: { author: after.translation_author, url: after.translation_url },
+    };
+  }
+  if (!before) return null;
+  return { author: before.author, url: null, license: before.license, licenseUrl: before.license_url, translation: null };
+}

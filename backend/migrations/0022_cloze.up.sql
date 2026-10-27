@@ -1,5 +1,6 @@
 -- Этап 4 (S4-4, S4-5) и S5-8, часть 2: cloze (ADR-037) — пункты
--- «вставь слово» по словам личного словаря из текстов студента, кэш
+-- «вставь слово» по словам личного словаря из текстов студента,
+-- отрицательный кэш генератора, индексы поиска по текстам уроков, кэш
 -- LLM-дистракторов и журнал ответов. Ответ, пришедшийся на карточку
 -- к показу (или промах), пишется в общий журнал FSRS srs_reviews с
 -- source = 'cloze'; попытка ссылается на эту оценку.
@@ -31,6 +32,11 @@ CREATE TABLE cloze_items (
     context_hash      bytea       NOT NULL CHECK (length(context_hash) = 32),
     -- Дистракторы из словаря студента или частых слов (леммы)
     distractors       text[]      NOT NULL CHECK (cardinality(distractors) = 3),
+    -- Какой набор вариантов студент уже получил: list — дистракторы
+    -- словаря, llm — из кэша cloze_distractors. Набор закрепляется при
+    -- первой отдаче и больше не меняется: два набора у одного пункта
+    -- выдали бы ответ пересечением. NULL — вариантов ещё не отдавали
+    option_source     text        CHECK (option_source IN ('list', 'llm')),
     created_at        timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT cloze_items_blank_inside CHECK (blank_start + blank_len <= char_length(sentence)),
     -- Ссылка ровно на свой источник; у реплики и материала — их урок
@@ -56,6 +62,27 @@ CREATE INDEX cloze_items_lesson_idx ON cloze_items (lesson_id) WHERE lesson_id I
 CREATE INDEX cloze_items_material_idx ON cloze_items (material_id) WHERE material_id IS NOT NULL;
 CREATE INDEX cloze_items_generated_idx ON cloze_items (generated_text_id) WHERE generated_text_id IS NOT NULL;
 CREATE INDEX cloze_items_tatoeba_idx ON cloze_items (tatoeba_id) WHERE tatoeba_id IS NOT NULL;
+
+-- Отрицательный кэш генератора: слово, для которого при проверке не
+-- нашлось нового годного предложения. Пока запись свежая (ADR-037: час
+-- и не раньше новых материалов, своих текстов, импорта Tatoeba), выдача
+-- не ищет слову предложения заново
+CREATE TABLE cloze_misses (
+    user_id    bigint      NOT NULL,
+    term_id    bigint      NOT NULL,
+    checked_at timestamptz NOT NULL,
+    PRIMARY KEY (user_id, term_id),
+    FOREIGN KEY (user_id, term_id) REFERENCES user_terms (user_id, term_id) ON DELETE CASCADE
+);
+
+-- Поиск предложений слова в репликах и материалах уроков
+-- (store.ClozeLessonTexts): лексемы хранятся, а не считаются в запросе —
+-- to_tsvector заново на каждое слово выдачи дороже самого поиска, когда
+-- план идёт не по индексу (ADR-037). GIN — по самим колонкам
+ALTER TABLE utterances ADD COLUMN text_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED;
+ALTER TABLE materials ADD COLUMN body_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', body_md)) STORED;
+CREATE INDEX utterances_text_tsv_idx ON utterances USING gin (text_tsv);
+CREATE INDEX materials_body_tsv_idx ON materials USING gin (body_tsv);
 
 -- Кэш LLM-дистракторов (S5-8, часть 2): прошедшие проверку варианты для
 -- слова в предложении с пропуском. Общий: пункт другого студента с тем же

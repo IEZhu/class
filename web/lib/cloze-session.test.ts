@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  clozeCredit,
   clozeKeyAction,
+  distractorRequestIds,
   isAnswerOption,
+  itemOptions,
+  llmErrorNote,
   MAX_RESPONSE_MS,
   responseMs,
   scheduleText,
@@ -51,4 +55,46 @@ test("ответ среди вариантов: форма у вариантов
   assert.ok(isAnswerOption("ran", result));
   assert.ok(isAnswerOption("run", result));
   assert.ok(!isAnswerOption("walk", result));
+});
+
+const list = (id: number, options: string[]) => ({ id, options, distractor_source: "list" as const });
+const pending = (id: number) => ({ id, options: [], distractor_source: "pending" as const });
+
+test("без ключа LLM страница не просит варианты; с ключом — только pending", () => {
+  const items = [list(1, ["a", "b", "c", "d"]), pending(2), pending(3)];
+  assert.deepEqual(distractorRequestIds({ items, llm_available: false }), []);
+  assert.deepEqual(distractorRequestIds({ items: [list(1, ["a"]), list(2, ["b"])], llm_available: true }), []);
+  assert.deepEqual(distractorRequestIds({ items, llm_available: true }), [2, 3]);
+});
+
+test("у пункта один набор вариантов: пришедший позже не заменяет отданный выдачей", () => {
+  const llm = { id: 1, options: ["ran", "walked", "drove", "flew"], distractor_source: "llm" as const };
+  assert.deepEqual(itemOptions(list(1, ["run", "walk", "swim", "jump"]), { 1: llm }), ["run", "walk", "swim", "jump"]);
+  assert.equal(itemOptions(pending(2), {}), null, "pending до ответа POST — без вариантов");
+  assert.equal(itemOptions(pending(2), { 2: pending(2) }), null);
+  assert.deepEqual(itemOptions(pending(2), { 2: { ...llm, id: 2 } }), llm.options);
+});
+
+test("причина вариантов словаря", () => {
+  assert.equal(llmErrorNote(null), null);
+  assert.match(llmErrorNote("rate_limited") ?? "", /лимит/);
+  assert.match(llmErrorNote("llm_unavailable") ?? "", /недоступен/);
+});
+
+test("подпись Tatoeba: до ответа без ссылок на предложение, после — со ссылками", () => {
+  const before = { author: "fixture_bank", license: "CC BY 2.0 FR", license_url: "https://creativecommons.org/licenses/by/2.0/fr/" };
+  const credit = clozeCredit(before, null);
+  assert.equal(credit?.author, "fixture_bank");
+  assert.equal(credit?.url, null);
+  assert.equal(credit?.translation, null);
+  assert.equal(clozeCredit(null, null), null, "не Tatoeba — подписи нет");
+  const after = clozeCredit(before, {
+    ...before,
+    url: "https://tatoeba.org/sentences/show/5",
+    translation_author: "ru_author",
+    translation_url: "https://tatoeba.org/sentences/show/106",
+  });
+  assert.equal(after?.url, "https://tatoeba.org/sentences/show/5");
+  assert.deepEqual(after?.translation, { author: "ru_author", url: "https://tatoeba.org/sentences/show/106" });
+  assert.equal(after?.licenseUrl, before.license_url);
 });

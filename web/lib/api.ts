@@ -389,19 +389,22 @@ export interface PracticeVideoDetail extends VideoTargets {
 // Пункт cloze (GET /practice/cloze, S4-4/S4-5, ADR-037): предложение
 // вокруг пропуска и перемешанные варианты в нижнем регистре; ни слова,
 // ни перевода до ответа в нём нет. Варианты словаря — словарные формы,
-// от LLM — в форме пропуска. due — ответ сдвинет карточку слова (иначе
+// от LLM — в форме пропуска; набор у пункта один за всё время. pending —
+// вариантов ещё нет (options пуст): их отдаст POST
+// /practice/cloze/distractors. due — ответ сдвинет карточку слова (иначе
 // засчитается только промах).
 export interface ClozeItem {
   id: number;
   before: string;
   after: string;
   options: string[];
-  distractor_source: "list" | "llm";
+  distractor_source: "list" | "llm" | "pending";
   source: "lesson" | "material" | "generated" | "tatoeba";
   // Урок реплики или материала; null у остальных
   lesson_id: number | null;
-  // Подпись предложения Tatoeba (CC BY); null у остальных
-  attribution: TermExample["attribution"] | null;
+  // Автор и лицензия предложения Tatoeba (CC BY) — без ссылок на его
+  // страницу: там предложение целиком. null у остальных
+  attribution: Pick<TermExample["attribution"], "author" | "license" | "license_url"> | null;
   due: boolean;
 }
 
@@ -413,15 +416,18 @@ export interface ClozePage {
   llm_available: boolean;
 }
 
-// Ответ POST /practice/cloze/distractors: варианты пунктов после LLM
-// (distractor_source "list" — ответ модели не прошёл проверку).
+// Ответ POST /practice/cloze/distractors: окончательные варианты пунктов
+// (distractor_source "list" — ответ модели не прошёл проверку или
+// вызова не было: llm_error — почему).
 export interface ClozeOptions {
   items: Pick<ClozeItem, "id" | "options" | "distractor_source">[];
+  llm_error: "rate_limited" | "llm_unavailable" | "llm_failed" | null;
 }
 
 // Ответ POST /practice/cloze/{id}/attempts: answer — форма слова
 // в предложении, exact — введена именно она; counted — ответ ушёл
-// в график FSRS; translation — перевод предложения Tatoeba.
+// в график FSRS; translation и attribution (со ссылками на предложение
+// и перевод) — у предложения Tatoeba.
 export interface ClozeAttemptResult {
   item_id: number;
   term_id: number;
@@ -436,6 +442,7 @@ export interface ClozeAttemptResult {
   status: TermStatus;
   card: SrsCard;
   translation: string | null;
+  attribution: TermExample["attribution"] | null;
 }
 
 const API_TIMEOUT_MS = 5000;
