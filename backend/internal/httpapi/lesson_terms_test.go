@@ -496,6 +496,106 @@ func TestPickerConfirmAndAssign(t *testing.T) {
 	}
 }
 
+// Интеграция S3-8 и S4-1 (D-3): назначение словаря урока идёт через
+// store.SaveUserTerm, поэтому каждое новое назначенное слово получает
+// карточку FSRS в транзакции слова и сразу встаёт в очередь повторений.
+// Слову, которое студент уже учит, график не сбрасывается; повтор
+// назначения карточек не множит.
+func TestAssignedLessonTermsGetSRSCards(t *testing.T) {
+	f := newPickerFixture(t)
+	ctx := context.Background()
+	useTestClock(f.a)
+	w := securityRequest(f.h, "POST", f.path(f.lessonID, "/term-candidates"), `{"words":["run","house"]}`, f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var manual manualCandidatesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &manual); err != nil || len(manual.Added) != 2 {
+		t.Fatalf("кандидаты: %s", w.Body.String())
+	}
+	run, house := manual.Added[0].TermID, manual.Added[1].TermID
+	// Алиса уже учит run, и карточку повторяли: назначение её не трогает
+	if _, err := f.a.store.SaveUserTerm(ctx, f.aliceID, run, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.conn.Exec(ctx, `UPDATE srs_cards SET reps = 3, state = 'review' WHERE user_id = $1 AND term_id = $2`,
+		f.aliceID, run); err != nil {
+		t.Fatal(err)
+	}
+	expectStatus(t, securityRequest(f.h, "PUT", f.path(f.lessonID, "/terms"),
+		fmt.Sprintf(`{"term_ids":[%d,%d]}`, run, house), f.teacher), http.StatusOK)
+
+	assignAll := func() assignLessonTermsResponse {
+		t.Helper()
+		w := securityRequest(f.h, "POST", f.path(f.lessonID, "/terms/assignments"), `{"all":true}`, f.teacher)
+		expectStatus(t, w, http.StatusOK)
+		var resp assignLessonTermsResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	// Карточка нового слова — из той же транзакции, что и строка user_terms
+	newCard := func(userID, termID int64) bool {
+		t.Helper()
+		var ok bool
+		if err := f.conn.QueryRow(ctx,
+			`SELECT c.due_at = ut.added_at AND c.created_at = ut.added_at AND c.state = 'new' AND c.reps = 0
+			 FROM srs_cards c JOIN user_terms ut USING (user_id, term_id)
+			 WHERE c.user_id = $1 AND c.term_id = $2`, userID, termID).Scan(&ok); err != nil {
+			t.Fatalf("карточка (%d, %d): %v", userID, termID, err)
+		}
+		return ok
+	}
+	cardsOf := func() map[[2]int64]int {
+		t.Helper()
+		out := map[[2]int64]int{}
+		for _, u := range []int64{f.aliceID, f.bobID} {
+			for _, term := range []int64{run, house} {
+				cards, reviews := srsCardCount(t, f.conn, u, term)
+				if reviews != 0 {
+					t.Fatalf("назначение записало оценку (%d, %d)", u, term)
+				}
+				out[[2]int64{u, term}] = cards
+			}
+		}
+		return out
+	}
+
+	if got := assignAll(); got != (assignLessonTermsResponse{Students: 2, Terms: 2, Added: 3, Kept: 1}) {
+		t.Fatalf("назначение всем: %+v", got)
+	}
+	before := cardsOf()
+	for pair, n := range before {
+		if n != 1 {
+			t.Fatalf("у пары %v карточек: %d", pair, n)
+		}
+	}
+	for _, pair := range [][2]int64{{f.aliceID, house}, {f.bobID, run}, {f.bobID, house}} {
+		if !newCard(pair[0], pair[1]) {
+			t.Fatalf("назначенное слово %v без карточки из транзакции слова", pair)
+		}
+	}
+	var reps int
+	if err := f.conn.QueryRow(ctx, `SELECT reps FROM srs_cards WHERE user_id = $1 AND term_id = $2`,
+		f.aliceID, run).Scan(&reps); err != nil || reps != 3 {
+		t.Fatalf("график run у Алисы сброшен: reps %d (%v)", reps, err)
+	}
+
+	if got := assignAll(); got != (assignLessonTermsResponse{Students: 2, Terms: 2, Added: 0, Kept: 4}) {
+		t.Fatalf("повтор назначения: %+v", got)
+	}
+	for pair, n := range cardsOf() {
+		if n != before[pair] {
+			t.Fatalf("повтор назначения изменил карточки %v: %d → %d", pair, before[pair], n)
+		}
+	}
+
+	// Назначенные слова — в очереди повторений студента
+	q := fetchQueue(t, f.h, f.bob, "")
+	if got := strings.Join(queueLemmas(q), ","); got != "run,house" && got != "house,run" {
+		t.Fatalf("очередь Боба: %s", got)
+	}
+}
+
 // 0019 откатывается начисто (вместе с ждущими разборами досок)
 // и накатывается повторно; terms и user_terms при откате остаются.
 func TestLessonTermsMigrationReversible(t *testing.T) {

@@ -180,33 +180,24 @@ func TestPracticeVideosRankByLearningWords(t *testing.T) {
 	}
 }
 
-// С srs_cards веса — по карточкам FSRS: dog к повторению и дважды забыт,
-// у go карточки нет (как к повторению), cat повторять не пора. dogOnly
-// обгоняет cat-видео, хотя по статусу cat новее.
+// С srs_cards (0021, S4-1) веса — по карточкам FSRS: dog к повторению
+// и дважды забыт, у go карточки нет (как к повторению), cat повторять не
+// пора. dogOnly обгоняет cat-видео, хотя по статусу cat новее.
 func TestPracticeVideosSRSWeights(t *testing.T) {
 	f := newVideoFixture(t)
 	ctx := context.Background()
-	// До S4-1 таблицы нет — заводится по 03-data-model.md; после — своя S4-1
-	if _, err := f.conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS srs_cards (
-		user_id bigint NOT NULL, term_id bigint NOT NULL, due_at timestamptz NOT NULL,
-		lapses integer NOT NULL DEFAULT 0, PRIMARY KEY (user_id, term_id))`); err != nil {
-		t.Fatal(err)
+	// Фикстура пишет слова в обход хука SaveUserTerm: карточки заводит
+	// бэкфилл, как worker при старте, — в настоящей таблице 0021
+	if n, err := f.a.store.BackfillSRSCards(ctx); err != nil || n != 4 {
+		t.Fatalf("бэкфилл карточек: %d, %v", n, err)
 	}
 	card := func(word string, due time.Time, lapses int) {
 		t.Helper()
-		var termID int64
-		if err := f.conn.QueryRow(ctx, `SELECT id FROM terms WHERE lemma = $1`, word).Scan(&termID); err != nil {
-			t.Fatal(err)
-		}
-		// Карточку могла завести S4-1 при записи слова — тогда она правится
-		tag, err := f.conn.Exec(ctx, `UPDATE srs_cards SET due_at = $3, lapses = $4 WHERE user_id = $1 AND term_id = $2`,
-			f.userID, termID, due, lapses)
-		if err == nil && tag.RowsAffected() == 0 {
-			_, err = f.conn.Exec(ctx, `INSERT INTO srs_cards (user_id, term_id, due_at, lapses) VALUES ($1, $2, $3, $4)`,
-				f.userID, termID, due, lapses)
-		}
-		if err != nil {
-			t.Fatal(err)
+		tag, err := f.conn.Exec(ctx, `UPDATE srs_cards SET due_at = $3, lapses = $4
+			WHERE user_id = $1 AND term_id = (SELECT id FROM terms WHERE lemma = $2)`,
+			f.userID, word, due, lapses)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("карточка %s: %v, строк %d", word, err, tag.RowsAffected())
 		}
 	}
 	card("cat", time.Now().Add(24*time.Hour), 5)
