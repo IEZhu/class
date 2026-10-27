@@ -377,8 +377,8 @@ LLM с контекстом предложения — **закрывает до
   `llm_unavailable` / 502 `llm_failed` — сбой провайдера.
   `POST /terms/click` отдаёт `explain_available` (`canExplain`).
 - Промпт и вывод — пакет `backend/internal/explain`: `Context`
-  (нормализация предложения, `<` `>` → `‹` `›`), `Hash` (sha256 —
-  ключ кэша), `Contains`, `NewRequest` (слово, лемма и предложение в
+  (нормализация предложения, `<` `>` → `‹` `›`), `Hash` (sha256 формы
+  слова и предложения — ключ кэша; форма — по ревью волны C), `Contains`, `NewRequest` (слово, лемма и предложение в
   `<word>`, `<lemma>`, `<sentence>` как данные), `Finish` (абзацы,
   потолок `MaxRunes` = 1000 с обрезкой по слову).
 - Миграция `backend/migrations/0024_term_explanations.up.sql` (откат —

@@ -49,10 +49,14 @@ func Context(sentence string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// Hash — ключ кэша term_explanations.context_hash: sha256 предложения
-// после Context.
-func Hash(context string) []byte {
-	sum := sha256.Sum256([]byte(context))
+// Hash — ключ кэша term_explanations.context_hash: sha256 всего, что
+// от пользователя уходит в промпт, — формы слова, как в <word>, и
+// предложения после Context, через NUL (его нет ни в форме, прошедшей
+// lemma.IsWord, ни в предложении после Context). Лемма — от термина,
+// а термин и так в ключе. Две формы одной леммы в одном предложении
+// (I run, he ran) — два объяснения под разными ключами.
+func Hash(surface, context string) []byte {
+	sum := sha256.Sum256([]byte(typography.Replace(surface) + "\x00" + context))
 	return sum[:]
 }
 

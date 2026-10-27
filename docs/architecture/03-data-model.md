@@ -109,7 +109,7 @@ generated_texts(id, user_id, level, genre, max_words, target_lemmas text[] /*= t
                 unknown_share, attempts, provider, model, created_at)
 llm_usage(user_id, day /*UTC*/, kind /*generate|explain, 0024*/, requests)
                                             -- суточные лимиты LLM (ADR-029, ADR-039)
--- кэш «объясни» (0024, ADR-039): ключ — термин и sha256 нормализованного предложения
+-- кэш «объясни» (0024, ADR-039): ключ — термин и sha256 формы слова и нормализованного предложения
 term_explanations(term_id, context_hash, context, body /*простой текст*/, provider, model,
                   created_at, PRIMARY KEY(term_id, context_hash))
 cloze_tests(id, source /*lesson|generated_text*/, source_id, term_ids int[])

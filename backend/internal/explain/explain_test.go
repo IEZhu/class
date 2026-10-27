@@ -8,8 +8,8 @@ import (
 )
 
 // Ключ кэша не зависит от пробелов, переводов строк и типографики, но
-// различает регистр и слова; угловые скобки и управляющие символы до
-// промпта не доходят.
+// различает регистр, слова предложения и форму объясняемого слова;
+// угловые скобки и управляющие символы до промпта не доходят.
 func TestContextNormalizes(t *testing.T) {
 	for in, want := range map[string]string{
 		"  She  ran\n to the\tstation. ": "She ran to the station.",
@@ -21,11 +21,18 @@ func TestContextNormalizes(t *testing.T) {
 			t.Errorf("Context(%q) = %q, хотели %q", in, got, want)
 		}
 	}
-	if !bytes.Equal(Hash(Context("She ran  home.")), Hash(Context("She ran\nhome."))) {
+	if !bytes.Equal(Hash("ran", Context("She ran  home.")), Hash("ran", Context("She ran\nhome."))) {
 		t.Fatal("пробелы и переводы строк меняют ключ кэша")
 	}
-	if bytes.Equal(Hash("She ran home."), Hash("she ran home.")) || len(Hash("x")) != 32 {
+	if !bytes.Equal(Hash("don’t", "I don't."), Hash("don't", "I don't.")) {
+		t.Fatal("типографский апостроф в форме меняет ключ кэша")
+	}
+	if bytes.Equal(Hash("ran", "She ran home."), Hash("ran", "she ran home.")) || len(Hash("x", "x")) != 32 {
 		t.Fatal("ключ кэша — sha256 предложения как есть после Context")
+	}
+	sentence := "I run every day, but yesterday I ran twice."
+	if bytes.Equal(Hash("run", sentence), Hash("ran", sentence)) {
+		t.Fatal("две формы слова в одном предложении — один ключ кэша")
 	}
 }
 
