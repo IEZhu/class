@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -7,6 +8,8 @@ import { ClickableTextScope } from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GenerateForm from "./generate-form";
 import GeneratedTextView from "./generated-text";
+
+export const metadata: Metadata = { title: "Текст по словам" };
 
 // S5-6: учебный текст по целевым словам от LLM и история своих текстов.
 // Генерация — студенту и преподавателю (каждый вызов стоит денег).

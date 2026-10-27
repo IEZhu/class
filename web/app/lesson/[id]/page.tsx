@@ -1,10 +1,10 @@
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { LessonDetail, LessonTerm, Material, User } from "../../../lib/api";
 import { lessonTitle } from "../../../lib/lesson-title";
-import { lessonPhase } from "../../../lib/lesson-phase";
-import type { LessonPhase } from "../../../lib/lesson-phase";
+import { lessonPhase, phaseTitles } from "../../../lib/lesson-phase";
 import ClickableText from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
@@ -22,23 +22,21 @@ const dateFmt = new Intl.DateTimeFormat("ru-RU", {
   timeZone: "UTC",
 });
 
-const phaseTitles: Record<LessonPhase, string> = {
-  scheduled: "Запланирован",
-  live: "Идёт сейчас",
-  ended: "Завершён",
-  processing: "Запись обрабатывается",
-  done: "Прошёл",
-};
+// Название урока во вкладке потребовало бы второго запроса к api
+// (generateMetadata не делит fetch страницы) — заголовок общий
+export const metadata: Metadata = { title: "Урок" };
 
 // Живой урок и запись с транскриптом шире колонки страницы (640px): доске,
 // видео и транскрипту рядом с ним нужно место. Секция выходит за колонку
-// симметрично — до 1200px или почти всего экрана.
+// симметрично — до 1200px или почти всей области содержимого: экран без
+// боковой панели каркаса (--shell-inset, ADR-040).
+const wideWidth = "min(calc(96vw - var(--shell-inset, 0px)), 1200px)";
 const wideSectionStyle = {
   borderRadius: 8,
   padding: "1rem",
   boxSizing: "border-box",
-  width: "min(96vw, 1200px)",
-  margin: "1rem 0 1rem calc((100% - min(96vw, 1200px)) / 2)",
+  width: wideWidth,
+  margin: `1rem 0 1rem calc((100% - ${wideWidth}) / 2)`,
 } as const;
 
 const liveSectionStyle = { ...wideSectionStyle, border: "2px solid #2a7" } as const;

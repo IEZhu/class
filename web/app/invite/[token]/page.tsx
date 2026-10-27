@@ -1,7 +1,11 @@
+import type { Metadata } from "next";
+
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { Invite } from "../../../lib/api";
 import { roleLabels } from "../../../lib/roles";
 import AcceptForm from "./accept-form";
+
+export const metadata: Metadata = { title: "Приглашение" };
 
 // Публичная страница: приглашённый ещё не залогинен. Токен из URL уходит
 // в api, дальше человек задаёт себе пароль (ADR-008).

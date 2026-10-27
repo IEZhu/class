@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -6,6 +7,8 @@ import type { ClozePage, User } from "../../../lib/api";
 import { ClickableTextScope } from "../../clickable-text";
 import UserBar from "../../user-bar";
 import ClozeSession from "./cloze-session";
+
+export const metadata: Metadata = { title: "Вставь слово" };
 
 const pageStyle = { fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" } as const;
 

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -7,6 +8,8 @@ import { clock } from "../../../lib/timeline";
 import ClickableText, { ClickableTextScope } from "../../clickable-text";
 import UserBar from "../../user-bar";
 import VideoPlayer from "./video-player";
+
+export const metadata: Metadata = { title: "Видео по словам" };
 
 // S5-5: видео-практика (ADR-038). Подбор роликов корпуса субтитров под
 // слова — свои из словаря (новые и «забытые») или введённые в форме —

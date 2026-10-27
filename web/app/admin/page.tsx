@@ -1,9 +1,12 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../lib/api";
 import type { Group, Invite, User, UserWithGroups } from "../../lib/api";
 import UserBar from "../user-bar";
 import AdminPanel from "./admin-panel";
+
+export const metadata: Metadata = { title: "Люди и группы" };
 
 export default async function AdminPage() {
   let me: User;

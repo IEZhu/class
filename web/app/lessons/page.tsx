@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -6,6 +7,8 @@ import type { Group, Lesson, User } from "../../lib/api";
 import { lessonTitle } from "../../lib/lesson-title";
 import UserBar from "../user-bar";
 import NewEvent from "./new-event";
+
+export const metadata: Metadata = { title: "Уроки" };
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "short",

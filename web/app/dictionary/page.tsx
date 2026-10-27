@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -7,6 +8,8 @@ import { lessonTitle } from "../../lib/lesson-title";
 import { STATUS_LABELS, TERM_STATUSES } from "../../lib/term-status";
 import UserBar from "../user-bar";
 import DictionaryStatus from "./dictionary-status";
+
+export const metadata: Metadata = { title: "Мой словарь" };
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
 

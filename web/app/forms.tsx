@@ -3,6 +3,8 @@
 import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
+import { Icon } from "./ui/icons";
+
 // Общий каркас форм кабинетов (/account, /admin): вызов api, состояние
 // отправки и текст ошибки. Держим в одном месте, чтобы формы не
 // расползались собственными try/catch.
@@ -73,6 +75,10 @@ export function useSubmit(action: () => Promise<void>) {
   return { busy, error, done, submit };
 }
 
+// FormStatus — итог отправки рядом с кнопкой (DESIGN §3.15): ошибка —
+// role="alert", успех — role="status", чтобы его прочла программа
+// экранного доступа; иконка рядом, цвет — не единственный признак.
+// <span>, а не <p>: стоит и внутри строк и абзацев форм.
 export function FormStatus({
   error,
   done,
@@ -82,7 +88,19 @@ export function FormStatus({
   done: boolean;
   doneText: string;
 }): ReactNode {
-  if (error) return <span style={{ color: "crimson" }}>{error}</span>;
-  if (done) return <span style={{ color: "#2a7" }}>{doneText}</span>;
+  if (error)
+    return (
+      <span className="form-status form-status--error" role="alert">
+        <Icon name="error" size="sm" />
+        <span className="form-status-text">{error}</span>
+      </span>
+    );
+  if (done)
+    return (
+      <span className="form-status form-status--done" role="status">
+        <Icon name="check" size="sm" />
+        <span className="form-status-text">{doneText}</span>
+      </span>
+    );
   return null;
 }

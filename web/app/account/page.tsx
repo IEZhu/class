@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../lib/api";
@@ -6,6 +7,8 @@ import { roleLabels } from "../../lib/roles";
 import UserBar from "../user-bar";
 import AccountForms from "./account-forms";
 import GoogleCalendar from "./google-calendar";
+
+export const metadata: Metadata = { title: "Учётная запись" };
 
 export default async function AccountPage({
   searchParams,

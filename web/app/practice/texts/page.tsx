@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -6,6 +7,8 @@ import type { PracticeText, PracticeTextsPage, User } from "../../../lib/api";
 import ClickableText, { ClickableTextScope, ExampleAuthors } from "../../clickable-text";
 import UserBar from "../../user-bar";
 import { GeneratedParagraphs, genreLabel } from "../text/generated-text";
+
+export const metadata: Metadata = { title: "Тексты для практики" };
 
 const pageStyle = { fontFamily: "system-ui, sans-serif", maxWidth: 720, margin: "2rem auto", padding: "0 1rem" } as const;
 const cardStyle = { border: "1px solid #ddd", borderRadius: 8, padding: "0.75rem 1rem" } as const;

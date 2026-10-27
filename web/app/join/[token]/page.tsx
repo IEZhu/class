@@ -1,5 +1,9 @@
+import type { Metadata } from "next";
+
 import { apiFetch, ApiError } from "../../../lib/api";
 import JoinForm from "./join-form";
+
+export const metadata: Metadata = { title: "Вход на событие" };
 
 type GuestEvent = {
   title: string;
