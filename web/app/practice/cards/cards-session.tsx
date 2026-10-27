@@ -35,8 +35,9 @@ interface LastReview {
 // CardsSession — проход выдачи очереди: лицо карточки (лемма), по пробелу
 // или кнопке — оборот, оценка кнопкой или клавишей 1–4 (POST /reviews).
 // review_id заводится при первой попытке оценки и живёт до следующей
-// карточки: повтор после сбоя сети api засчитает один раз.
-export default function CardsSession({ queue }: { queue: PracticeQueue }) {
+// карточки: повтор после сбоя сети api засчитает один раз. studentId —
+// чей словарь перекрашивает оценка (кэш статусов по студенту, ADR-026).
+export default function CardsSession({ queue, studentId }: { queue: PracticeQueue; studentId: number }) {
   const router = useRouter();
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -69,7 +70,7 @@ export default function CardsSession({ queue }: { queue: PracticeQueue }) {
         term_id: card.term_id,
         rating,
       });
-      termStatuses.setStatus(card.lemma, res.status);
+      termStatuses.setStatus(studentId, card.lemma, res.status);
       setLast({ lemma: card.lemma, rating, dueAt: res.card.due_at });
       setTally((t) => ({ ...t, [rating]: t[rating] + 1 }));
       setNextDue((d) => (d && Date.parse(d) <= Date.parse(res.card.due_at) ? d : res.card.due_at));

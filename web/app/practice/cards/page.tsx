@@ -38,9 +38,9 @@ export default async function PracticeCardsPage() {
         Вспомните слово, переверните карточку (пробел) и оцените себя клавишами 1–4. Слова попадают сюда из{" "}
         <Link href="/dictionary">словаря</Link>.
       </p>
-      <ClickableTextScope dictionary>
+      <ClickableTextScope studentId={me.id}>
         {/* Новая выдача очереди — новая сессия: счётчики начинаются с нуля */}
-        <CardsSession key={Date.now()} queue={queue} />
+        <CardsSession key={Date.now()} queue={queue} studentId={me.id} />
       </ClickableTextScope>
     </main>
   );

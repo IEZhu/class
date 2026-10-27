@@ -88,7 +88,7 @@ export default async function PracticeVideoPage({ searchParams }: { searchParams
         <p>Видео-практика доступна студентам и преподавателям.</p>
       ) : (
         // Раскраска по словарю и «в мой словарь» — у студента (ADR-026)
-        <ClickableTextScope dictionary={me.role === "student"}>
+        <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
           <form method="get" action="/practice/video" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <input
               name="words"

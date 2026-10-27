@@ -6,9 +6,10 @@ import { STATUS_LABELS, TERM_STATUSES, TermStatuses } from "../lib/term-status";
 import type { LookupResult, TermStatus } from "../lib/term-status";
 import { request, requestJson } from "./forms";
 
-// termStatuses — статусы слов зрителя, один кэш на вкладку: его читают
-// все <ClickableText> страницы, а сохранение статуса — здесь — сразу
-// перекрашивает формы слова и на других страницах без перезагрузки.
+// termStatuses — статусы слов зрителя-студента, один кэш на вкладку: его
+// читают все <ClickableText> страницы, а сохранение статуса — здесь —
+// сразу перекрашивает формы слова и на других страницах без перезагрузки.
+// Вход другого студента в той же вкладке кэш сбрасывает (lib/term-status).
 export const termStatuses = new TermStatuses((words) =>
   requestJson<LookupResult>("/api/user-terms/lookup", "POST", { words }),
 );
@@ -18,15 +19,18 @@ export const buttonStyle = { padding: "0.2rem 0.5rem", border: "1px solid #ccc",
 const activeStyle = { ...buttonStyle, background: "#333", borderColor: "#333", color: "#fff" };
 
 // TermStatusControl — «в мой словарь», статус 1..5 и «убрать» (S3-5):
-// в попапе слова и на странице словаря. lessonId — урок, с которого
-// слово пришло (source_lesson_id); api запоминает первый.
+// в попапе слова и на странице словаря. studentId — зритель, чей это
+// словарь (ключ кэша termStatuses); lessonId — урок, с которого слово
+// пришло (source_lesson_id); api запоминает первый.
 export default function TermStatusControl({
+  studentId,
   termId,
   lemma,
   status,
   lessonId,
   onSaved,
 }: {
+  studentId: number;
   termId: number;
   lemma: string;
   status: TermStatus | null;
@@ -42,7 +46,7 @@ export default function TermStatusControl({
     try {
       if (next === null) await request(`/api/user-terms/${termId}`, "DELETE");
       else await request("/api/user-terms", "POST", { term_id: termId, status: next, source_lesson_id: lessonId ?? undefined });
-      termStatuses.setStatus(lemma, next);
+      termStatuses.setStatus(studentId, lemma, next);
       onSaved?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "не удалось сохранить");

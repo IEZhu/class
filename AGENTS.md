@@ -71,9 +71,9 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (without them the lesson room returns
   503), `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
   (R2 by default, ADR-009; without them media and material file URLs return 503 and no
-  recording is started), `EGRESS_AUDIO_ONLY=1` (record OGG audio instead of MP4),
-  `COMPOSE_PROFILES=translate` with `LIBRETRANSLATE_URL` (word translations; empty → the
-  word click answers with definitions only, ADR-018), `BACKUP_S3_*` for `deploy/backup-pg.sh` (all empty → the recordings bucket and token
+  recording is started; with them but without `S3_ENDPOINT` an empty or `auto` `S3_REGION`
+  stops api and worker at start, ADR-031), `EGRESS_AUDIO_ONLY=1` (record OGG audio instead of MP4),
+  `BACKUP_S3_*` for `deploy/backup-pg.sh` (all empty → the recordings bucket and token
   with a journal warning, debt D-8; any one set → `BACKUP_S3_BUCKET` is required),
   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_KEY` (all three or the
   Google Calendar connection is unavailable and `calendar_sync` skips lesson creates and

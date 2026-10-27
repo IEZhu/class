@@ -191,7 +191,8 @@ LLM с контекстом предложения — **закрывает до
   `backend/cmd/tatoebaimport` (в образе worker'а,
   `/usr/local/bin/tatoebaimport`; флаги `-links`, `-english`, `-russian`,
   `-restart`, `-max-runes` 150, `-max-translations` 1), make-цель
-  `tatoeba-import` (`TATOEBA_DIR` — локальные файлы). Источник по
+  `tatoeba-import` (`TATOEBA_DIR` — локальные файлы, `TATOEBA_ARGS` —
+  флаги команды, например `-restart`). Источник по
   умолчанию — поязыковые выгрузки tatoeba.org `eng-rus_links.tsv.bz2`,
   `eng_sentences_detailed.tsv.bz2`, `rus_sentences_detailed.tsv.bz2`
   (формат сверен с выгрузкой 2026-10-24). Загрузка и чтение дампов —
@@ -249,13 +250,18 @@ LLM с контекстом предложения — **закрывает до
   `?words=` — S5-7). Без `words` — невыученные слова личного словаря
   (интеграция волны B, долг D-19 закрыт): `userTermWords` →
   `store.PracticeLemmas` (`backend/internal/store/user_terms.go`), число
-  целей — `textgen.TargetsFor`; поле слов в форме web необязательно.
+  целей — `textgen.TargetsFor`; поле слов в форме web необязательно у
+  студента.
 - Ключи `.env` (`deploy/.env.example`, compose — только api):
   `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_DAILY_LIMIT`; без
   `LLM_API_KEY` в журнале api строка «генерация текстов отвечает 503».
-- Web — `/practice/text` (`web/app/practice/text/`): форма генерации,
-  текст простыми абзацами (`renderParagraph` в `generated-text.tsx`) с
-  покрытием, история; ссылка «Тексты» в шапке у студента и преподавателя.
+- Web — `/practice/text` (`web/app/practice/text/`): форма генерации
+  (подсказка «пусто — из моего словаря» и пустое поле слов — только у
+  студента, преподавателю слова обязательны), абзацы текста через
+  `<ClickableText>` (`GeneratedParagraphs` в `generated-text.tsx`, страница —
+  в `ClickableTextScope` без урока: раскраска и «в мой словарь» — у
+  студента) с покрытием, история; ссылка «Тексты» в шапке у студента и
+  преподавателя.
 - Тесты: `backend/internal/llm/llm_test.go` (форма запроса, заголовки,
   разбор ответа, коды ошибок, таймаут, большой ответ — на httptest),
   `backend/internal/textgen/*_test.go` (валидатор, промпт, ретрай),
@@ -266,7 +272,8 @@ LLM с контекстом предложения — **закрывает до
 - **Для ☑ не хватает.** DoD «текст кликается» закрыт в S5-7: абзацы
   рисует `GeneratedParagraphs` через `<ClickableText>` (вместо
   `renderParagraph`). Живой вызов провайдера не проверен — ключей у стенда
-  нет: с первым `LLM_API_KEY` сгенерировать текст на стенде.
+  нет: с первым `LLM_API_KEY` сгенерировать текст на стенде
+  ([deploy/README.md](../../deploy/README.md), «LLM-генерация текстов»).
 
 ### S5-7 Тексто-практика (2026-10-27), заодно долг D-15
 

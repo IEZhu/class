@@ -86,7 +86,7 @@ export default async function PracticeTextsPage({ searchParams }: { searchParams
       </p>
       {error && <p style={{ color: "#c92a2a" }}>{error}</p>}
       {page && (
-        <ClickableTextScope dictionary={me.role === "student"}>
+        <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
           {page.words.length > 0 && <p style={mutedStyle}>Слова поиска: {page.words.join(", ")}</p>}
           {page.hint && (
             <p>

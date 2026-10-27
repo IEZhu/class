@@ -381,7 +381,9 @@ location /whiteboard/ {
 
 затем `sudo nginx -t && sudo systemctl reload nginx`. Проверка:
 в DevTools браузера на вкладке «Доска» запрос `socket.io/?EIO=4&transport=websocket`
-отвечает `101 Switching Protocols`.
+отвечает `101 Switching Protocols`. Сокет живёт до 10 минут: caddy
+закрывает его (`stream_timeout`, ADR-020), и клиент сам переподключается
+через forward_auth — короткое «нет связи с доской» раз в 10 минут ожидаемо.
 
 ## Примеры Tatoeba: импорт корпуса (S5-4)
 
@@ -410,10 +412,12 @@ make tatoeba-import  # итог: пары, испорченные строки, 
 
 Оборвался (сеть, SIGTERM) — тот же `make tatoeba-import` продолжит
 с последней зафиксированной пачки своей фазы, если не сменилась версия
-ни одного из трёх файлов (ETag или Last-Modified); Tatoeba обновляет
-выгрузки по субботам, и после обновления команда откажется — тогда
-`docker compose -f deploy/docker-compose.yml run --rm --entrypoint
-tatoebaimport worker -restart`. Повторный импорт свежей выгрузки
+ни одного из трёх файлов (ETag или Last-Modified у URL, размер и mtime у
+локального файла); Tatoeba обновляет выгрузки по субботам, и после
+обновления команда откажется — тогда новый прогон с начала:
+`make tatoeba-import TATOEBA_ARGS=-restart` (с тем же `TATOEBA_DIR`, если
+импорт шёл из локальных файлов: без него команда скачает выгрузки с
+tatoeba.org). Повторный импорт свежей выгрузки
 обновляет корпус и удаляет пропавшие предложения — только после
 успешного завершения. Файлы можно скачать заранее и импортировать
 локально:
@@ -426,3 +430,43 @@ make tatoeba-import TATOEBA_DIR=/var/tmp/tatoeba   # в каталоге — т�
 должны быть читаемы для uid 10001: `chmod a+r`. Проверка после
 импорта — клик по частотному слову (run, bank) отдаёт в `examples`
 1–2 примера с переводом и подписью (`attribution`, CC BY 2.0 FR).
+
+## LLM-генерация текстов (S5-6)
+
+Решение — ADR-029 и ADR-030 в
+[decisions.md](../docs/architecture/decisions.md), ключи —
+[integrations/llm.md](../docs/architecture/integrations/llm.md). Нужен
+только api; без `LLM_API_KEY` `/practice/text` отвечает на генерацию 503,
+остальной стенд работает. Каждая генерация стоит денег: потолок —
+`LLM_DAILY_LIMIT` генераций в сутки на человека (смета — ADR-029).
+
+```bash
+# в deploy/.env:
+#   LLM_PROVIDER=anthropic     # или openai, deepseek; другое — api не стартует
+#   LLM_API_KEY=…              # ключ этого провайдера
+#   LLM_MODEL=                 # пусто — самая дешёвая актуальная модель провайдера
+#   LLM_DAILY_LIMIT=           # пусто — 10
+make migrate    # миграция 0017_generated_texts, если ещё не применена
+make up         # api пересоздастся с новыми ключами
+make logs       # в журнале api: «api: LLM <провайдер>, модель <модель>»
+```
+
+**Таймаут host-nginx.** Генерация синхронная: черновик и ретрай — до
+55 с на запрос `POST /api/practice/generate-text`. По умолчанию
+`proxy_read_timeout` у nginx — 60 с, но vhost стенда с этим бюджетом не
+сверен (ADR-029). Владельцу стенда — проверить в
+`/etc/nginx/sites-available/lang.wondermr.com`, что для `location /` (или
+отдельного `location /api/`) `proxy_read_timeout` не меньше `60s`, иначе
+долгая генерация оборвётся 504 у nginx, хотя api текст сохранит:
+
+```nginx
+location /api/ {
+    # proxy_pass и proxy_set_header — как в location / этого vhost
+    proxy_read_timeout 60s;
+}
+```
+
+затем `sudo nginx -t && sudo systemctl reload nginx`. Проверка первого
+ключа: студентом сгенерировать на `/practice/text` текст на 3–5 слов —
+он появится первым в «Мои тексты» с покрытием 100 %, слова кликаются;
+итог записать в «Факт» S5-6 ([план](../docs/plans/stage-5-content.md)).

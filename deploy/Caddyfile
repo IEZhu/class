@@ -12,7 +12,11 @@
 	# урока. forward_auth спрашивает api (сессия из cookie, урок из пути),
 	# потом путь урока срезается: ретранслятор слушает /socket.io/.
 	# route держит порядок: иначе rewrite сработал бы раньше forward_auth,
-	# и api не увидел бы урок в X-Forwarded-Uri
+	# и api не увидел бы урок в X-Forwarded-Uri.
+	# forward_auth видит только рукопожатие, поэтому WebSocket живёт не
+	# дольше stream_timeout: клиент переподключается и проходит проверку
+	# заново — отключённый или выбывший участник теряет доску в пределах
+	# 10 минут (ADR-020)
 	@whiteboard path_regexp ^/whiteboard/lesson-[0-9]+/socket\.io/$
 	handle @whiteboard {
 		route {
@@ -20,7 +24,9 @@
 				uri /whiteboard/auth
 			}
 			rewrite * /socket.io/?{query}
-			reverse_proxy whiteboard:3002
+			reverse_proxy whiteboard:3002 {
+				stream_timeout 10m
+			}
 		}
 	}
 
