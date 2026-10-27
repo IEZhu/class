@@ -4,8 +4,9 @@ Lingua Class (working name) is a platform for a small English-learning group (5 
 50 students; hobby MVP on one VPS): calendar, LiveKit video lessons, recordings in S3, speaker
 transcripts, lesson and personal dictionaries, FSRS spaced repetition and practice. Core is a
 Docker Compose monolith (Next.js + Go + Postgres); heavy subsystems are managed or OSS services.
-Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the current task is in
-`docs/tasks/README.md`. All project docs, the task index and commit descriptions are in Russian.
+Status: stage 0 is done, stages 1–5 are in progress; per-task status, debts and the current
+focus are in `docs/tasks/README.md`. All project docs, the task index and commit descriptions
+are in Russian.
 
 ## Layout
 
