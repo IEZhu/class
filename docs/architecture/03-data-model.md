@@ -110,9 +110,19 @@ llm_usage(user_id, day /*UTC*/, kind /*generate|explain, 0024*/, requests)
 -- кэш «объясни» (0024, ADR-039): ключ — термин и sha256 нормализованного предложения
 term_explanations(term_id, context_hash, context, body /*простой текст*/, provider, model,
                   created_at, PRIMARY KEY(term_id, context_hash))
-cloze_tests(id, source /*lesson|generated_text*/, source_id, term_ids int[])
-cloze_items(test_id, idx, sentence, answer_term_id, distractor_term_ids int[])
-cloze_attempts(id, test_id, user_id, answers jsonb, score, finished_at)
+-- cloze (0022, ADR-037): пункт — свой у студента, тест — выдача GET /practice/cloze
+cloze_items(id, user_id, term_id /*ответ — лемма; FK на user_terms с каскадом*/,
+            source /*lesson|material|generated|tatoeba*/,
+            lesson_id, material_id, generated_text_id, tatoeba_id /*ровно свой источник*/,
+            sentence /*снимок, до 300 символов*/, blank_start, blank_len /*символы*/,
+            context_hash /*sha256 пропуска и предложения*/, distractors text[3] /*леммы*/,
+            created_at, UNIQUE(user_id, term_id, context_hash))
+cloze_distractors(term_id, context_hash, options text[3], provider, model, created_at,
+                  PRIMARY KEY(term_id, context_hash))  -- кэш LLM-дистракторов, общий
+cloze_attempts(id, item_id, user_id, client_id /*uuid, UNIQUE(user_id, client_id)*/,
+               mode /*choice|typing*/, answer, correct, response_ms,
+               rating /*again|good|easy*/, review_id /*→ srs_reviews; NULL — не засчитан*/,
+               created_at)
 
 whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены Excalidraw
            /* + room_id, room_key, scene jsonb, scene_version, snapshot_version,
@@ -135,7 +145,8 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | terms, definitions, definition_imports (миграция `0009_dictionary`) | 3 | S3-2, S3-4 |
 | user_terms (миграция `0015_user_terms`), lesson_term_candidates, lesson_terms (миграция `0019_lesson_terms`), whiteboards (миграция `0010_whiteboards`) | 3 | S3-5…S3-8 |
 | srs_cards, srs_reviews (миграция `0021_srs`, ADR-036) | 4 | S4-1…S4-3 |
-| cloze_tests, cloze_items, cloze_attempts | 4 | S4-4, S4-5 |
+| cloze_items, cloze_attempts (миграция `0022_cloze`, ADR-037; `cloze_tests` не заводится — тест есть выдача) | 4 | S4-4, S4-5 |
+| cloze_distractors (миграция `0022_cloze`, ADR-037) | 5 | S5-8 |
 | videos, subtitle_segments, subtitle_sources, job_schedules (миграция `0011_subtitles`) | 5 | S5-1, S5-2 |
 | tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
 | generated_texts, llm_usage (миграция `0017_generated_texts`) | 5 | S5-6 |
@@ -167,7 +178,9 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
   `user_terms` тем же upsert'ом, что «в мой словарь» (`SaveUserTerm`),
   и не понижает статус уже известного слова (ADR-034).
 - `srs_cards` — по одной карточке на пару (user, term); cloze-результаты
-  пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS.
+  пишутся в `srs_reviews` c `source='cloze'` и влияют на тот же график FSRS:
+  ответ по карточке к показу и промах по любой, верный ответ раньше показа
+  — только в `cloze_attempts` с `review_id` NULL (ADR-037).
   Карточка заводится в одной транзакции со строкой `user_terms`
   (`store.SaveUserTerm`) и удаляется вместе со словом; слова без карточки
   (до 0021) добирает бэкфилл worker при старте. Оценка ставит
