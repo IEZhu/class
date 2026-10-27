@@ -195,6 +195,10 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST /webhooks/assemblyai", a.handleAssemblyAIWebhook)
 	mux.Handle("GET /lessons/{id}/transcript", user(a.handleGetTranscript))
 
+	// S2-4/S2-5: правка реплик и маппинг спикеров — teacher урока (ADR-025)
+	mux.Handle("PATCH /lessons/{id}/transcript/utterances/{idx}", teacher(a.handleEditUtterance))
+	mux.Handle("PUT /lessons/{id}/transcript/speakers/{label}", teacher(a.handleMapSpeaker))
+
 	// S3-2: клик по слову — лемма, перевод, дефиниции (flows/word-click.md).
 	// Любой вошедший, включая гостя события: попап есть во всех текстах
 	mux.Handle("POST /terms/click", user(a.handleTermClick))

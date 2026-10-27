@@ -120,6 +120,8 @@ type asrStand struct {
 	lessonID int64
 	// Сессии: участник, teacher урока, админ, чужие студент и teacher
 	student, teacher, admin, outsider, otherTeacher *http.Cookie
+	// id тех же людей — автор правки и маппинг спикеров (S2-4, S2-5)
+	studentID, teacherID, outsiderID, otherTeacherID int64
 }
 
 func newASRStand(t *testing.T, maxAttempts int) *asrStand {
@@ -130,9 +132,10 @@ func newASRStand(t *testing.T, maxAttempts int) *asrStand {
 	teacherID, teacher := securityUser(t, base, conn, store.RoleTeacher, "asr-teacher")
 	studentID, student := securityUser(t, base, conn, store.RoleStudent, "asr-student")
 	_, s.admin = securityUser(t, base, conn, store.RoleAdmin, "asr-admin")
-	_, s.outsider = securityUser(t, base, conn, store.RoleStudent, "asr-outsider")
-	_, s.otherTeacher = securityUser(t, base, conn, store.RoleTeacher, "asr-other-teacher")
+	s.outsiderID, s.outsider = securityUser(t, base, conn, store.RoleStudent, "asr-outsider")
+	s.otherTeacherID, s.otherTeacher = securityUser(t, base, conn, store.RoleTeacher, "asr-other-teacher")
 	s.student, s.teacher = student, teacher
+	s.studentID, s.teacherID = studentID, teacherID
 	var groupID int64
 	if err := conn.QueryRow(ctx, `INSERT INTO groups(name,level) VALUES ('asr','B1') RETURNING id`).Scan(&groupID); err != nil {
 		t.Fatal(err)
@@ -778,6 +781,8 @@ func TestTranscriptsMigrationReverts(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
+	// 0014 (S2-4) надстраивает utterances — её снимаем первой, как golang-migrate
+	apply("0014_utterance_edits.down.sql")
 	check()
 	apply("0008_transcripts.down.sql")
 	if got := columns("transcripts") + columns("utterances"); got != "" {

@@ -7,7 +7,7 @@ import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
 import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
-import LessonPlayer from "./lesson-player";
+import LessonReplay from "./lesson-replay";
 import LessonRoom from "./lesson-room";
 import { DeleteMaterial, FileDownload, MaterialUpload } from "./material-files";
 import LiveTabs from "./live-tabs";
@@ -27,10 +27,10 @@ const phaseTitles: Record<LessonPhase, string> = {
   done: "Прошёл",
 };
 
-// Живой урок шире колонки страницы (640px): доске и видео нужно место.
-// Секция выходит за колонку симметрично — до 1200px или почти всего экрана.
-const liveSectionStyle = {
-  border: "2px solid #2a7",
+// Живой урок и запись с транскриптом шире колонки страницы (640px): доске,
+// видео и транскрипту рядом с ним нужно место. Секция выходит за колонку
+// симметрично — до 1200px или почти всего экрана.
+const wideSectionStyle = {
   borderRadius: 8,
   padding: "1rem",
   boxSizing: "border-box",
@@ -38,7 +38,10 @@ const liveSectionStyle = {
   margin: "1rem 0 1rem calc((100% - min(96vw, 1200px)) / 2)",
 } as const;
 
-// общий вид секций-заглушек будущих этапов (S1-5/S1-6/S2-4)
+const liveSectionStyle = { ...wideSectionStyle, border: "2px solid #2a7" } as const;
+const replaySectionStyle = { ...wideSectionStyle, border: "1px solid #ddd" } as const;
+
+// общий вид секций-заглушек будущих этапов
 const placeholderSectionStyle = {
   border: "1px solid #ddd",
   borderRadius: 8,
@@ -108,15 +111,18 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
       )}
 
       {phase === "done" && (
-        <>
-          <section style={placeholderSectionStyle}>
-            <LessonPlayer lessonId={lesson.id} />
-          </section>
-          <section style={placeholderSectionStyle}>
-            {/* Транскрипт по спикерам оживёт в S2-4 */}
-            <p>📝 Транскрипт по спикерам появится на этапе 2 (S2-4).</p>
-          </section>
-        </>
+        <section style={replaySectionStyle}>
+          {/* Запись и транскрипт по спикерам (S2-4). Правит реплики и
+              сопоставляет спикеров с людьми урока только его преподаватель */}
+          <LessonReplay
+            lessonId={lesson.id}
+            canEdit={isTeacher}
+            people={[
+              { user_id: lesson.teacher_id, name: lesson.teacher_name },
+              ...lesson.participants.map((p) => ({ user_id: p.user_id, name: p.name })),
+            ]}
+          />
+        </section>
       )}
 
       {phase === "ended" && (

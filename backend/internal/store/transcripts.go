@@ -62,11 +62,15 @@ type Transcript struct {
 type Utterance struct {
 	Idx          int
 	SpeakerLabel string
-	// UserID — ручной маппинг спикера на участника (S2-5), до него nil
-	UserID  *int64
-	StartMS int64
-	EndMS   int64
-	Text    string
+	// UserID — ручной маппинг спикера на участника (S2-5), до него nil;
+	// SpeakerName — имя этого участника
+	UserID      *int64
+	SpeakerName *string
+	StartMS     int64
+	EndMS       int64
+	Text        string
+	// EditedAt — когда преподаватель исправил текст (S2-4), nil — текст ASR
+	EditedAt *time.Time
 }
 
 // QueueTranscript заводит транскрипт урока и ставит asr_submit одной
@@ -224,19 +228,24 @@ func (s *Store) SaveUtterances(ctx context.Context, id int64, utts []Utterance) 
 	return tx.Commit(ctx)
 }
 
+// selectUtterances — реплики с именем сопоставленного участника; условие
+// и порядок дописывает вызывающий, scanUtterance читает строку.
+const selectUtterances = `SELECT u.idx, u.speaker_label, u.user_id, p.name, u.start_ms, u.end_ms, u.text, u.edited_at
+	FROM utterances u LEFT JOIN users p ON p.id = u.user_id`
+
+func scanUtterance(row pgx.CollectableRow) (Utterance, error) {
+	var u Utterance
+	err := row.Scan(&u.Idx, &u.SpeakerLabel, &u.UserID, &u.SpeakerName, &u.StartMS, &u.EndMS, &u.Text, &u.EditedAt)
+	return u, err
+}
+
 // Utterances — реплики транскрипта по порядку.
 func (s *Store) Utterances(ctx context.Context, transcriptID int64) ([]Utterance, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT idx, speaker_label, user_id, start_ms, end_ms, text
-		 FROM utterances WHERE transcript_id = $1 ORDER BY idx`, transcriptID)
+	rows, err := s.pool.Query(ctx, selectUtterances+` WHERE u.transcript_id = $1 ORDER BY u.idx`, transcriptID)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Utterance, error) {
-		var u Utterance
-		err := row.Scan(&u.Idx, &u.SpeakerLabel, &u.UserID, &u.StartMS, &u.EndMS, &u.Text)
-		return u, err
-	})
+	return pgx.CollectRows(rows, scanUtterance)
 }
 
 // FinishTranscriptVTT — VTT выложен: путь в транскрипт, урок done. Повтор
@@ -311,4 +320,98 @@ func (s *Store) LessonTranscript(ctx context.Context, lessonID int64) (*Transcri
 		return nil, nil, err
 	}
 	return t, utts, nil
+}
+
+// vttRerenderDelay — преподаватель правит реплики подряд, одну за другой.
+// Перерендер VTT ждёт минуту от первой правки, и вся пачка уходит одной
+// джобой (jobs.EnqueueOnce, ADR-025).
+const vttRerenderDelay = time.Minute
+
+// EditUtterance — преподаватель исправил текст реплики (S2-4): текст,
+// отметка правки и перерендер VTT — одной транзакцией. Тот же текст
+// ничего не меняет: ни отметки, ни джобы. ErrNotFound — у транскрипта
+// урока нет реплики idx (или нет самого транскрипта).
+func (s *Store) EditUtterance(ctx context.Context, lessonID int64, idx int, text string, editorID int64) (*Utterance, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var transcriptID int64
+	err = tx.QueryRow(ctx,
+		`UPDATE utterances u SET text = $3, edited_at = now(), edited_by = $4
+		 FROM transcripts t
+		 WHERE t.id = u.transcript_id AND t.lesson_id = $1 AND u.idx = $2 AND u.text <> $3
+		 RETURNING u.transcript_id`, lessonID, idx, text, editorID).Scan(&transcriptID)
+	switch {
+	case err == nil:
+		if err := jobs.EnqueueOnce(ctx, tx, JobVTTRender, TranscriptJob{TranscriptID: transcriptID}, vttRerenderDelay); err != nil {
+			return nil, err
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, selectUtterances+` JOIN transcripts t ON t.id = u.transcript_id
+		 WHERE t.lesson_id = $1 AND u.idx = $2`, lessonID, idx)
+	if err != nil {
+		return nil, err
+	}
+	u, err := pgx.CollectOneRow(rows, scanUtterance)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, tx.Commit(ctx)
+}
+
+// ErrNotParticipant — спикера сопоставляют только с teacher урока или
+// участником его снапшота (S2-5, ADR-025).
+var ErrNotParticipant = errors.New("not a lesson participant")
+
+// MapSpeaker — преподаватель сопоставил метку спикера с человеком (S2-5):
+// все реплики метки получают user_id, nil снимает маппинг. Повтор ничего
+// не меняет. Возвращает имя человека (nil при снятии). ErrNotParticipant —
+// человек не teacher урока и не в снапшоте участников; ErrNotFound — такой
+// метки в транскрипте урока нет. VTT не перерендеривается: в нём метки,
+// а не имена (ADR-025).
+func (s *Store) MapSpeaker(ctx context.Context, lessonID int64, label string, userID *int64) (*string, error) {
+	var name *string
+	if userID != nil {
+		err := s.pool.QueryRow(ctx,
+			`SELECT u.name FROM users u
+			 WHERE u.id = $2 AND (
+			     EXISTS (SELECT 1 FROM lessons l WHERE l.id = $1 AND l.teacher_id = u.id)
+			     OR EXISTS (SELECT 1 FROM lesson_participants lp WHERE lp.lesson_id = $1 AND lp.user_id = u.id))`,
+			lessonID, *userID).Scan(&name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotParticipant
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE utterances u SET user_id = $3
+		 FROM transcripts t
+		 WHERE t.id = u.transcript_id AND t.lesson_id = $1 AND u.speaker_label = $2
+		   AND u.user_id IS DISTINCT FROM $3`, lessonID, label, userID)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() > 0 {
+		return name, nil
+	}
+	var known bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM utterances u JOIN transcripts t ON t.id = u.transcript_id
+		                WHERE t.lesson_id = $1 AND u.speaker_label = $2)`, lessonID, label).Scan(&known); err != nil {
+		return nil, err
+	}
+	if !known {
+		return nil, ErrNotFound
+	}
+	return name, nil
 }
