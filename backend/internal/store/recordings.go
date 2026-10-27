@@ -195,6 +195,11 @@ func closeLessonIfOver(ctx context.Context, tx pgx.Tx, lessonID int64) (bool, er
 		return false, nil
 	}
 
+	// Доска закрывается вместе с переходом (whiteboardOpen): сцена уже
+	// окончательная, её слова — в кандидаты словаря урока (S3-7)
+	if err := scheduleWhiteboardTerms(ctx, tx, lessonID); err != nil {
+		return false, err
+	}
 	var key string
 	err = tx.QueryRow(ctx,
 		`SELECT s3_key FROM lesson_recordings WHERE lesson_id = $1 AND status = 'complete'

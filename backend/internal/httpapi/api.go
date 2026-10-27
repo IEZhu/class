@@ -242,6 +242,17 @@ func (a *API) Router() http.Handler {
 	mux.Handle("DELETE /user-terms/{term_id}", student(a.handleDeleteUserTerm))
 	mux.Handle("POST /user-terms/lookup", student(a.handleLookupUserTerms))
 
+	// S3-7/S3-8: словарь урока — кандидаты из кликов, доски и ручного
+	// ввода (ADR-033), чеклист преподавателя урока → lesson_terms →
+	// назначение студентам в user_terms (ADR-034). Словарь урока читают
+	// все участники, собирает и назначает только teacher урока
+	mux.Handle("GET /lessons/{id}/term-candidates", teacher(a.handleListCandidates))
+	mux.Handle("POST /lessons/{id}/term-candidates", teacher(a.handleAddManualCandidates))
+	mux.Handle("POST /lessons/{id}/term-candidates/whiteboard", teacher(a.handleCollectWhiteboard))
+	mux.Handle("GET /lessons/{id}/terms", user(a.handleGetLessonTerms))
+	mux.Handle("PUT /lessons/{id}/terms", teacher(a.handleSetLessonTerms))
+	mux.Handle("POST /lessons/{id}/terms/assignments", teacher(a.handleAssignLessonTerms))
+
 	// S5-6: генерация учебного текста LLM и история своих текстов
 	// (ADR-029, ADR-030). Студент и преподаватель: гостю события и
 	// админу генерация не нужна, а каждый вызов стоит денег

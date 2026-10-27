@@ -51,8 +51,10 @@ sequenceDiagram
   tatoeba.org в `attribution`). Корпус не импортирован — список пуст,
   блок скрыт. Импорт — [../integrations/tatoeba.md](../integrations/tatoeba.md).
 - Кнопка «объясни» → LLM с контекстом предложения *(после S5-8, долг D-2)*.
-- Кнопка «в мой словарь» → `user_terms(status=1)`; клик на уроке дополнительно
-  пишет кандидата в `lesson_term_candidates(source='click')`.
+- Кнопка «в мой словарь» → `user_terms(status=1)`; клик участника урока
+  по знакомому слову дополнительно пишет кандидата
+  `lesson_term_candidates(source='click')` — счётчик кликов, клики
+  преподавателя урока не в счёт (S3-7, [ADR-033](../decisions.md)).
 
 ## Раскраска слов
 

@@ -13,7 +13,8 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   `cmd/worker/main.go` (background jobs), `cmd/dictimport/` and `cmd/tatoebaimport/` (one-off
   dictionary and Tatoeba imports shipped in the worker image, ADR-019, ADR-028),
   `internal/httpapi/` (routes, auth, middleware, groups, lessons, invites, rooms, users, guests
-  and `/join`, media and material URLs, transcripts, word clicks, user terms, practice texts,
+  and `/join`, media and material URLs, transcripts, word clicks, user terms,
+  lesson dictionary (candidates, picker, assignment, ADR-033/034), practice texts,
   review queue and reviews,
   whiteboard, Google Calendar, LiveKit and AssemblyAI webhooks), `internal/store/` (Postgres via pgx),
   `internal/jobs/` (Postgres queue: enqueue in the caller's transaction, `SKIP LOCKED` claim,
@@ -25,6 +26,7 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   `internal/harvester/` (subtitles, ADR-022), `internal/dumpfile/` (dump download and
   decompression shared by the imports), `internal/tatoeba/` (ADR-028), `internal/llm/` (LLM
   providers, ADR-029), `internal/textgen/` (prompt and coverage validator, ADR-030),
+  `internal/lessonterms/` (lesson dictionary candidates from whiteboard text, ADR-033),
   `internal/srs/` (FSRS scheduling over go-fsrs, ADR-036),
   `internal/testdb/` (the shared DB test harness),
   `migrations/` (golang-migrate `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a

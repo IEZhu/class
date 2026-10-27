@@ -91,7 +91,8 @@ export interface Material {
 export interface LessonDetail extends Lesson {
   teacher_name: string;
   materials: Material[];
-  participants: { user_id: number; email: string; name: string; role: string }[];
+  // archived — учётка в архиве (ADR-024): в снапшоте урока остаётся
+  participants: { user_id: number; email: string; name: string; role: string; archived: boolean }[];
   // Только организатору события: выпущена ли гостевая ссылка (сама она
   // не восстанавливается — в БД лишь хэш). Остальным поле не приходит.
   has_guest_link?: boolean;
@@ -247,6 +248,50 @@ export interface ReviewResult {
   duplicate: boolean;
   status: TermStatus;
   card: SrsCard;
+}
+
+// Кандидат словаря урока (S3-7, ADR-033): click — клики участников,
+// whiteboard — вхождения на доске при последнем разборе, manual — ввод
+// преподавателя. Один термин может прийти из нескольких источников.
+export type CandidateSource = "click" | "whiteboard" | "manual";
+
+export interface TermCandidate {
+  term_id: number;
+  lemma: string;
+  // форма, в которой слово встретилось первым
+  surface: string;
+  translation: string | null;
+  source: CandidateSource;
+  count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  // термин уже в словаре урока
+  confirmed: boolean;
+}
+
+// Ответ POST /lessons/{id}/term-candidates: rejected — не одно слово
+// (not_a_word) или слово, которого api не знает (unknown).
+export interface ManualCandidatesResult {
+  added: { term_id: number; lemma: string; surface: string }[];
+  rejected: { word: string; reason: "not_a_word" | "unknown" }[];
+}
+
+// Слово подтверждённого словаря урока (S3-8, ADR-034).
+export interface LessonTerm {
+  term_id: number;
+  lemma: string;
+  surface: string;
+  translation: string | null;
+  confirmed_at: string;
+}
+
+// Итог назначения словаря урока: added — слов легло в словари впервые,
+// kept — у студента уже было, статус не тронут.
+export interface AssignResult {
+  students: number;
+  terms: number;
+  added: number;
+  kept: number;
 }
 
 const API_TIMEOUT_MS = 5000;
