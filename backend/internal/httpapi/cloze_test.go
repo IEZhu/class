@@ -1091,7 +1091,16 @@ func TestClozeLLMSetWithoutCacheNotServed(t *testing.T) {
 		t.Fatalf("после удаления кэша: %+v", it)
 	}
 	postDistractors(t, f.h, f.alice, http.StatusNotFound, runItem.ID)
+	// Соседний пункт без набора и без кэша пошёл бы в LLM: 404 — до вызова,
+	// лимит не тратится, пункт не закрепляется
+	if _, err := f.conn.Exec(ctx, `UPDATE cloze_items SET option_source = NULL WHERE id = $1`, it.ID); err != nil {
+		t.Fatal(err)
+	}
 	postDistractors(t, f.h, f.alice, http.StatusNotFound, it.ID, swimItem.ID)
+	var src *string
+	if err := f.conn.QueryRow(ctx, `SELECT option_source FROM cloze_items WHERE id = $1`, it.ID).Scan(&src); err != nil || src != nil {
+		t.Fatalf("соседний пункт после 404: %v, %v", src, err)
+	}
 	f.attempt(t, f.alice, swimItem.ID, attemptBody(2, "swam", "typing", 1000), http.StatusNotFound)
 	if n := len(fake.Requests()); n != 0 {
 		t.Fatalf("запросов к LLM: %d", n)

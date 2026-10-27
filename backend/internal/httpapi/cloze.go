@@ -597,7 +597,9 @@ func (a *API) handleClozeDistractors(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "cloze items", err)
 		return
 	}
-	if len(items) != len(req.ItemIDs) {
+	// Пункт без набора (закреплён за LLM, запись кэша удалили) — 404 до
+	// вызова LLM: иначе запрос с ним тратил бы лимит на соседние пункты
+	if len(items) != len(req.ItemIDs) || slices.ContainsFunc(items, noClozeOptions) {
 		writeError(w, http.StatusNotFound, "not_found", "пункт не найден")
 		return
 	}
@@ -645,8 +647,8 @@ func (a *API) handleClozeDistractors(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "cloze options", err)
 		return
 	}
-	// Проверка — после закрепления и перечитывания: так и запись кэша,
-	// удалённая между ними, не даст набора из одного ответа
+	// Проверка ещё раз — после закрепления и перечитывания: так и запись
+	// кэша, удалённая между ними, не даст набора из одного ответа
 	if slices.ContainsFunc(items, noClozeOptions) {
 		writeError(w, http.StatusNotFound, "not_found", "пункт не найден")
 		return
