@@ -5,6 +5,7 @@ import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { TermClick, TermExample } from "../lib/api";
+import { isTextSelection } from "../lib/selection";
 import type { TermStatus } from "../lib/term-status";
 import { sentenceAround, tokenize, uniqueKeys } from "../lib/tokenize";
 import { requestJson } from "./forms";
@@ -101,10 +102,14 @@ export default function ClickableText({
   function handleClick(e: MouseEvent<HTMLSpanElement>) {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
     // Клик из попапа всплывает и сюда по дереву React: попап в портале,
+    // Выделение текста мышью — не клик: ни попапа, ни перемотки реплики
+    // вокруг текста
+    if (isTextSelection(window.getSelection())) {
+      e.stopPropagation();
+      return;
+    }
     // его слова — не наши
     if (!el || !e.currentTarget.contains(el)) return;
-    // Выделение текста мышью — не клик по слову
-    if (window.getSelection()?.toString()) return;
     const t = tokens[Number(el.dataset.i)];
     if (!t?.key) return;
     // Клик по слову — этого текста: строка вокруг (перемотка реплики
