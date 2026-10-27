@@ -204,7 +204,9 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   пока их нет — «Подбираем варианты…» и ввод слова; время ответа такого
   пункта после ожидания в режиме вариантов — от появления кнопок или от
   перехода к вводу слова (`restartClock`; связка в `cloze-session.tsx`
-  проверяется только шагом «Проверка по задачам» в `deploy/README.md`).
+  для прихода кнопок проверяется только шагом «Проверка по задачам»
+  в `deploy/README.md`, для перехода к вводу — только тестом
+  `restartClock`, на странице не проверена).
   `web/lib/cloze-session.ts` (`distractorRequestIds`, `itemOptions`,
   `restartClock`, `clozeCredit`, `llmErrorNote` и др.) с тестами
   `npm test`; типы

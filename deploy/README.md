@@ -537,7 +537,7 @@ FSRS словам словаря без карточки (бэкфилл, ADR-03
 
 ```bash
 # 1. клон стенда — на коммите выпуска, вместе с 0022 (запущенный стек — на прежних образах до шага 4)
-sudo deploy/backup-pg.sh      # 2. копия базы до миграций (раздел «Бэкапы Postgres»: нужны zstd и S3_* или BACKUP_S3_*)
+sudo deploy/backup-pg.sh      # 2. копия базы до миграций (раздел «Бэкапы Postgres»: нужны zstd и свой бакет BACKUP_S3_*)
 make build                    # 3. образы; старый стек работает на старой схеме
 make migrate && make up       # 4. схема и новые api/worker/web подряд, слои — из кэша шага 3
 docker compose -f deploy/docker-compose.yml restart worker   # 5. второй бэкфилл
@@ -547,8 +547,10 @@ make logs
 Сначала коммит выпуска, потом копия: у стенда до S1-7 (на схеме 5)
 `deploy/backup-pg.sh` ещё нет — он появляется шагом 1, а запущенные
 контейнеры работают на своих образах до шага 4.
-Скрипту нужны `zstd` на хосте и хранилище (`S3_*` или `BACKUP_S3_*`,
-раздел «Бэкапы Postgres»). Без них шаг 2 заменяет локальная копия:
+Скрипту нужны `zstd` на хосте и свой бакет `BACKUP_S3_*` (раздел
+«Бэкапы Postgres»); с пустыми `BACKUP_S3_*` он пишет дамп в бакет записей
+под токеном `S3_*`, который получает LiveKit (долг D-8). Без своего
+бакета или без `zstd` шаг 2 заменяет локальная копия:
 
 ```bash
 install -d -m 0700 ~/lingua-backups
@@ -564,6 +566,27 @@ docker compose -f deploy/docker-compose.yml exec -T postgres \
 ошибки и `pg_restore --list` прочитал оглавление дампа. Само оглавление
 обрыв в данных не выдаёт (файл, обрезанный посередине, `--list`
 принимает) — его ловит код выхода pg_dump; без `dump OK` копии нет.
+
+**Откат** (миграция упала или новый код не встал): база возвращается
+к копии шага 2 начисто, а не `--clean` поверх — таблиц 0006–0024 в копии
+нет, и `--clean` их не удаляет (раздел «Восстановление»).
+
+```bash
+docker compose -f deploy/docker-compose.yml stop caddy web api worker
+docker compose -f deploy/docker-compose.yml exec -T postgres \
+    sh -c 'dropdb -U "$POSTGRES_USER" --force "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+# локальная копия; копия из бакета — sudo deploy/restore-pg.sh --db <POSTGRES_DB> --date <дата шага 2, UTC>
+docker compose -f deploy/docker-compose.yml cp ~/lingua-backups/pre-cd.dump postgres:/tmp/pre-cd.dump
+docker compose -f deploy/docker-compose.yml exec -T postgres \
+    sh -c 'pg_restore -1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" /tmp/pre-cd.dump && rm /tmp/pre-cd.dump'
+docker compose -f deploy/docker-compose.yml rm -sf worker   # на прежнем коммите worker'а может не быть
+git checkout <прежний коммит> && make up
+```
+
+pg_restore берёт файл внутри контейнера, а не поток: дамп снят в канал,
+без смещений блоков, и по файлу pg_restore их найдёт, а по каналу — не
+всегда. Восстановление идёт одной транзакцией (`-1`): при ошибке база
+остаётся пустой, копия — на месте.
 
 Шаг 5 нужен потому, что `make up` пересоздаёт api и worker параллельно
 (оба ждут только postgres): новый worker уже сделал бэкфилл, а старый api
