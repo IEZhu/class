@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/IEZhu/class/backend/internal/srs"
 )
 
 // Статусы слова в личном словаре (S3-5): 1 — новое, 5 — знаю.
@@ -60,22 +62,38 @@ type UserTermFilter struct {
 // Источник — первый урок, с которого слово пришло: у слова, добавленного
 // вне урока, его заполнит следующий запрос с уроком, но не перепишет.
 // created — строка вставлена, а не обновлена.
+//
+// Это единственный путь, которым слово попадает в user_terms, — и «в мой
+// словарь» из попапа, и назначение слов после урока (S3-8): новое слово
+// получает карточку FSRS в той же транзакции (S4-1, ADR-036), поэтому
+// слова без карточки не бывает даже на миг.
 func (s *Store) SaveUserTerm(ctx context.Context, userID, termID int64, status *int, sourceLessonID *int64) (created bool, err error) {
-	// xmax = 0 только у версии строки, которую создал этот же INSERT:
-	// так один запрос отличает добавление от смены статуса
-	err = s.pool.QueryRow(ctx,
-		`INSERT INTO user_terms (user_id, term_id, status, source_lesson_id)
-		 VALUES ($1, $2, coalesce($3::smallint, 1), $4)
-		 ON CONFLICT (user_id, term_id) DO UPDATE SET
-		     status = coalesce($3::smallint, user_terms.status),
-		     source_lesson_id = coalesce(user_terms.source_lesson_id, EXCLUDED.source_lesson_id),
-		     updated_at = CASE WHEN user_terms.status = coalesce($3::smallint, user_terms.status)
-		                       THEN user_terms.updated_at ELSE now() END
-		 RETURNING xmax = 0`, userID, termID, status, sourceLessonID).Scan(&created)
-	return created, err
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// xmax = 0 только у версии строки, которую создал этот же INSERT:
+		// так один запрос отличает добавление от смены статуса
+		var addedAt time.Time
+		err := tx.QueryRow(ctx,
+			`INSERT INTO user_terms (user_id, term_id, status, source_lesson_id)
+			 VALUES ($1, $2, coalesce($3::smallint, 1), $4)
+			 ON CONFLICT (user_id, term_id) DO UPDATE SET
+			     status = coalesce($3::smallint, user_terms.status),
+			     source_lesson_id = coalesce(user_terms.source_lesson_id, EXCLUDED.source_lesson_id),
+			     updated_at = CASE WHEN user_terms.status = coalesce($3::smallint, user_terms.status)
+			                       THEN user_terms.updated_at ELSE now() END
+			 RETURNING xmax = 0, added_at`, userID, termID, status, sourceLessonID).Scan(&created, &addedAt)
+		if err != nil || !created {
+			return err
+		}
+		return insertSRSCard(ctx, tx, userID, termID, srs.NewCard(addedAt))
+	})
+	if err != nil {
+		return false, err
+	}
+	return created, nil
 }
 
-// DeleteUserTerm убирает слово из словаря пользователя; ErrNotFound —
+// DeleteUserTerm убирает слово из словаря пользователя вместе с его
+// карточкой FSRS и журналом оценок (каскад, ADR-036); ErrNotFound —
 // его там не было.
 func (s *Store) DeleteUserTerm(ctx context.Context, userID, termID int64) error {
 	tag, err := s.pool.Exec(ctx,
