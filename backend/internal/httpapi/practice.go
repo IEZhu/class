@@ -3,12 +3,17 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/IEZhu/class/backend/internal/lemma"
 	"github.com/IEZhu/class/backend/internal/llm"
 	"github.com/IEZhu/class/backend/internal/store"
+	"github.com/IEZhu/class/backend/internal/tatoeba"
 	"github.com/IEZhu/class/backend/internal/textgen"
 )
 
@@ -161,7 +166,7 @@ func (a *API) handleGenerateText(w http.ResponseWriter, r *http.Request) {
 
 	t := store.GeneratedText{
 		UserID: u.ID, Level: params.Level, Genre: params.Genre, MaxWords: params.MaxWords,
-		TargetLemmas: params.Lemmas(), Body: res.Text, WordCount: res.Report.Words,
+		TargetLemmas: params.Lemmas(), Lemmas: tatoeba.Lemmas(res.Text), Body: res.Text, WordCount: res.Report.Words,
 		Coverage: res.Report.Coverage, Occurrences: res.Report.Occurrences,
 		UnknownShare: res.Report.UnknownShare, Attempts: res.Attempts, Provider: res.Provider, Model: res.Model,
 	}
@@ -174,8 +179,8 @@ func (a *API) handleGenerateText(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListGeneratedTexts — GET /practice/texts: свои тексты, новые
-// первыми. Поиск по словам среди всех текстов и Tatoeba (?words=) —
-// S5-7.
+// первыми. Поиск по словам среди своих текстов и Tatoeba —
+// GET /practice/texts/search (S5-7).
 func (a *API) handleListGeneratedTexts(w http.ResponseWriter, r *http.Request) {
 	texts, err := a.store.GeneratedTextsByUser(r.Context(), userFrom(r.Context()).ID, maxTextHistory)
 	if err != nil {
@@ -187,4 +192,176 @@ func (a *API) handleListGeneratedTexts(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toGeneratedTextResponse(t))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+const (
+	// maxSearchWords — слов, по которым ищет тексто-практика (ADR-035):
+	// самые нужные из личного словаря — новые и «забытые», как цели
+	// генерации (store.PracticeLemmas), — или из ?words=
+	maxSearchWords = 50
+	// Страница поиска: по умолчанию и потолок
+	defaultSearchLimit = 20
+	maxSearchLimit     = 50
+)
+
+// noSearchWordsHint — подсказка пустой выдачи, когда искать не по чему.
+const noSearchWordsHint = "в личном словаре нет невыученных слов: добавьте слова кликом по тексту " +
+	"или укажите их в words"
+
+type practiceTextResponse struct {
+	// Source — generated (свой текст LLM) или tatoeba
+	Source string `json:"source"`
+	ID     int64  `json:"id"`
+	Text   string `json:"text"`
+	// Matched — слова поиска (леммы), которые есть в тексте; их число —
+	// ключ ранжирования
+	Matched []string `json:"matched"`
+	// Только у generated
+	Level     string     `json:"level,omitempty"`
+	Genre     string     `json:"genre,omitempty"`
+	WordCount int        `json:"word_count,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	// Только у tatoeba: русский перевод и подпись CC BY 2.0 FR (ADR-028)
+	Translation string              `json:"translation,omitempty"`
+	Attribution *exampleAttribution `json:"attribution,omitempty"`
+}
+
+type practiceTextsPage struct {
+	// Words — леммы, по которым шёл поиск, по приоритету
+	Words []string               `json:"words"`
+	Items []practiceTextResponse `json:"items"`
+	// NextCursor — для ?cursor= следующей страницы; null — страница последняя
+	NextCursor *string `json:"next_cursor"`
+	// Hint — почему выдача пуста, если искать было не по чему; иначе null
+	Hint *string `json:"hint"`
+}
+
+func toPracticeTextResponse(t store.PracticeText) practiceTextResponse {
+	resp := practiceTextResponse{Source: t.Source, ID: t.ID, Text: t.Text, Matched: t.Matched}
+	if t.Source == store.PracticeSourceGenerated {
+		resp.Level, resp.Genre, resp.WordCount, resp.CreatedAt = t.Level, t.Genre, t.WordCount, t.CreatedAt
+		return resp
+	}
+	resp.Translation = t.Translation
+	resp.Attribution = &exampleAttribution{
+		Author: t.Author, URL: tatoeba.SentenceURL(t.ID),
+		TranslationAuthor: t.TranslationAuthor, TranslationURL: tatoeba.SentenceURL(t.TranslationID),
+		License: tatoeba.License, LicenseURL: tatoeba.LicenseURL,
+	}
+	return resp
+}
+
+// searchWordsParam — леммы из ?words= (через запятую или пробел, можно
+// повторять параметр) без повторов, в порядке запроса. Пустой параметр —
+// nil: слова берутся из словаря. Слово проверяется как в генерации
+// (lemma.IsWord); ошибка — текст для 400.
+func searchWordsParam(values []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, v := range values {
+		for _, w := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
+			if !lemma.IsWord(w) {
+				return nil, fmt.Errorf("слово %q: одно слово из букв (апостроф и дефис внутри), до %d байт",
+					w, lemma.MaxWordBytes)
+			}
+			l := lemma.Lemma(w)
+			if seen[l] {
+				continue
+			}
+			seen[l] = true
+			out = append(out, l)
+		}
+	}
+	if len(out) > maxSearchWords {
+		return nil, fmt.Errorf("words — не больше %d слов", maxSearchWords)
+	}
+	return out, nil
+}
+
+// handleSearchPracticeTexts — GET /practice/texts/search?words=&cursor=&limit=
+// (S5-7, ADR-035): материал для практики своих слов — свои
+// сгенерированные тексты и предложения Tatoeba с переводом, где они есть,
+// по числу слов списка в тексте. Без words — невыученные слова личного
+// словаря вызывающего; нет и их — пустая выдача с подсказкой.
+func (a *API) handleSearchPracticeTexts(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := defaultSearchLimit
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxSearchLimit {
+			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("limit — от 1 до %d", maxSearchLimit))
+			return
+		}
+		limit = n
+	}
+	var after *store.PracticeTextCursor
+	if v := q.Get("cursor"); v != "" {
+		c, ok := parsePracticeTextCursor(v)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "bad_request", "некорректный cursor")
+			return
+		}
+		after = &c
+	}
+	words, err := searchWordsParam(q["words"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	u := userFrom(r.Context())
+	if words == nil {
+		if words, err = a.store.PracticeLemmas(r.Context(), u.ID, termLang, maxSearchWords); err != nil {
+			internalError(w, "practice search words", err)
+			return
+		}
+	}
+	page := practiceTextsPage{Words: words, Items: []practiceTextResponse{}}
+	if len(words) == 0 {
+		page.Words = []string{}
+		hint := noSearchWordsHint
+		page.Hint = &hint
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
+	// Строка сверх страницы — признак, что следующая страница есть
+	found, err := a.store.SearchPracticeTexts(r.Context(), u.ID, words, after, limit+1)
+	if err != nil {
+		internalError(w, "search practice texts", err)
+		return
+	}
+	if len(found) > limit {
+		found = found[:limit]
+		next := formatPracticeTextCursor(found[limit-1].Cursor)
+		page.NextCursor = &next
+	}
+	for _, t := range found {
+		page.Items = append(page.Items, toPracticeTextResponse(t))
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// Курсор — «покрытие_источник_порядок_id»; порядок у своего текста
+// отрицательный (−id).
+func formatPracticeTextCursor(c store.PracticeTextCursor) string {
+	return fmt.Sprintf("%d_%d_%d_%d", c.Covered, c.Source, c.Order, c.ID)
+}
+
+func parsePracticeTextCursor(s string) (store.PracticeTextCursor, bool) {
+	parts := strings.Split(s, "_")
+	if len(parts) != 4 {
+		return store.PracticeTextCursor{}, false
+	}
+	var n [4]int64
+	for i, p := range parts {
+		v, err := strconv.ParseInt(p, 10, 64)
+		if err != nil {
+			return store.PracticeTextCursor{}, false
+		}
+		n[i] = v
+	}
+	c := store.PracticeTextCursor{Covered: int(n[0]), Source: int(n[1]), Order: n[2], ID: n[3]}
+	if c.Covered < 1 || c.Covered > maxSearchWords || (c.Source != 0 && c.Source != 1) || c.ID <= 0 {
+		return store.PracticeTextCursor{}, false
+	}
+	return c, true
 }

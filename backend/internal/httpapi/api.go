@@ -243,6 +243,10 @@ func (a *API) Router() http.Handler {
 	}
 	mux.Handle("POST /practice/generate-text", learner(a.handleGenerateText))
 	mux.Handle("GET /practice/texts", learner(a.handleListGeneratedTexts))
+
+	// S5-7: тексто-практика — свои сгенерированные тексты и предложения
+	// Tatoeba по словам личного словаря или ?words= (ADR-035)
+	mux.Handle("GET /practice/texts/search", learner(a.handleSearchPracticeTexts))
 	return mux
 }
 
