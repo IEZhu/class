@@ -15,6 +15,7 @@ import (
 
 	"github.com/IEZhu/class/backend/internal/dictionary"
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/lessonterms"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/testdb"
 	"github.com/IEZhu/class/backend/internal/worker"
@@ -95,7 +96,6 @@ func (f *pickerFixture) clickOnLesson(t *testing.T, cookie *http.Cookie, surface
 // участники (PUT /lessons/{id}/whiteboard/scene).
 func (f *pickerFixture) openBoard(t *testing.T, lessonID int64) {
 	t.Helper()
-	ctx := context.Background()
 	raw, err := os.ReadFile(sceneFixture)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +104,13 @@ func (f *pickerFixture) openBoard(t *testing.T, lessonID int64) {
 	if err := json.Unmarshal(raw, &elements); err != nil {
 		t.Fatal(err)
 	}
+	f.openBoardWith(t, lessonID, elements)
+}
+
+// openBoardWith — доска урока со сценой elements.
+func (f *pickerFixture) openBoardWith(t *testing.T, lessonID int64, elements []json.RawMessage) {
+	t.Helper()
+	ctx := context.Background()
 	room, err := newWhiteboardRoom()
 	if err != nil {
 		t.Fatal(err)
@@ -379,6 +386,45 @@ func TestWhiteboardCandidatesFromScene(t *testing.T) {
 	}
 }
 
+// Потолок доски (ADR-033): статья, вставленная на доску, даёт не больше
+// MaxWhiteboardTerms кандидатов — самые частые слова, при равенстве —
+// первые по лемме. Знакомые слова здесь — статьи датасета, которых нет
+// в OEWN: столько слов в словарной фикстуре нет.
+func TestWhiteboardCandidatesCapped(t *testing.T) {
+	f := newPickerFixture(t)
+	ctx := context.Background()
+	words := make([]string, lessonterms.MaxWhiteboardTerms+2)
+	for i := range words {
+		words[i] = "zq" + string([]byte{byte('a' + i/676), byte('a' + i/26%26), byte('a' + i%26)})
+	}
+	if _, err := f.conn.Exec(ctx,
+		`WITH imp AS (INSERT INTO definition_imports (source) VALUES ('cap-test') RETURNING id)
+		 INSERT INTO definitions (word, lemma, pos, glosses, source_line, import_id)
+		 SELECT w, w, 'noun', ARRAY['test word'], n, imp.id FROM imp, unnest($1::text[]) WITH ORDINALITY AS u(w, n)`,
+		words); err != nil {
+		t.Fatal(err)
+	}
+	// Последнее по алфавиту слово — дважды: оно самое частое и остаётся
+	frequent := words[len(words)-1]
+	text := strings.Join(append(words, frequent), " ")
+	f.openBoardWith(t, f.lessonID, []json.RawMessage{json.RawMessage(element("article", 1, text))})
+
+	w := securityRequest(f.h, "POST", f.path(f.lessonID, "/term-candidates/whiteboard"), "", f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var resp whiteboardCandidatesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Candidates != lessonterms.MaxWhiteboardTerms {
+		t.Fatalf("разбор доски: %s (%v), ждали %d", w.Body.String(), err, lessonterms.MaxWhiteboardTerms)
+	}
+	got := bySource(f.candidates(t, f.lessonID), store.CandidateWhiteboard)
+	kept, dropped := words[lessonterms.MaxWhiteboardTerms-2], words[lessonterms.MaxWhiteboardTerms-1]
+	if len(got) != lessonterms.MaxWhiteboardTerms || got[frequent].Count != 2 || got[kept].Count != 1 {
+		t.Fatalf("кандидатов доски %d; %s: %+v, %s: %+v", len(got), frequent, got[frequent], kept, got[kept])
+	}
+	if _, ok := got[dropped]; ok {
+		t.Fatalf("%s сверх потолка, а в кандидатах", dropped)
+	}
+}
+
 // DoD S3-7, ручной ввод: только преподаватель урока; не слово
 // и незнакомое возвращаются, формы одной леммы — один кандидат,
 // повтор ничего не меняет.
@@ -600,6 +646,41 @@ func TestPickerConfirmAndAssign(t *testing.T) {
 	}
 	if n := f.userTermCount(t, f.bobID); n != 2 {
 		t.Fatalf("словарь Боба после удаления урока: %d", n)
+	}
+}
+
+// Назначение обходит студентов, ушедших в архив после создания урока
+// (ADR-034): снапшот участников их помнит, но {"all":true} им ничего
+// не пишет, а явный student_ids с ними — 400 not_student.
+func TestAssignSkipsArchivedStudents(t *testing.T) {
+	f := newPickerFixture(t)
+	ctx := context.Background()
+	w := securityRequest(f.h, "POST", f.path(f.lessonID, "/term-candidates"), `{"words":["run"]}`, f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var manual manualCandidatesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &manual); err != nil || len(manual.Added) != 1 {
+		t.Fatalf("кандидаты: %s", w.Body.String())
+	}
+	expectStatus(t, securityRequest(f.h, "PUT", f.path(f.lessonID, "/terms"),
+		fmt.Sprintf(`{"term_ids":[%d]}`, manual.Added[0].TermID), f.teacher), http.StatusOK)
+	if _, err := f.conn.Exec(ctx, `UPDATE users SET deactivated_at = now() WHERE id = $1`, f.bobID); err != nil {
+		t.Fatal(err)
+	}
+
+	w = securityRequest(f.h, "POST", f.path(f.lessonID, "/terms/assignments"), `{"all":true}`, f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var resp assignLessonTermsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil ||
+		resp != (assignLessonTermsResponse{Students: 1, Terms: 1, Added: 1, Kept: 0}) {
+		t.Fatalf("назначение всем при Бобе в архиве: %s", w.Body.String())
+	}
+	if n := f.userTermCount(t, f.bobID); n != 0 {
+		t.Fatalf("Бобу в архиве назначено %d слов", n)
+	}
+	w = securityRequest(f.h, "POST", f.path(f.lessonID, "/terms/assignments"), fmt.Sprintf(`{"student_ids":[%d]}`, f.bobID), f.teacher)
+	expectStatus(t, w, http.StatusBadRequest)
+	if !jsonHasCode(t, w.Body.Bytes(), "not_student") {
+		t.Fatalf("Боб в архиве явно: %s", w.Body.String())
 	}
 }
 
