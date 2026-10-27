@@ -283,19 +283,28 @@ type fakeScenes struct {
 	objects map[string][]byte
 	puts    int
 	err     error
+	// afterPut, если задан, зовётся после записи объекта — до отметки
+	// снимка в БД
+	afterPut func()
 }
 
 func (f *fakeScenes) PutObject(_ context.Context, key, contentType string, body []byte) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.err != nil {
+		f.mu.Unlock()
 		return f.err
 	}
 	if contentType != "application/json" {
+		f.mu.Unlock()
 		return fmt.Errorf("content type %q", contentType)
 	}
 	f.puts++
 	f.objects[key] = append([]byte(nil), body...)
+	afterPut := f.afterPut
+	f.mu.Unlock()
+	if afterPut != nil {
+		afterPut()
+	}
 	return nil
 }
 
@@ -710,6 +719,62 @@ func TestCancelLessonDeletesWhiteboardSnapshot(t *testing.T) {
 	var queued int
 	if err := f.conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1`, store.JobMaterialFilesDelete).Scan(&queued); err != nil || queued != 0 {
 		t.Fatalf("джоб удаления для доски без снимка: %d (%v)", queued, err)
+	}
+}
+
+// Урок отменили, пока джоба снимка выгружала первый объект доски (ревью
+// волны C): отмена ключа ещё не знала, а к отметке строки доски уже нет.
+// Только что записанный объект уходит в material_files_delete той же
+// транзакцией, что пробует отметку, и worker его удаляет — в бакете
+// объект без строки не остаётся.
+func TestWhiteboardSnapshotRacingCancelDeletesObject(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	ctx := context.Background()
+	f.open(t, f.teacher)
+	expectStatus(t, securityRequest(f.h, "PUT", f.path("/scene"), sceneBody(element("a", 1, "apple")), f.teacher), http.StatusOK)
+	if _, err := f.conn.Exec(ctx, `DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.a.store.ScheduleWhiteboardSnapshot(ctx, f.lessonID); err != nil {
+		t.Fatal(err)
+	}
+	key := storage.WhiteboardKey(f.lessonID)
+	scenes := &fakeScenes{objects: map[string][]byte{}}
+	scenes.afterPut = func() {
+		// Отмена — между записью объекта и отметкой снимка
+		if w := securityRequest(f.h, "DELETE", fmt.Sprintf("/lessons/%d", f.lessonID), "", f.teacher); w.Code != http.StatusNoContent {
+			t.Errorf("отмена урока посреди снимка: %d %s", w.Code, w.Body.String())
+		}
+	}
+	deleted := &deletedKeys{}
+	runner := jobs.NewRunner(f.a.store.Pool(), jobs.Config{WorkerID: "test-worker"})
+	worker.RegisterWhiteboard(runner, f.a.store, scenes)
+	worker.RegisterMaterialFiles(runner, deleted)
+
+	if worked, err := runner.RunOnce(ctx); err != nil || !worked {
+		t.Fatalf("снимок: RunOnce = %v, %v", worked, err)
+	}
+	if scenes.puts != 1 {
+		t.Fatalf("снимок записан %d раз, хотели 1", scenes.puts)
+	}
+	var kinds string
+	var payload store.MaterialFilesDelete
+	if err := f.conn.QueryRow(ctx, `SELECT string_agg(kind, ',' ORDER BY id), (array_agg(payload ORDER BY id))[1]
+		FROM jobs`).Scan(&kinds, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if kinds != store.JobMaterialFilesDelete || len(payload.Keys) != 0 || len(payload.Objects) != 1 || payload.Objects[0] != key {
+		t.Fatalf("джобы после снимка: %s %+v, хотели одно удаление %s", kinds, payload, key)
+	}
+	if worked, err := runner.RunOnce(ctx); err != nil || !worked {
+		t.Fatalf("удаление: RunOnce = %v, %v", worked, err)
+	}
+	if len(deleted.keys) != 1 || deleted.keys[0] != key {
+		t.Fatalf("worker удалил %v, хотели %s", deleted.keys, key)
+	}
+	var left int
+	if err := f.conn.QueryRow(ctx, `SELECT count(*) FROM jobs`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("джоб осталось %d (%v)", left, err)
 	}
 }
 
