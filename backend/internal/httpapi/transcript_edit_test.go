@@ -245,6 +245,67 @@ func TestSpeakerMapping(t *testing.T) {
 	s.expectQueue(t)
 }
 
+// Правка реплики и маппинг спикера пишут только в транскрипт урока из
+// пути: у второго урока (другой teacher) те же idx и метки, и его
+// реплики не меняются — ни текст, ни отметка правки, ни user_id, — а VTT
+// его транскрипта не перерендеривается. idx и метка, которые есть только
+// у второго урока, — 404.
+func TestTranscriptWritesStayInLesson(t *testing.T) {
+	s := newASRStand(t, 0)
+	ctx := context.Background()
+	s.rendered(t)
+	var otherLesson, otherTranscript int64
+	if err := s.conn.QueryRow(ctx, `INSERT INTO lessons (group_id, title, teacher_id, starts_at, ends_at)
+		VALUES (NULL, 'Другой урок', $1, now(), now() + interval '1 hour') RETURNING id`, s.otherTeacherID).Scan(&otherLesson); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.conn.QueryRow(ctx, `INSERT INTO transcripts (lesson_id, provider, status, external_id)
+		VALUES ($1, 'assemblyai', 'completed', 'tr_other') RETURNING id`, otherLesson).Scan(&otherTranscript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.conn.Exec(ctx, `INSERT INTO utterances (transcript_id, idx, speaker_label, start_ms, end_ms, text)
+		VALUES ($1, 0, 'A', 0, 10, 'other zero'), ($1, 1, 'A', 10, 20, 'other one'), ($1, 5, 'C', 20, 30, 'other five')`,
+		otherTranscript); err != nil {
+		t.Fatal(err)
+	}
+	other := func() string {
+		t.Helper()
+		var state string
+		if err := s.conn.QueryRow(ctx, `SELECT string_agg(format('%s:%s:%s:%s', idx, text, user_id, edited_at), '|' ORDER BY idx)
+			FROM utterances WHERE transcript_id = $1`, otherTranscript).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	before := other()
+
+	for _, c := range []struct {
+		name, method, path, body string
+		want                     int
+	}{
+		{"правка idx, который есть у обоих", "PATCH", "/transcript/utterances/1", `{"text":"Edited here only"}`, http.StatusOK},
+		{"правка idx только второго урока", "PATCH", "/transcript/utterances/5", `{"text":"Not mine"}`, http.StatusNotFound},
+		{"маппинг метки, которая есть у обоих", "PUT", "/transcript/speakers/A", fmt.Sprintf(`{"user_id":%d}`, s.teacherID), http.StatusOK},
+		{"маппинг метки только второго урока", "PUT", "/transcript/speakers/C", fmt.Sprintf(`{"user_id":%d}`, s.teacherID), http.StatusNotFound},
+	} {
+		w := securityRequest(s.h, c.method, fmt.Sprintf("/lessons/%d%s", s.lessonID, c.path), c.body, s.teacher)
+		if w.Code != c.want {
+			t.Errorf("%s: %d, хотели %d (%s)", c.name, w.Code, c.want, w.Body.String())
+		}
+		if got := other(); got != before {
+			t.Fatalf("%s: второй урок изменился: %s, было %s", c.name, got, before)
+		}
+	}
+	if u := s.viewer(t, s.teacher).Utterances[1]; u.Text != "Edited here only" {
+		t.Errorf("своя правка не сохранилась: %+v", u)
+	}
+	var otherRenders int
+	if err := s.conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1 AND payload = $2`,
+		store.JobVTTRender, store.TranscriptJob{TranscriptID: otherTranscript}).Scan(&otherRenders); err != nil || otherRenders != 0 {
+		t.Fatalf("перерендеров VTT второго урока: %d (%v)", otherRenders, err)
+	}
+}
+
 // 0014 добавляет к utterances отметки правки; откат их убирает, текст
 // правки остаётся, повторный накат возвращает колонки.
 func TestUtteranceEditsMigrationReverts(t *testing.T) {
