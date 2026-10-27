@@ -81,6 +81,8 @@ type API struct {
 	// llm — nil, если ключ LLM не задан (S5-6)
 	llm           llm.Provider
 	llmDailyLimit int
+	// learningWords — слова и веса видео-практики (S5-5, ADR-038)
+	learningWords learningWordSource
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -107,6 +109,7 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		google:     google,
 		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
 	}
+	a.learningWords = s
 	a.llm, a.llmDailyLimit = cfg.LLM, cfg.LLMDailyLimit
 	if a.llmDailyLimit <= 0 {
 		a.llmDailyLimit = DefaultLLMDailyLimit
@@ -243,6 +246,11 @@ func (a *API) Router() http.Handler {
 	}
 	mux.Handle("POST /practice/generate-text", learner(a.handleGenerateText))
 	mux.Handle("GET /practice/texts", learner(a.handleListGeneratedTexts))
+
+	// S5-5: видео-практика (ADR-038) — подбор видео корпуса субтитров
+	// под слова вызывающего и субтитры одного видео для плеера
+	mux.Handle("GET /practice/videos", learner(a.handlePracticeVideos))
+	mux.Handle("GET /practice/videos/{id}", learner(a.handlePracticeVideo))
 	return mux
 }
 

@@ -80,6 +80,35 @@ func TestLemmaOutsideWordNet(t *testing.T) {
 	}
 }
 
+// Неправильные формы — обратный ход Lemma: каждая сводится к своей
+// лемме, better — к good (у него больше синсетов), а не к well.
+func TestForms(t *testing.T) {
+	for word, want := range map[string]string{
+		"run":   "ran running",
+		"go":    "goes gone went",
+		"child": "children",
+		"good":  "best better",
+		"well":  "",
+		"news":  "",
+		"":      "",
+	} {
+		got := strings.Join(Forms(word), " ")
+		if got != want {
+			t.Errorf("Forms(%q) = %q, хотели %q", word, got, want)
+		}
+	}
+	for _, form := range Forms("see") {
+		if Lemma(form) != "see" {
+			t.Errorf("форма %q сводится к %q, а не к see", form, Lemma(form))
+		}
+	}
+	// Результат — копия: правка вызывающего не портит общий индекс
+	Forms("run")[0] = "x"
+	if Forms("run")[0] != "ran" {
+		t.Fatal("Forms отдаёт общий срез")
+	}
+}
+
 // Замер точности на выборке словоформ (ADR-017): общий порог и полный
 // список промахов в выводе теста. Неоднозначные формы (building, tired)
 // входят в выборку честно — без части речи их не развести.
