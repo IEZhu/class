@@ -19,7 +19,8 @@ var (
 	// ErrBlocked — YouTube ограничил этот IP: 429, «подтвердите, что вы не
 	// бот», rate limit сессии. Сборщик уходит в паузу (Pace.Block).
 	ErrBlocked = errors.New("youtube ограничил доступ")
-	// ErrNoRunner — yt-dlp не запускается: беда окружения, а не видео.
+	// ErrNoRunner — yt-dlp не запускается: беда окружения (нет бинаря,
+	// не читается файл cookies), а не видео.
 	ErrNoRunner = errors.New("yt-dlp не запускается")
 )
 
@@ -74,7 +75,9 @@ func (y YTDLP) Fetch(ctx context.Context, id string) (Subtitles, error) {
 	if y.Cookies != "" {
 		jar, err := copyCookies(y.Cookies, dir)
 		if err != nil {
-			return Subtitles{}, err
+			// Файл не читается — одинаково для любого видео: попытки
+			// видео на это не тратятся (ADR-022)
+			return Subtitles{}, fmt.Errorf("%w: %v", ErrNoRunner, err)
 		}
 		if jar != "" {
 			args = append(args, "--cookies", jar)
@@ -94,7 +97,10 @@ func (y YTDLP) Fetch(ctx context.Context, id string) (Subtitles, error) {
 	}
 	cmd := exec.CommandContext(cctx, path, args...)
 	// yt-dlp и JS-движок исполняют код плеера YouTube: окружение worker'а
-	// (DATABASE_URL с паролем базы) им ни к чему
+	// (DATABASE_URL с паролем базы) им ни к чему. Это лишь слой защиты:
+	// процесс того же uid прочтёт окружение worker'а из /proc/1/environ.
+	// Настоящие барьеры — node --permission, закреплённое колесо yt-dlp
+	// и своя роль базы сборщика с доступом только к его таблицам (ADR-022)
 	cmd.Env = ytdlpEnv()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out

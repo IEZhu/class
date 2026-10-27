@@ -34,7 +34,9 @@ type Job struct {
 	Attempt int
 	// LastAttempt — попыток больше не будет: ошибка сделает джобу мёртвой.
 	// Хендлер, которому есть чем закончить и без успеха (транскрипт
-	// со статусом error, ADR-016), делает это здесь и возвращает nil.
+	// со статусом error, ADR-016), делает это здесь и возвращает nil —
+	// если попытку не прервала остановка worker'а (context.Cause(ctx) —
+	// ErrInterrupted): такая попытка не в счёт, джоба вернётся в очередь.
 	LastAttempt bool
 }
 
@@ -83,5 +85,20 @@ func EnqueueOnce(ctx context.Context, db DB, kind string, payload any, delay tim
 		 SELECT $1, $2::jsonb, now() + make_interval(secs => $3)
 		 WHERE NOT EXISTS (SELECT 1 FROM waiting)`,
 		kind, body, delay.Seconds())
+	return err
+}
+
+// Cancel снимает ждущую джобу kind с этим payload; взятую в работу
+// доводит её хендлер, мёртвая остаётся для разбора. Пара к EnqueueOnce:
+// отложенная сверка (asr_poll, ADR-016) не нужна, если итог пришёл раньше.
+func Cancel(ctx context.Context, db DB, kind string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("jobs: payload %s: %w", kind, err)
+	}
+	_, err = db.Exec(ctx,
+		`DELETE FROM jobs
+		 WHERE kind = $1 AND payload = $2::jsonb AND locked_at IS NULL AND failed_at IS NULL`,
+		kind, body)
 	return err
 }

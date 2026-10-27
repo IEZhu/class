@@ -110,6 +110,9 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   термина → `definitions` (по лемме и по самой форме) → LibreTranslate
   при кэш-миссе (переводится лемма, таймаут 3 с) → запись в кэш.
   Неудача перевода не кэшируется, ответ — 200 с `translation: null`.
+  Термин заводится и переводится только для знакомого слова (лемма
+  в OEWN или есть статьи датасета); незнакомое — 200 с `term_id: 0`,
+  без перевода и записи в `terms` (правка ревью волны A, ADR-017).
   400 — не одно слово / контекст длиннее 1000 символов / плохой
   lesson_id; 403/404 — чужой или несуществующий урок в `lesson_id`.
 - Точки расширения: `examples` всегда `[]` (долг D-1, S5-4), кнопки
@@ -119,7 +122,8 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - Тесты: `internal/httpapi/terms_test.go` (фейк LibreTranslate на
   httptest: первый клик — один вызов и запись кэша, повторы в любой
   форме — ноль вызовов; сервис лежит/недоступен/не настроен — 200 и
-  `translation: null`; 401/400/403/404), `internal/lemma/lemma_test.go`.
+  `translation: null`; незнакомое слово — ни строки в `terms`, ни вызова;
+  401/400/403/404), `internal/lemma/lemma_test.go`.
 
 ### S3-3 LibreTranslate в compose (◐)
 
@@ -147,7 +151,10 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   translations_ru[], source_line, import_id; уникальность
   `definitions_entry_key (word, pos, etymology)`, индекс
   `definitions_lemma_idx`) и `definition_imports` (source,
-  source_version, lines_done, entries, finished_at) — миграция 0009.
+  source_version, lines_done, entries, finished_at, abandoned_at) —
+  миграция 0009. `-restart` помечает незавершённый прогон брошенным
+  и начинает новый (правка ревью волны A: прежде он продолжал старый
+  прогон, и статьи старой версии источника переживали рестарт).
 - Импорт — пакет `backend/internal/dictionary` и команда
   `backend/cmd/dictimport` (в образе worker'а, `/usr/local/bin/dictimport`;
   make-цель `dict-import`). Источник — JSONL Wiktextract с kaikki.org
@@ -157,8 +164,8 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - Тесты на фикстуре `internal/dictionary/testdata/wiktextract-sample.jsonl`:
   `internal/dictionary/entry_test.go`, `internal/httpapi/dictionary_import_test.go`
   (повтор — тот же словарь, gzip, продолжение после обрыва, смена версии
-  источника, `-restart`, пустой и недокачанный источник, один импорт
-  за раз, миграция up/down/up).
+  источника, `-restart` с другим содержимым v2 = чистый импорт v2, пустой
+  и недокачанный источник, один импорт за раз, миграция up/down/up).
 - Ожидаемый объём — 80–150 тыс. статей, 60–120 MB в PG (оценка
   по выборке первых 20 000 строк дампа, ADR-019). **Осталось:** полный
   импорт на стенде (`make dict-import`), после него — проверка DoD
@@ -186,9 +193,10 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   `{"lesson_id"}`).
 - `backend/internal/jobs/jobs.go` — `EnqueueOnce`: одна ждущая джоба
   на kind+payload, срок только приближается, ретрай не подтягивается.
-- `backend/internal/storage/s3.go` — `PutObject` (обычный подписанный PUT,
-  без необязательной контрольной суммы), `WhiteboardKey` →
-  `whiteboards/{lesson_id}.json`.
+- `backend/internal/storage/s3.go` — `PutObject` (обычный подписанный PUT
+  с `ContentLength`, без необязательной контрольной суммы; после ревью
+  волны A — единственный хелпер записи объекта, им же пишется VTT S2-3),
+  `WhiteboardKey` → `whiteboards/{lesson_id}.json`.
 - `backend/internal/httpapi/whiteboard.go` — `GET /lessons/{id}/whiteboard`,
   `GET` и `PUT /lessons/{id}/whiteboard/scene` (предел 1 MiB),
   `GET /whiteboard/auth` для forward_auth; `webhooks.go` — `room_finished`

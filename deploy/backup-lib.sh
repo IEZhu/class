@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Общая часть deploy/backup-pg.sh и deploy/restore-pg.sh (S1-7, ADR-014):
-# окружение, aws cli, контейнер Postgres, временный каталог. Подключается
+# окружение, aws cli, контейнер Postgres, временный каталог. Окружение
+# и контейнер берёт и deploy/harvester-db-role.sh (ADR-022). Подключается
 # через source, отдельно не запускается.
 #
 # Переменные процесса (в deploy/.env их не пишут — это для эксплуатации

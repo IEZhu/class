@@ -10,8 +10,9 @@ CREATE TABLE transcripts (
     lesson_id   bigint      NOT NULL UNIQUE REFERENCES lessons (id) ON DELETE CASCADE,
     provider    text        NOT NULL CHECK (provider IN ('assemblyai')),
     -- queued — ждёт отправки (asr_submit); submitted — у провайдера, ждём
-    -- вебхук; fetching — вебхук пришёл, забираем результат (asr_result);
-    -- completed — utterances в базе; error — транскрипта не будет
+    -- вебхук или сверку (asr_poll); fetching — итог пришёл, забираем
+    -- результат (asr_result); completed — utterances в базе; error —
+    -- транскрипта не будет
     status      text        NOT NULL DEFAULT 'queued'
                 CHECK (status IN ('queued', 'submitted', 'fetching', 'completed', 'error')),
     -- id транскрипта у провайдера: по нему вебхук находит строку

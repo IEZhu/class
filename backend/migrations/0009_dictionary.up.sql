@@ -36,13 +36,17 @@ CREATE TABLE definition_imports (
     lines_done     bigint      NOT NULL DEFAULT 0,
     entries        bigint      NOT NULL DEFAULT 0,
     finished_at    timestamptz,
-    created_at     timestamptz NOT NULL DEFAULT now()
+    -- Брошен рестартом (-restart): вместо него идёт новый прогон, который
+    -- перезапишет или удалит статьи брошенного
+    abandoned_at   timestamptz,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT definition_imports_closed_once CHECK (finished_at IS NULL OR abandoned_at IS NULL)
 );
 
 -- Незавершённый прогон на источник — один: повторный запуск продолжает
 -- его, а не начинает второй
 CREATE UNIQUE INDEX definition_imports_running_key ON definition_imports (source)
-    WHERE finished_at IS NULL;
+    WHERE finished_at IS NULL AND abandoned_at IS NULL;
 
 CREATE TABLE definitions (
     id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

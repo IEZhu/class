@@ -147,12 +147,28 @@ services:
     restart: unless-stopped
     <<: *logging
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # HARVESTER_DATABASE_URL — своя роль сборщика только с его таблицами
+      # (deploy/harvester-db-role.sh): yt-dlp разбирает ответы YouTube,
+      # и владельца базы ему лучше не видеть. Пусто — DSN владельца, как раньше
+      DATABASE_URL: ${HARVESTER_DATABASE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable}
       HARVESTER_COOKIES: /run/secrets/youtube-cookies.txt
     volumes:
-      # Cookies YouTube по необходимости (файл Netscape на хосте); без
-      # HARVESTER_COOKIES_FILE монтируется пустой /dev/null — без cookies
+      # Cookies YouTube по необходимости (файл Netscape на хосте, читаемый
+      # uid 10001 контейнера); без HARVESTER_COOKIES_FILE монтируется
+      # пустой /dev/null — без cookies
       - ${HARVESTER_COOKIES_FILE:-/dev/null}:/run/secrets/youtube-cookies.txt:ro
+    # Корень только на чтение, без capabilities и повышения прав: писать
+    # можно лишь в каталог вызова yt-dlp (/tmp) и его кэш в HOME
+    # (пользователь app образа, uid 10001)
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /home/app:size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Потолки до замера S5-2: worker, CPython yt-dlp и Node.js на общем VPS
+    mem_limit: 512m
+    cpus: 1
     # Текущее видео пакета доводится за 20 с (jobs.Config.ShutdownGrace)
     stop_grace_period: 30s
     depends_on:

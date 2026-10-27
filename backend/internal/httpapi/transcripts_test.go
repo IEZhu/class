@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -321,13 +322,14 @@ func TestASRSubmit(t *testing.T) {
 	if got := lessonStatus(t, s.conn, s.lessonID); got != "processing" {
 		t.Fatalf("урок %s до транскрипта", got)
 	}
-	s.expectQueue(t)
+	// Вебхука ещё нет — ждёт только отложенная сверка (ADR-016)
+	s.expectQueue(t, store.JobASRPoll)
 
 	s.requeue(t, store.JobRecordingReady, store.RecordingReady{LessonID: s.lessonID})
-	s.run(t, store.JobRecordingReady)
+	s.run(t, store.JobRecordingReady, store.JobASRPoll)
 	s.requeue(t, store.JobASRSubmit, store.TranscriptJob{TranscriptID: tr.id})
-	s.run(t, store.JobASRSubmit)
-	s.expectQueue(t)
+	s.run(t, store.JobASRSubmit, store.JobASRPoll)
+	s.expectQueue(t, store.JobASRPoll)
 	var transcripts int
 	if err := s.conn.QueryRow(ctx, `SELECT count(*) FROM transcripts`).Scan(&transcripts); err != nil || transcripts != 1 {
 		t.Fatalf("транскриптов %d (%v)", transcripts, err)
@@ -348,11 +350,18 @@ func TestASRWebhookStoresUtterancesOnce(t *testing.T) {
 	expectStatus(t, s.webhook("", asrCompletedHook), http.StatusUnauthorized)
 	expectStatus(t, s.webhook(asrSecret+"x", asrCompletedHook), http.StatusUnauthorized)
 	expectStatus(t, s.webhook(strings.ToUpper(asrSecret), asrCompletedHook), http.StatusUnauthorized)
-	s.expectQueue(t)
-	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":"tr_other","status":"completed"}`), http.StatusNotFound)
+	s.expectQueue(t, store.JobASRPoll)
+	// Неизвестный id — 503: вебхук мог обогнать запись external_id,
+	// и AssemblyAI повторяет доставку только на 5xx
+	w := s.webhook(asrSecret, `{"transcript_id":"tr_other","status":"completed"}`)
+	expectStatus(t, w, http.StatusServiceUnavailable)
+	if !strings.Contains(w.Body.String(), "unknown_transcript") {
+		t.Errorf("неизвестный транскрипт: %s", w.Body.String())
+	}
 	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":"tr_fixture","status":"processing"}`), http.StatusBadRequest)
 	expectStatus(t, s.webhook(asrSecret, `{"transcript_id":`), http.StatusBadRequest)
-	s.expectQueue(t)
+	s.expectQueue(t, store.JobASRPoll)
+	// Принятый вебхук снимает ждущую сверку
 	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK)
 	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK) // повторная доставка
 	s.run(t, store.JobASRResult)                                           // джоба одна на две доставки
@@ -376,7 +385,7 @@ func TestASRWebhookStoresUtterancesOnce(t *testing.T) {
 	}
 
 	// Вьюер получает реплики по порядку, как их отдал AssemblyAI
-	w := securityRequest(s.h, "GET", fmt.Sprintf("/lessons/%d/transcript", s.lessonID), "", s.student)
+	w = securityRequest(s.h, "GET", fmt.Sprintf("/lessons/%d/transcript", s.lessonID), "", s.student)
 	expectStatus(t, w, http.StatusOK)
 	var resp transcriptResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -565,6 +574,156 @@ func TestASRJobWithoutKeyFinishesLesson(t *testing.T) {
 	}
 }
 
+// Вебхук потерян: через ASRPollAfter сверка asr_poll сама спрашивает
+// AssemblyAI. Пока он распознаёт — повтор с backoff очереди; готово —
+// тот же переход, что от вебхука, и дальше обычная цепочка до done.
+func TestASRPollRecoversLostWebhook(t *testing.T) {
+	s := newASRStand(t, 0)
+	ctx := context.Background()
+	s.submitted(t)
+	var due float64
+	if err := s.conn.QueryRow(ctx, `SELECT extract(epoch FROM run_at - now()) FROM jobs WHERE kind = $1`,
+		store.JobASRPoll).Scan(&due); err != nil {
+		t.Fatal(err)
+	}
+	if want := store.ASRPollAfter.Seconds(); due < want-60 || due > want {
+		t.Fatalf("сверка через %.0f с, хотели %.0f", due, want)
+	}
+	// Проматываем ожидание сверки
+	fastForward := func() {
+		t.Helper()
+		if _, err := s.conn.Exec(ctx, `UPDATE jobs SET run_at = now()`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fastForward()
+	s.asr.respond(`{"id":"tr_fixture","status":"processing","utterances":null}`, 0)
+	s.run(t, store.JobASRPoll)
+	if tr := s.transcript(t); tr.status != store.TranscriptSubmitted || tr.cause != nil {
+		t.Fatalf("сверка во время распознавания: %+v", tr)
+	}
+	var lastError string
+	if err := s.conn.QueryRow(ctx, `SELECT last_error FROM jobs WHERE kind = $1`, store.JobASRPoll).Scan(&lastError); err != nil ||
+		!strings.Contains(lastError, "processing") {
+		t.Fatalf("сверка не повторится: last_error %q (%v)", lastError, err)
+	}
+
+	fastForward()
+	s.asr.respond(asrCompleted, 0)
+	s.run(t, store.JobASRPoll)
+	if tr := s.transcript(t); tr.status != store.TranscriptFetching {
+		t.Fatalf("после сверки %+v", tr)
+	}
+	s.run(t, store.JobASRResult)
+	s.run(t, store.JobVTTRender)
+	if tr := s.transcript(t); tr.status != store.TranscriptCompleted || tr.utterances != 3 || tr.vtt == nil {
+		t.Fatalf("после цепочки %+v", tr)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "done" {
+		t.Fatalf("урок %s", got)
+	}
+	// Запоздалый вебхук ничего не ставит
+	expectStatus(t, s.webhook(asrSecret, asrCompletedHook), http.StatusOK)
+	s.expectQueue(t)
+	if _, gets := s.asr.calls(); gets != 3 {
+		t.Fatalf("забор результата %d раз, хотели 3: две сверки и asr_result", gets)
+	}
+}
+
+// Остановка worker'а оборвала последнюю попытку: транскрибация не
+// сдаётся, джоба возвращается в очередь целой (jobs.ErrInterrupted)
+// и доходит до AssemblyAI у следующего worker'а.
+func TestASRShutdownOnLastAttemptKeepsTranscript(t *testing.T) {
+	s := newASRStand(t, 1)
+	s.egressEnded(t)
+	s.run(t, store.JobRecordingReady)
+
+	// AssemblyAI держит отправку дольше, чем worker ждёт при остановке.
+	// Тело дочитывается: только тогда сервер замечает обрыв соединения
+	arrived, release := make(chan struct{}, 1), make(chan struct{})
+	hold := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(hold.Close)
+	t.Cleanup(func() { close(release) })
+	client, err := assemblyai.New(assemblyai.Config{APIKey: asrKey, WebhookSecret: asrSecret, BaseURL: hold.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := storage.New(s.files.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopping := jobs.NewRunner(s.st.Pool(), jobs.Config{
+		WorkerID: "stopping-worker", MaxAttempts: 1, ShutdownGrace: 100 * time.Millisecond,
+	})
+	worker.Register(stopping, s.st, worker.ASR{Client: client, Storage: files, WebhookURL: "https://class.example/api/webhooks/assemblyai"})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { stopping.Run(ctx); close(done) }()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("asr_submit не дошёл до AssemblyAI")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker не остановился")
+	}
+
+	if tr := s.transcript(t); tr.status != store.TranscriptQueued || tr.cause != nil {
+		t.Fatalf("прерванная последняя попытка: %+v", tr)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "processing" {
+		t.Fatalf("урок %s после остановки", got)
+	}
+	var attempts int
+	var dead bool
+	if err := s.conn.QueryRow(context.Background(),
+		`SELECT attempts, failed_at IS NOT NULL FROM jobs WHERE kind = $1`, store.JobASRSubmit).Scan(&attempts, &dead); err != nil ||
+		attempts != 0 || dead {
+		t.Fatalf("джоба после остановки: attempts=%d dead=%v (%v)", attempts, dead, err)
+	}
+	s.run(t, store.JobASRSubmit)
+	if tr := s.transcript(t); tr.status != store.TranscriptSubmitted {
+		t.Fatalf("после перезапуска %+v", tr)
+	}
+}
+
+// Хранилища нет (ключи AssemblyAI и S3 убрали с готовыми репликами):
+// vtt_render сдаётся сразу, а не 8 попыток за ≈ 2 ч — урок done,
+// реплики остаются.
+func TestVTTRenderWithoutStorageFailsFast(t *testing.T) {
+	s := newASRStand(t, 0)
+	s.asr.respond(asrCompleted, 0)
+	s.fetched(t)
+	bare := jobs.NewRunner(s.st.Pool(), jobs.Config{WorkerID: "bare-worker"})
+	worker.Register(bare, s.st, worker.ASR{})
+	if worked, err := bare.RunOnce(context.Background()); err != nil || !worked {
+		t.Fatalf("RunOnce = %v, %v", worked, err)
+	}
+	s.expectQueue(t)
+	tr := s.transcript(t)
+	if tr.status != store.TranscriptCompleted || tr.utterances != 3 || tr.vtt != nil ||
+		tr.cause == nil || !strings.Contains(*tr.cause, "ASSEMBLYAI_API_KEY") {
+		t.Fatalf("транскрипт %+v", tr)
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "done" {
+		t.Fatalf("урок %s", got)
+	}
+}
+
 // Без секрета вебхук выключен, как комната без ключей LiveKit; короткий
 // секрет не даёт api стартовать.
 func TestAssemblyAIWebhookConfig(t *testing.T) {
@@ -659,7 +818,7 @@ func TestASRPipeline(t *testing.T) {
 	// запись в AssemblyAI ещё раз и не возвращает урок из done
 	s.requeue(t, store.JobRecordingReady, store.RecordingReady{LessonID: s.lessonID})
 	s.run(t, store.JobRecordingReady)
-	for _, kind := range []string{store.JobASRSubmit, store.JobASRResult, store.JobVTTRender} {
+	for _, kind := range []string{store.JobASRSubmit, store.JobASRPoll, store.JobASRResult, store.JobVTTRender} {
 		s.requeue(t, kind, store.TranscriptJob{TranscriptID: tr.id})
 		s.run(t, kind)
 	}

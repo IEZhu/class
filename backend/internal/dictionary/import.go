@@ -36,7 +36,9 @@ type Options struct {
 	// и время изменения для файла). Продолжить можно только ту же версию:
 	// иначе пропуск уже учтённых строк пропустил бы чужие статьи.
 	SourceVersion string
-	// Restart — начать незавершённый прогон заново, с первой строки
+	// Restart — бросить незавершённый прогон и начать новый с первой
+	// строки: статьи брошенного (другой версии источника) новый прогон
+	// перезапишет, а не попавшие в него удалит при завершении
 	Restart    bool
 	BatchLines int
 	Limits     Limits
@@ -171,7 +173,13 @@ func (o Options) logf(format string, args ...any) {
 	}
 }
 
+const insertRun = `INSERT INTO definition_imports (source, source_version) VALUES ($1, $2) RETURNING id`
+
 // beginRun находит незавершённый прогон источника или заводит новый.
+// Рестарт заводит новый прогон, а не обнуляет старый: статьи старого
+// несут его import_id, поэтому новый прогон их перезапишет (upsert
+// уступает другому import_id) или удалит при завершении — как статьи
+// любого прошлого импорта. Иначе они сошли бы за статьи нового прогона.
 func beginRun(ctx context.Context, db *pgx.Conn, opt Options) (Stats, error) {
 	if opt.Source == "" {
 		return Stats{}, errors.New("dictionary: источник не задан")
@@ -180,20 +188,23 @@ func beginRun(ctx context.Context, db *pgx.Conn, opt Options) (Stats, error) {
 	var version string
 	err := db.QueryRow(ctx,
 		`SELECT id, lines_done, source_version FROM definition_imports
-		 WHERE source = $1 AND finished_at IS NULL`, opt.Source).Scan(&st.ImportID, &st.Skipped, &version)
+		 WHERE source = $1 AND finished_at IS NULL AND abandoned_at IS NULL`, opt.Source).
+		Scan(&st.ImportID, &st.Skipped, &version)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		err = db.QueryRow(ctx,
-			`INSERT INTO definition_imports (source, source_version) VALUES ($1, $2) RETURNING id`,
-			opt.Source, opt.SourceVersion).Scan(&st.ImportID)
+		err = db.QueryRow(ctx, insertRun, opt.Source, opt.SourceVersion).Scan(&st.ImportID)
 		return st, err
 	case err != nil:
 		return st, err
 	case opt.Restart:
 		st.Skipped = 0
-		_, err = db.Exec(ctx,
-			`UPDATE definition_imports SET lines_done = 0, entries = 0, source_version = $2 WHERE id = $1`,
-			st.ImportID, opt.SourceVersion)
+		err = pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx,
+				`UPDATE definition_imports SET abandoned_at = now() WHERE id = $1`, st.ImportID); err != nil {
+				return err
+			}
+			return tx.QueryRow(ctx, insertRun, opt.Source, opt.SourceVersion).Scan(&st.ImportID)
+		})
 		return st, err
 	case version != opt.SourceVersion:
 		return st, fmt.Errorf("dictionary: незавершённый импорт %d начат на версии источника %q, сейчас %q: продолжить нельзя, запустите с -restart",
@@ -210,8 +221,8 @@ type batchEntry struct {
 
 // writeBatch — статьи пачки и контрольная точка одной транзакцией.
 // Конфликт по (word, pos, etymology) внутри прогона оставляет первую
-// статью источника; повторная обработка той же строки (рестарт)
-// и статьи прошлых импортов перезаписываются.
+// статью источника; статьи прошлых импортов, в том числе брошенного
+// рестартом прогона, перезаписываются.
 func writeBatch(ctx context.Context, db *pgx.Conn, importID, linesDone int64, batch []batchEntry) (int64, error) {
 	var written int64
 	err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {

@@ -63,7 +63,7 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
 
 ## Факт (заполняется по ходу реализации)
 
-### S2-1 Джоба asr_submit (2026-10-26)
+### S2-1 Джоба asr_submit (2026-10-26) — ◐
 
 - Миграция `backend/migrations/0008_transcripts.up.sql` (+ `.down.sql`):
   таблицы `transcripts` (`lesson_id` UNIQUE, `provider`, `status`
@@ -93,18 +93,33 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
   читает и `DOMAIN`, `S3_*` (`storage.ConfigFromEnv`, общий с api).
   Без ключа api и worker стартуют как раньше; ключ без секрета,
   хранилища или `DOMAIN` — worker не стартует.
-- Потерянный вебхук не сверяется — долг D-9.
+- Потерянный вебхук (правка ревью волны A, ADR-016; долг D-9 закрыт):
+  `MarkTranscriptSubmitted` одной транзакцией ставит отложенную джобу
+  `asr_poll` (`store.JobASRPoll`, через `store.ASRPollAfter` = 2 ч,
+  `jobs.EnqueueOnce`); она сама спрашивает `GET /v2/transcript/{id}`
+  и делает переход вебхука, пока AssemblyAI распознаёт — повторяется
+  с backoff; принятый вебхук снимает её (`jobs.Cancel`).
+- Последняя попытка, оборванная остановкой worker'а, транскрипт не роняет:
+  `jobs.ErrInterrupted` — причина отмены контекста хендлера
+  (`context.Cause`), `transcriptStep` на ней не сдаётся.
 - Тесты: `internal/assemblyai`, `internal/httpapi/transcripts_test.go`
-  (`TestASRSubmit`, отказы и повтор, джоба без ключа, откат 0008) с fake
-  AssemblyAI и fake S3 `internal/storage/storagetest`.
+  (`TestASRSubmit`, отказы и повтор, джоба без ключа, откат 0008,
+  `TestASRPollRecoversLostWebhook`, `TestASRShutdownOnLastAttemptKeepsTranscript`)
+  с fake AssemblyAI и fake S3 `internal/storage/storagetest`;
+  `internal/jobs` — `TestShutdownCutOfLastAttemptIsNotFinal`,
+  `TestCancelRemovesOnlyWaitingJob`.
+- **Не подтверждено живьём:** ключа AssemblyAI нет; цепочка проверена
+  на fake AssemblyAI и fake S3 (storagetest). Осталось для ☑ (S2-1…S2-3):
+  урок с записью на стенде с ключом — транскрипт, VTT в R2, урок `done`.
 
-### S2-2 Webhook completed → utterances (2026-10-26)
+### S2-2 Webhook completed → utterances (2026-10-26) — ◐
 
 - `POST /webhooks/assemblyai` (`backend/internal/httpapi/transcripts.go`):
   без секрета — 503 `assemblyai_not_configured`; неверный заголовок — 401;
   тело `{transcript_id, status: completed|error}`, иначе 400; неизвестный
-  транскрипт — 404; принятый — `fetching` + джоба `asr_result`, повтор
-  доставки — 200 без новой джобы.
+  транскрипт — 503 `unknown_transcript` (AssemblyAI повторит доставку;
+  до ревью волны A было 404); принятый — `fetching` + джоба `asr_result`,
+  повтор доставки — 200 без новой джобы.
 - Джоба `asr_result`: `GET /v2/transcript/{id}` → `completed` —
   `utterances` (idx по порядку, `speaker_label`, `start_ms`, `end_ms`,
   `text`) + `completed` + джоба `vtt_render` одной транзакцией; `error` —
@@ -115,21 +130,25 @@ worker: utterances → WebVTT (`<v A>…`) → `s3://…/transcripts/{lesson_id}
   vtt_url, vtt_expires_at}`; доступ как у `GET /lessons/{id}` (teacher
   урока и участники; прочим 403), нет транскрипта — 404 `no_transcript`.
 - Тесты: вебхук и однократные реплики, доступ к транскрипту, ошибка
-  AssemblyAI, конфигурация секрета.
+  AssemblyAI, конфигурация секрета. Живьём не проверено — см. S2-1.
 
-### S2-3 VTT-рендер (2026-10-26)
+### S2-3 VTT-рендер (2026-10-26) — ◐
 
 - `backend/internal/webvtt/` — `Render`: `WEBVTT`, cue на реплику,
   `HH:MM:SS.mmm --> HH:MM:SS.mmm`, `<v A>`, экранирование `& < >`,
   переводы строк → пробел, порядок по началу, конец строго позже начала.
 - Джоба `vtt_render`: реплики → VTT → `transcripts/{lesson_id}.vtt`
-  (`text/vtt; charset=utf-8`, `storage.Client.Put`, `storage.TranscriptKey`)
+  (`text/vtt; charset=utf-8`, `storage.Client.PutObject` — один хелпер
+  со снимками досок S3-6, обычный PUT с `ContentLength`, `storage.TranscriptKey`)
   → `transcripts.vtt_s3_key`, `lessons.status=done`
   (`store.FinishTranscriptVTT`). Перерендер перезаписывает тот же ключ.
 - Сбои (ADR-016): 8 попыток очереди, на последней — транскрипт `error`
-  (или `completed` без VTT), урок всё равно `done`.
+  (или `completed` без VTT), урок всё равно `done`. Без хранилища
+  (ключи убрали) `vtt_render` сдаётся сразу, а не через ≈ 2 ч.
 - Тесты: `TestASRPipeline` (вся цепочка до VTT в fake S3 и `done`,
-  повторы всех джоб), сбой выкладки VTT, `internal/webvtt`, `storage.Put`.
+  повторы всех джоб), сбой выкладки VTT, `TestVTTRenderWithoutStorageFailsFast`,
+  `internal/webvtt`, `storage.TestPutObject` (TLS-сервер: тело без aws-chunked).
+  Живьём не проверено — см. S2-1.
 
 ## Риски этапа
 

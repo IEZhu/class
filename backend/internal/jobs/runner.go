@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -195,20 +194,27 @@ func (r *Runner) process(ctx context.Context, job Job) {
 	}
 }
 
+// ErrInterrupted — причина (context.Cause) отмены контекста хендлера,
+// когда worker останавливается и ShutdownGrace истёк. Такая попытка
+// не засчитывается и джоба вернётся в очередь, поэтому хендлер с
+// собственным итогом последней попытки (ADR-016) не подводит его, видя
+// эту причину.
+var ErrInterrupted = errors.New("jobs: попытка прервана остановкой worker'а")
+
 // call выполняет хендлер с потолком HandlerTimeout. Остановка worker'а
 // (отмена ctx) не обрывает его сразу: на завершение есть ShutdownGrace.
 // interrupted — хендлер прервали мы, по истечении этого запаса.
 func (r *Runner) call(ctx context.Context, job Job) (interrupted bool, err error) {
-	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cfg.HandlerTimeout)
+	base, interrupt := context.WithCancelCause(context.WithoutCancel(ctx))
+	defer interrupt(nil)
+	hctx, cancel := context.WithTimeout(base, r.cfg.HandlerTimeout)
 	defer cancel()
-	var cut atomic.Bool
 	stop := context.AfterFunc(ctx, func() {
 		grace := time.NewTimer(r.cfg.ShutdownGrace)
 		defer grace.Stop()
 		select {
 		case <-grace.C:
-			cut.Store(true)
-			cancel()
+			interrupt(ErrInterrupted)
 		case <-hctx.Done():
 		}
 	})
@@ -218,7 +224,7 @@ func (r *Runner) call(ctx context.Context, job Job) (interrupted bool, err error
 		if p := recover(); p != nil {
 			err = fmt.Errorf("panic: %v", p)
 		}
-		interrupted = cut.Load()
+		interrupted = errors.Is(context.Cause(hctx), ErrInterrupted)
 	}()
 	return false, r.handlers[job.Kind](hctx, job)
 }

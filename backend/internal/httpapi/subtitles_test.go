@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -385,5 +386,36 @@ func TestSubtitlesFetchFillsCorpus(t *testing.T) {
 	}
 	if got := strings.Count(string(args), "watch?v="); got != 1 {
 		t.Fatalf("retry fetched %d videos, want only the blocked one", got)
+	}
+}
+
+// Нечитаемый файл cookies — беда окружения: джоба сборщика падает
+// (повторит очередь), а попытки видео не тратятся, и очередь видео
+// не выгорает (ADR-022).
+func TestSubtitlesFetchUnreadableCookiesSparesVideos(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	script, err := filepath.Abs("../harvester/testdata/fake-yt-dlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	ted := subtitleSourceID(t, conn, tedChannelID)
+	if _, err := a.store.AddFeedVideos(ctx, ted, []store.FeedVideo{{ExternalID: "manualSubs1", Title: "manualSubs1"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Каталог вместо файла — так docker монтирует отсутствующий на хосте путь
+	h := harvester.New(a.store, harvester.Config{Fetcher: harvester.YTDLP{Path: script, Cookies: t.TempDir()}})
+	if err := h.FetchSubtitles(ctx); !errors.Is(err, harvester.ErrNoRunner) {
+		t.Fatalf("FetchSubtitles = %v, want ErrNoRunner", err)
+	}
+	var attempts int
+	var harvestError, subtitles string
+	if err := conn.QueryRow(ctx, `SELECT harvest_attempts, coalesce(harvest_error, ''), coalesce(subtitles, '')
+		FROM videos WHERE external_id = 'manualSubs1'`).Scan(&attempts, &harvestError, &subtitles); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 || harvestError != "" || subtitles != "" {
+		t.Fatalf("video blamed for the cookies file: attempts %d, error %q, subtitles %q", attempts, harvestError, subtitles)
 	}
 }

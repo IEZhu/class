@@ -215,25 +215,6 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// Put кладёт небольшой объект целиком (VTT, S2-3). Медиа так не грузим:
-// их пишут в бакет сами внешние сервисы (Egress), минуя VPS.
-func (c *Client) Put(ctx context.Context, key, contentType string, body []byte) error {
-	if c == nil {
-		return ErrNotConfigured
-	}
-	_, err := c.s3client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:        aws.String(c.cfg.Bucket),
-		Key:           aws.String(key),
-		Body:          bytes.NewReader(body),
-		ContentLength: aws.Int64(int64(len(body))),
-		ContentType:   aws.String(contentType),
-	})
-	if err != nil {
-		return fmt.Errorf("put %s: %w", key, err)
-	}
-	return nil
-}
-
 // RecordingKey — путь записи урока по раскладке из 05-storage-s3.md.
 func RecordingKey(lessonID int64, ext string) string {
 	return "recordings/" + strconv.FormatInt(lessonID, 10) + "/room." + ext
@@ -274,21 +255,24 @@ func TranscriptKey(lessonID int64) string {
 	return "transcripts/" + strconv.FormatInt(lessonID, 10) + ".vtt"
 }
 
-// PutObject кладёт небольшой объект целиком: снимки досок (S3-6) — это
-// килобайты JSON, а не медиа, которое пишет Egress мимо VPS.
+// PutObject кладёт небольшой объект целиком: VTT транскрипта (S2-3)
+// и снимок доски (S3-6) — килобайты текста, а не медиа, которое пишет
+// Egress мимо VPS. Единственная запись объекта из api и worker.
 func (c *Client) PutObject(ctx context.Context, key, contentType string, body []byte) error {
 	if c == nil {
 		return ErrNotConfigured
 	}
 	_, err := c.s3client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.cfg.Bucket),
-		Key:         aws.String(key),
-		Body:        bytes.NewReader(body),
-		ContentType: aws.String(contentType),
+		Bucket:        aws.String(c.cfg.Bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(body),
+		ContentLength: aws.Int64(int64(len(body))),
+		ContentType:   aws.String(contentType),
 	}, func(o *s3.Options) {
 		// Без необязательной контрольной суммы SDK шлёт обычный подписанный
-		// PUT, а не aws-chunked с трейлером: так запрос одинаково понимают
-		// R2, AWS и S3-совместимые заглушки
+		// PUT, а не aws-chunked с трейлером (так он делает по HTTPS
+		// в режиме WhenSupported — умолчании LoadDefaultConfig): такой
+		// запрос одинаково понимают R2, AWS и S3-совместимые заглушки
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 	if err != nil {

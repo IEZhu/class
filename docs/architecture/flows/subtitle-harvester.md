@@ -47,9 +47,16 @@ JS-задач YouTube).
   ```bash
   docker build --target harvester -t lingua-harvester backend
   docker run -d --name lingua-harvester --restart unless-stopped \
-    -e DATABASE_URL='postgres://lingua:…@<адрес в tailnet>:5432/lingua?sslmode=disable' \
+    --read-only --tmpfs /tmp --tmpfs /home/app:uid=10001,gid=10001,mode=0700 \
+    --cap-drop ALL --security-opt no-new-privileges:true --memory 512m --cpus 1 \
+    -e DATABASE_URL='postgres://lingua_harvester:…@<адрес в tailnet>:5432/lingua?sslmode=disable' \
     lingua-harvester
   ```
+
+  DSN — своей роли сборщика (`HARVESTER_DATABASE_URL`, роль создаёт
+  `deploy/harvester-db-role.sh` на VPS, ADR-022): yt-dlp в контейнере
+  видит окружение worker'а, а у роли есть только таблицы сборщика
+  и очередь. DSN владельца базы на другую машину не уносят.
 
   Без Docker: `go build ./cmd/worker` и yt-dlp с JS-движком в `PATH`
   (по умолчанию yt-dlp ищет deno), `WORKER_ROLE=harvester`.
@@ -62,9 +69,12 @@ JS-задач YouTube).
 - Признаки блокировки (HTTP 429, «вы не бот», rate limit) — пауза процесса
   30 мин с удвоением до суток; пока она идёт, к YouTube не обращаемся.
   Пауза в памяти процесса: у каждого сборщика свой IP.
-- Cookies при необходимости: файл в формате Netscape, в compose —
-  `HARVESTER_COOKIES_FILE` (путь на хосте), с другой машины —
+- Cookies при необходимости: файл в формате Netscape, читаемый uid 10001
+  контейнера, в compose — `HARVESTER_COOKIES_FILE` (путь на хосте),
+  с другой машины —
   `-v <файл>:/run/secrets/youtube-cookies.txt:ro -e HARVESTER_COOKIES=/run/secrets/youtube-cookies.txt`.
+  Нечитаемый файл — беда окружения (`ErrNoRunner`): джоба повторяется,
+  попытки видео не тратятся.
 - Fallback: запуск сборщика с домашней машины — **тот же worker-бинарь**,
   пишет в ту же PG через VPN/Tailscale (сборщик не завязан на
   VPS-окружение); на VPS сервис при этом останавливают.

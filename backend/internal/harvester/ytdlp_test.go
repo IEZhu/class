@@ -145,8 +145,12 @@ func TestYTDLPCookies(t *testing.T) {
 		t.Fatalf("empty jar passed: %q", got)
 	}
 
-	y.Cookies = filepath.Join(filepath.Dir(jar), "absent.txt")
-	if _, err := y.Fetch(context.Background(), "noSubtitle1"); err == nil {
-		t.Fatal("missing cookies file ignored")
+	// Файл не читается (нет на хосте — docker смонтирует вместо него
+	// каталог; нет прав у uid контейнера) — беда окружения, не видео
+	for _, path := range []string{filepath.Join(filepath.Dir(jar), "absent.txt"), t.TempDir()} {
+		y.Cookies = path
+		if _, err := y.Fetch(context.Background(), "noSubtitle1"); !errors.Is(err, ErrNoRunner) {
+			t.Fatalf("unreadable cookies %s: %v, want ErrNoRunner", path, err)
+		}
 	}
 }

@@ -10,9 +10,12 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // Раскладка бакета зафиксирована в 05-storage-s3.md и на неё завязаны
@@ -298,14 +301,18 @@ func TestWhiteboardKey(t *testing.T) {
 	}
 }
 
-// Снимок доски уходит одним PUT в path-style адрес бакета с нужным
-// Content-Type; ответ хранилища с ошибкой возвращается вызывающему.
+// PutObject — один обычный подписанный PUT в path-style адрес бакета:
+// тело как есть с Content-Length и Content-Type, без aws-chunked
+// с трейлером контрольной суммы, который SDK по умолчанию шлёт по HTTPS
+// (поэтому сервер здесь TLS). Ответ хранилища с ошибкой возвращается
+// вызывающему.
 func TestPutObject(t *testing.T) {
-	var method, path, contentType string
+	var method, path string
+	var header http.Header
 	var body []byte
 	status := http.StatusOK
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method, path, contentType = r.Method, r.URL.Path, r.Header.Get("Content-Type")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, header = r.Method, r.URL.Path, r.Header.Clone()
 		body, _ = io.ReadAll(r.Body)
 		w.WriteHeader(status)
 	}))
@@ -314,13 +321,25 @@ func TestPutObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Тот же клиент, но доверяющий сертификату тестового сервера
+	c.s3client = s3.New(c.s3client.Options(), func(o *s3.Options) { o.HTTPClient = srv.Client() })
 	ctx := context.Background()
-	if err := c.PutObject(ctx, WhiteboardKey(7), "application/json", []byte(`{"elements":[]}`)); err != nil {
+	vtt := "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v A>hi\n"
+	if err := c.PutObject(ctx, TranscriptKey(7), "text/vtt; charset=utf-8", []byte(vtt)); err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}
-	if method != http.MethodPut || path != "/lingua-class/whiteboards/7.json" ||
-		contentType != "application/json" || string(body) != `{"elements":[]}` {
-		t.Fatalf("request %s %s %q body %q", method, path, contentType, body)
+	if method != http.MethodPut || path != "/lingua-class/transcripts/7.vtt" || string(body) != vtt ||
+		header.Get("Content-Type") != "text/vtt; charset=utf-8" ||
+		header.Get("Content-Length") != strconv.Itoa(len(vtt)) {
+		t.Fatalf("request %s %s %q body %q", method, path, header, body)
+	}
+	for _, name := range []string{"Content-Encoding", "X-Amz-Trailer", "X-Amz-Decoded-Content-Length"} {
+		if v := header.Get(name); v != "" {
+			t.Errorf("%s: %q — chunked upload, want a plain PUT", name, v)
+		}
+	}
+	if sha := header.Get("X-Amz-Content-Sha256"); strings.HasPrefix(sha, "STREAMING-") {
+		t.Errorf("X-Amz-Content-Sha256 = %q, want a plain payload", sha)
 	}
 	status = http.StatusForbidden
 	if err := c.PutObject(ctx, WhiteboardKey(7), "application/json", []byte(`{}`)); err == nil {

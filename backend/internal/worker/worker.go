@@ -23,6 +23,7 @@ func Register(r *jobs.Runner, st *store.Store, asr ASR) {
 	// подключены и без ключа: джоба, поставленная до того, как ключ убрали,
 	// доведёт урок до done, а не будет ждать вечно.
 	r.Handle(store.JobASRSubmit, asrSubmit(st, asr))
+	r.Handle(store.JobASRPoll, asrPoll(st, asr))
 	r.Handle(store.JobASRResult, asrResult(st, asr))
 	r.Handle(store.JobVTTRender, vttRender(st, asr))
 }

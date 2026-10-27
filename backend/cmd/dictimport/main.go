@@ -28,7 +28,7 @@ import (
 
 func main() {
 	source := flag.String("source", "", "URL (https://) или путь к JSONL Wiktextract, можно .gz")
-	restart := flag.Bool("restart", false, "начать незавершённый прогон заново")
+	restart := flag.Bool("restart", false, "бросить незавершённый прогон и начать новый с первой строки")
 	maxGlosses := flag.Int("max-glosses", dictionary.DefaultMaxGlosses, "значений на статью")
 	maxTranslations := flag.Int("max-translations", dictionary.DefaultMaxTranslations, "русских переводов на статью")
 	flag.Parse()
