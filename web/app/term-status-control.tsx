@@ -13,7 +13,8 @@ export const termStatuses = new TermStatuses((words) =>
   requestJson<LookupResult>("/api/user-terms/lookup", "POST", { words }),
 );
 
-const buttonStyle = { padding: "0.2rem 0.5rem", border: "1px solid #ccc", borderRadius: 4, background: "#fff" };
+// buttonStyle — кнопки попапа слова: статусы и «объясни» (clickable-text)
+export const buttonStyle = { padding: "0.2rem 0.5rem", border: "1px solid #ccc", borderRadius: 4, background: "#fff" };
 const activeStyle = { ...buttonStyle, background: "#333", borderColor: "#333", color: "#fff" };
 
 // TermStatusControl — «в мой словарь», статус 1..5 и «убрать» (S3-5):
