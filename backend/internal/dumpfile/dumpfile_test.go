@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestReadLine(t *testing.T) {
@@ -227,5 +228,90 @@ func TestRedirectsHTTPSOnly(t *testing.T) {
 	}
 	if n := loops.Load(); n != maxRedirects {
 		t.Fatalf("по петле сделано %d запросов, ждали %d", n, maxRedirects)
+	}
+}
+
+// Тело ответа без данных дольше bodyIdleTimeout (ревью PR #17): источник
+// отдал заголовки и начало файла и замолчал — чтение возвращает ошибку
+// по таймауту простоя, а не висит; живая загрузка, которая в сумме
+// дольше таймаута, но присылает данные чаще, доходит до конца.
+func TestBodyIdleTimeout(t *testing.T) {
+	prev := bodyIdleTimeout
+	bodyIdleTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { bodyIdleTimeout = prev })
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stall":
+			fmt.Fprint(w, "1\t2\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		case "/slow":
+			for i := range 8 {
+				fmt.Fprintf(w, "%d\t%d\n", i, i)
+				w.(http.Flusher).Flush()
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	trustTestCert(t, srv)
+	ctx := context.Background()
+
+	rc, _, err := Open(ctx, srv.URL+"/stall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	body, err := io.ReadAll(rc)
+	rc.Close()
+	if elapsed := time.Since(start); !errors.Is(err, errStalled) || string(body) != "1\t2\n" ||
+		elapsed < bodyIdleTimeout || elapsed > 30*time.Second {
+		t.Fatalf("замолчавший источник: %q, %v за %s", body, err, elapsed)
+	}
+
+	rc, _, err = Open(ctx, srv.URL+"/slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start = time.Now()
+	body, err = io.ReadAll(rc)
+	rc.Close()
+	if elapsed := time.Since(start); err != nil || strings.Count(string(body), "\n") != 8 || elapsed < bodyIdleTimeout {
+		t.Fatalf("медленная загрузка: %q, %v за %s", body, err, elapsed)
+	}
+}
+
+// Таймаут простоя считает только ожидание внутри Read (ревью PR #18):
+// пауза между чтениями — импорт пишет пачку в базу — дольше
+// bodyIdleTimeout не обрывает тело, в котором ещё есть данные.
+func TestBodyIdleNotSpentBetweenReads(t *testing.T) {
+	prev := bodyIdleTimeout
+	bodyIdleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { bodyIdleTimeout = prev })
+	want := strings.Repeat("1\t2\n", 4)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, want)
+	}))
+	defer srv.Close()
+	trustTestCert(t, srv)
+
+	rc, _, err := Open(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(rc, head); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * bodyIdleTimeout)
+	rest, err := io.ReadAll(rc)
+	if err != nil || string(head)+string(rest) != want {
+		t.Fatalf("после паузы между чтениями: %q %q, %v", head, rest, err)
 	}
 }

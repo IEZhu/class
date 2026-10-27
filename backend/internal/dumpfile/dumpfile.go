@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,7 +45,7 @@ func Open(ctx context.Context, source string) (io.ReadCloser, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return resp.Body, httpVersion(resp.Header), nil
+	return newIdleBody(resp.Body, bodyIdleTimeout), httpVersion(resp.Header), nil
 }
 
 // Stat — версия источника без чтения: HEAD у URL, stat у файла.
@@ -88,8 +89,10 @@ func httpVersion(h http.Header) string {
 }
 
 // client — клиент выгрузок. Без общего таймаута: полный дамп качается
-// минутами; зависание соединения ловят таймауты установки и первого
-// ответа. Переадресации — только на https (httpsOnly).
+// минутами. Зависание соединения до тела ловят таймауты установки, TLS
+// и заголовков ответа (ResponseHeaderTimeout — только до заголовков), а
+// тело — bodyIdleTimeout (idleBody, Open). Переадресации — только на https
+// (httpsOnly).
 var client = &http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -98,6 +101,58 @@ var client = &http.Client{
 		ResponseHeaderTimeout: time.Minute,
 	},
 	CheckRedirect: httpsOnly,
+}
+
+// bodyIdleTimeout — сколько чтение тела ответа ждёт следующих байт:
+// источник, который отдал заголовки и замолчал, прерывает импорт ошибкой,
+// а не вешает его. Отсчёт идёт только внутри Read, поэтому медленная
+// запись строк в базу между чтениями его не тратит, а живая медленная
+// загрузка доходит до конца. var — чтобы тест не ждал минуту.
+var bodyIdleTimeout = time.Minute
+
+// errStalled — источник дольше bodyIdleTimeout не присылал данных.
+var errStalled = errors.New("dumpfile: источник перестал присылать данные")
+
+// idleBody — тело ответа с таймаутом простоя: таймер заводится на каждый
+// Read и сбрасывается, когда Read вернулся. Сработал — тело закрывается
+// (заблокированный Read возвращается), и чтение отвечает errStalled.
+type idleBody struct {
+	body  io.ReadCloser
+	idle  time.Duration
+	timer *time.Timer
+	fired atomic.Bool
+}
+
+func newIdleBody(body io.ReadCloser, idle time.Duration) *idleBody {
+	b := &idleBody{body: body, idle: idle}
+	b.timer = time.AfterFunc(idle, func() {
+		b.fired.Store(true)
+		body.Close()
+	})
+	b.timer.Stop()
+	return b
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	if b.fired.Load() {
+		return 0, b.stalled()
+	}
+	b.timer.Reset(b.idle)
+	n, err := b.body.Read(p)
+	b.timer.Stop()
+	if b.fired.Load() {
+		return n, b.stalled()
+	}
+	return n, err
+}
+
+func (b *idleBody) stalled() error {
+	return fmt.Errorf("%w: нет данных дольше %s", errStalled, b.idle)
+}
+
+func (b *idleBody) Close() error {
+	b.timer.Stop()
+	return b.body.Close()
 }
 
 // maxRedirects — потолок переадресаций, как у http.Client по умолчанию:

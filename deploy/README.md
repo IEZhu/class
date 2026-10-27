@@ -510,10 +510,12 @@ ACCESS EXCLUSIVE ([ALTER TABLE](https://www.postgresql.org/docs/16/sql-altertabl
 она держится до конца транзакции, а 0022 — одна транзакция `BEGIN` …
 `COMMIT` ([блокировки](https://www.postgresql.org/docs/16/explicit-locking.html)):
 пока миграция идёт, ждёт даже чтение реплик и материалов. Лексемы уже
-существующих строк считаются при накате; переписывает ли PostgreSQL при
-этом таблицу, его документация не говорит, и время 0022 на большой
-таблице заранее не оценено. На базе, которая получает 0008 тем же
-`make migrate` (стенд — на схеме 5), `utterances` к 0022 ещё пуста.
+существующих строк считаются при накате, и таблица при этом переписывается:
+документация PostgreSQL этого не говорит, но на PostgreSQL 16.15 после
+такой колонки у `materials` (4065 строк) сменился `relfilenode`, накат
+занял 0,2 с. Время 0022 на большой таблице заранее не оценено. На базе,
+которая получает 0008 тем же `make migrate` (стенд — на схеме 5),
+`utterances` к 0022 ещё пуста.
 
 **Только полным набором.** migrate применяет лишь версии выше текущей
 в `schema_migrations`: база, дошедшая до 24 без 0022, cloze-миграцию не
@@ -534,13 +536,62 @@ ADR-033) и периодическая `session_cleanup` (раз в час, пр
 FSRS словам словаря без карточки (бэкфилл, ADR-036).
 
 ```bash
-sudo deploy/backup-pg.sh      # 1. копия базы до миграций (раздел «Бэкапы Postgres»)
-# 2. клон стенда — на коммите выпуска, вместе с 0022
+# 1. клон стенда — на коммите выпуска, вместе с 0022 (запущенный стек — на прежних образах до шага 4)
+sudo deploy/backup-pg.sh      # 2. копия базы до миграций (раздел «Бэкапы Postgres»: нужны zstd и свой бакет BACKUP_S3_*)
 make build                    # 3. образы; старый стек работает на старой схеме
 make migrate && make up       # 4. схема и новые api/worker/web подряд, слои — из кэша шага 3
 docker compose -f deploy/docker-compose.yml restart worker   # 5. второй бэкфилл
 make logs
 ```
+
+Сначала коммит выпуска, потом копия: у стенда до S1-7 (на схеме 5)
+`deploy/backup-pg.sh` ещё нет — он появляется шагом 1, а запущенные
+контейнеры работают на своих образах до шага 4.
+Скрипту нужны `zstd` на хосте и свой бакет `BACKUP_S3_*` (раздел
+«Бэкапы Postgres»); с пустыми `BACKUP_S3_*` он пишет дамп в бакет записей
+под токеном `S3_*`, который получает LiveKit (долг D-8). Если своего
+бакета `BACKUP_S3_*` или `zstd` нет, вместо шага 2 снимите локальную копию:
+
+```bash
+install -d -m 0700 ~/lingua-backups
+docker compose -f deploy/docker-compose.yml exec -T postgres \
+    sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > ~/lingua-backups/pre-cd.dump &&
+  chmod 600 ~/lingua-backups/pre-cd.dump &&
+  docker compose -f deploy/docker-compose.yml exec -T postgres \
+    sh -c 'pg_restore --list && cat >/dev/null' < ~/lingua-backups/pre-cd.dump > /dev/null && echo dump OK
+```
+
+Дамп содержит хэши паролей и email всех учёток: каталог и файл — только
+для владельца. `dump OK` появляется, только если pg_dump завершился без
+ошибки и `pg_restore --list` прочитал оглавление дампа. Само оглавление
+обрыв в данных не выдаёт (файл, обрезанный посередине, `--list`
+принимает) — его ловит код выхода pg_dump; без `dump OK` копии нет.
+
+**Откат** (миграция упала или новый код не встал): база возвращается
+к копии шага 2 начисто, а не `--clean` поверх — таблиц 0006–0024 в копии
+нет, и `--clean` их не удаляет (раздел «Восстановление»). Сначала
+останавливаются все клиенты базы, включая `harvester` под профилем
+(`stop` его останавливает, если он запущен, и молча пропускает, если нет):
+иначе он переподключится, пока `pg_restore` разворачивает копию.
+Сборщик, запущенный с другой машины с `DATABASE_URL` этой базы,
+останавливают там же.
+
+```bash
+docker compose -f deploy/docker-compose.yml stop caddy web api worker harvester
+docker compose -f deploy/docker-compose.yml exec -T postgres \
+    sh -c 'dropdb -U "$POSTGRES_USER" --force "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+# локальная копия; копия из бакета — sudo deploy/restore-pg.sh --db <POSTGRES_DB> --date <дата шага 2, UTC>
+docker compose -f deploy/docker-compose.yml cp ~/lingua-backups/pre-cd.dump postgres:/tmp/pre-cd.dump
+docker compose -f deploy/docker-compose.yml exec -T postgres \
+    sh -c 'pg_restore -1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" /tmp/pre-cd.dump && rm /tmp/pre-cd.dump'
+docker compose -f deploy/docker-compose.yml rm -sf worker   # на прежнем коммите worker'а может не быть
+git checkout <прежний коммит> && make up
+```
+
+pg_restore берёт файл внутри контейнера, а не поток: дамп снят в канал,
+без смещений блоков, и по файлу pg_restore их найдёт, а по каналу — не
+всегда. Восстановление идёт одной транзакцией (`-1`): при ошибке база
+остаётся пустой, копия — на месте.
 
 Шаг 5 нужен потому, что `make up` пересоздаёт api и worker параллельно
 (оба ждут только postgres): новый worker уже сделал бэкфилл, а старый api
@@ -596,7 +647,11 @@ FSRS для слов без карточки: N» — N слов словаря 
 - S5-8, часть 2 (с `LLM_API_KEY`): пункты cloze после первого, у которых
   ещё нет вариантов, сначала показывают «Подбираем варианты…», затем
   четыре варианта (`POST /api/practice/cloze/distractors` — 200,
-  `llm_error: null`). Пачка тратит тот же суточный лимит, что «объясни»:
+  `llm_error: null`). Быстрый верный клик по слову, которое пора
+  повторять, сразу после того, как «Подбираем варианты…» сменились
+  кнопками, — «в график повторений: легко»: ожидание вариантов не
+  считается временем ответа (тестов на эту связку у страницы нет). Пачка
+  тратит тот же суточный лимит, что «объясни»:
   когда он исчерпан, такие пункты получают варианты из словаря с подписью
   «варианты из словаря: лимит подсказок LLM на сегодня исчерпан».
 - S5-8: без `LLM_API_KEY` кнопки «объясни» в попапе нет,

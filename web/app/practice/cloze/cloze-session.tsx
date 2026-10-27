@@ -67,8 +67,8 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const options = item ? itemOptions(item, fetched) : [];
   const ready = options !== null;
 
-  // Время ответа — от показа пункта, а в режиме вариантов у pending — от
-  // прихода кнопок (restartClock)
+  // Время ответа — от показа пункта, а у pending, пока ждали вариантов, —
+  // от прихода кнопок или от перехода к вводу слова (restartClock)
   useEffect(() => {
     const cur = { index, mode, ready };
     if (restartClock(clock.current, cur)) shownAt.current = performance.now();

@@ -41,7 +41,7 @@ test("время ответа — целые миллисекунды в гра�
   assert.equal(responseMs(0, 10 * MAX_RESPONSE_MS), MAX_RESPONSE_MS);
 });
 
-test("время ответа: заново с новым пунктом и с приходом вариантов в режиме вариантов", () => {
+test("время ответа: заново с новым пунктом, с приходом вариантов и с уходом с ожидания во ввод", () => {
   const at = (index: number, mode: "choice" | "typing", ready: boolean) => ({ index, mode, ready });
   assert.equal(restartClock(null, at(0, "choice", true)), true, "первый пункт");
   assert.equal(restartClock(at(0, "choice", true), at(1, "choice", true)), true, "следующий пункт");
@@ -51,6 +51,9 @@ test("время ответа: заново с новым пунктом и с �
   assert.equal(restartClock(at(0, "typing", false), at(0, "typing", true)), false, "вводу варианты не нужны");
   assert.equal(restartClock(at(0, "choice", true), at(0, "typing", true)), false, "смена режима — не новый показ");
   assert.equal(restartClock(at(0, "typing", true), at(0, "choice", true)), false);
+  assert.equal(restartClock(at(0, "choice", false), at(0, "typing", false)), true, "ушли с ожидания во ввод");
+  assert.equal(restartClock(at(0, "typing", false), at(0, "choice", false)), false, "вернулись ждать вариантов");
+  assert.equal(restartClock(at(0, "typing", false), at(0, "typing", false)), false);
 });
 
 test("итог ответа и график", () => {
