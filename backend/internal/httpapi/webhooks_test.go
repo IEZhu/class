@@ -540,6 +540,73 @@ func TestRecordingStartsOnce(t *testing.T) {
 	}
 }
 
+// Вход гостя не ждёт запуска записи (ADR-031): запуск держит урок
+// FOR NO KEY UPDATE на время вызова LiveKit (до 15 с), вход читает его
+// FOR KEY SHARE, и режимы совместимы. С прежней парой FOR UPDATE / FOR SHARE
+// гость стоял бы за вызовом LiveKit и упирался в statement_timeout.
+func TestGuestJoinDoesNotWaitForEgressStart(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	s := newRecordingStand(t, func(w http.ResponseWriter) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		egressStarted(w)
+	})
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	ctx := context.Background()
+	// Урок стенда — открытое событие с гостевой ссылкой
+	if _, err := s.conn.Exec(ctx, `UPDATE lessons SET group_id = NULL, title = 'Открытый урок' WHERE id = $1`, s.lessonID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.st.SetGuestToken(ctx, s.lessonID, hashToken("rec-guest-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	r := signedWebhook(t, &livekit.WebhookEvent{Event: eventRoomStarted, Room: &livekit.Room{Name: roomName(s.lessonID), Sid: "RM_1"}})
+	started := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		s.h.ServeHTTP(w, r)
+		started <- w.Code
+	}()
+	select {
+	case <-entered:
+	case code := <-started:
+		t.Fatalf("запуск не дошёл до Egress: ответ %d", code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("запуск не дошёл до Egress за 5 с")
+	}
+
+	// Запуск стоит в вызове LiveKit с захваченным уроком — гость входит сразу
+	joinCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, lessonID, err := s.st.JoinAsGuest(joinCtx, hashToken("rec-guest-link"), "Гость", "guest+rec@guest.invalid",
+		hashToken("rec-guest-session"), time.Now().Add(time.Hour))
+	if err != nil || lessonID != s.lessonID {
+		t.Fatalf("вход гостя во время запуска записи: урок %d, %v", lessonID, err)
+	}
+	select {
+	case code := <-started:
+		t.Fatalf("запуск закончился раньше входа (%d) — блокировку не проверили", code)
+	default:
+	}
+
+	unblock()
+	select {
+	case code := <-started:
+		if code != http.StatusOK {
+			t.Errorf("запуск записи: ответ %d, хотели 200", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("запуск записи не закончился после ответа Egress")
+	}
+	if got := lessonStatus(t, s.conn, s.lessonID); got != "live" {
+		t.Errorf("статус %q, хотели live", got)
+	}
+}
+
 // Комната опустела посреди урока (преподаватель вышел, у всех упала сеть):
 // egress_ended закрывает сегмент, а не урок. Урок остаётся live, в комнату
 // пускают, новая сессия комнаты пишется в свой файл, и ничего не
