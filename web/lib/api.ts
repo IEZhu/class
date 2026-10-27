@@ -4,6 +4,7 @@
 import { cookies } from "next/headers";
 
 import type { Role } from "./roles";
+import type { TermStatus } from "./term-status";
 
 const API_BASE = process.env.INTERNAL_API_URL ?? "http://api:8080";
 
@@ -127,6 +128,40 @@ export interface GoogleCalendarStatus {
 // не отозван, доступ преподаватель снимает в аккаунте Google сам.
 export interface GoogleDisconnectResult {
   revoked: boolean;
+}
+
+// Ответ POST /terms/click (S3-2) — содержимое попапа <ClickableText>.
+export interface TermClick {
+  // 0 — слово api не знает и термина не заводил: попап без «в мой словарь»
+  term_id: number;
+  lemma: string;
+  surface: string;
+  // null — перевода нет в кэше, а LibreTranslate не настроен или не ответил
+  translation: { text: string; source: string } | null;
+  definitions: { word: string; pos: string; glosses: string[]; translations_ru: string[] }[];
+  // Примеры Tatoeba с переводом (S5-4, долг D-1); до них — пустой список
+  examples: { text: string; translation: string | null }[];
+  // Статус в личном словаре студента (S3-5); null — слова там нет
+  status: TermStatus | null;
+}
+
+// Слово личного словаря (GET/POST /user-terms, S3-5, ADR-027).
+export interface UserTerm {
+  term_id: number;
+  lemma: string;
+  surface: string;
+  translation: string | null;
+  status: TermStatus;
+  // Урок, на котором слово добавили; null — вне урока или урок отменён
+  source_lesson: (Pick<Lesson, "id" | "title" | "group_id" | "group_name" | "starts_at">) | null;
+  added_at: string;
+  updated_at: string;
+}
+
+export interface UserTermPage {
+  items: UserTerm[];
+  // null — страница последняя
+  next_cursor: string | null;
 }
 
 const API_TIMEOUT_MS = 5000;

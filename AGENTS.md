@@ -17,7 +17,9 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   retries, ADR-013), `internal/worker/` (job handlers by kind), `migrations/` (golang-migrate
   `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a migration).
 - `web/`: Next.js 15 + React 19 app router (`app/login`, `app/lessons`, `app/lesson/[id]`,
-  `app/admin`, `app/account`, `app/invite/[token]`); `lib/api.ts` calls the API server-side.
+  `app/admin`, `app/account`, `app/invite/[token]`, `app/dictionary`); `lib/api.ts` calls the
+  API server-side. Every text renders through `app/clickable-text.tsx` (`<ClickableText>`,
+  ADR-026); its tokenizer and status cache are pure functions in `lib/` tested by `npm test`.
 - `deploy/`: `docker-compose.yml` (caddy, web, api, worker, postgres; `migrate` under the
   `tools` profile; `libretranslate` under the `translate` profile and its one-off model installer
   `libretranslate-models` under `translate-setup`, ADR-018; the whiteboard relay `whiteboard`
@@ -65,14 +67,15 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   wait in the queue without storage, ADR-024), plus `DOMAIN` and `GOOGLE_*` for `calendar_sync`; with `ASSEMBLYAI_API_KEY` it also needs the webhook
   secret, `S3_*` and `DOMAIN` (it refuses to start if one is missing); web reads
   `INTERNAL_API_URL` (default `http://api:8080`).
-- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`; `predev`
-  and `prebuild` copy the Excalidraw fonts into the git-ignored `public/excalidraw/`).
+- Frontend alone: `cd web && npm ci && npm run dev` (scripts: `dev`, `build`, `start`, `test` —
+  `node --test` over `lib/*.test.ts`; `predev` and `prebuild` copy the Excalidraw fonts into the
+  git-ignored `public/excalidraw/`).
 - Backend tests: `cd backend && go test -race -count=1 ./...`. Set `TEST_DATABASE_URL`
   to a disposable Postgres database for the HTTP/SQL security suite and the `internal/jobs`
   queue tests; they create isolated schemas and apply the real migrations through the one
   shared harness `internal/testdb` (advisory lock, `pgcrypto` in `public`). CI requires this
   database and does not skip those tests. `.github/workflows/ci.yml` also verifies modules,
-  runs vet, builds every `cmd`, checks web types and builds Next.js.
+  runs vet, builds every `cmd`, checks web types, runs `npm test` and builds Next.js.
   `.github/workflows/security.yml` blocks all known dependency
   and runtime vulnerabilities, unfixed findings, source secrets, and missing inventories.
   Package-level Go absence proofs must match the exact source snapshot or every

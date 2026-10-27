@@ -58,6 +58,9 @@ type termClickResponse struct {
 	// Examples — примеры Tatoeba: поле в контракте с S3-2, наполнит S5-4
 	// (долг D-1)
 	Examples []struct{} `json:"examples"`
+	// Status — статус слова в личном словаре студента (S3-5); null — слова
+	// в словаре нет или словаря у роли нет
+	Status *int `json:"status"`
 }
 
 // handleTermClick — POST /terms/click (S3-2, flows/word-click.md).
@@ -125,12 +128,19 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp.Translation = a.translateTerm(ctx, term)
 	}
+	if u := userFrom(ctx); u.Role == store.RoleStudent {
+		if resp.Status, err = a.store.UserTermStatus(ctx, u.ID, term.ID); err != nil {
+			internalError(w, "user term status", err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // checkClickLesson — клик на уроке: урок существует и виден кликнувшему.
 // Сейчас lesson_id ничего не пишет; кандидатов словаря урока заведёт S3-7,
-// и контракт к тому времени уже не пропускает чужие уроки.
+// и контракт к тому времени уже не пропускает чужие уроки. Та же проверка
+// стережёт source_lesson_id личного словаря (S3-5).
 func (a *API) checkClickLesson(w http.ResponseWriter, r *http.Request, lessonID int64) bool {
 	if lessonID <= 0 {
 		writeError(w, http.StatusBadRequest, "bad_request", "некорректный lesson_id")

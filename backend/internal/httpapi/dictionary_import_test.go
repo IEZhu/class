@@ -318,11 +318,15 @@ func TestDictionaryMigrationReverts(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
+	// Откат идёт в обратном порядке: user_terms (0015) ссылается на terms
+	// и уходит раньше 0009, а возвращается после него
+	apply("../../migrations/0015_user_terms.down.sql")
 	apply("../../migrations/0009_dictionary.down.sql")
 	if got := state(); got != " " {
 		t.Fatalf("down оставил %q", got)
 	}
 	apply("../../migrations/0009_dictionary.up.sql")
+	apply("../../migrations/0015_user_terms.up.sql")
 	if got := state(); got != want {
 		t.Fatalf("повторный up: %s", got)
 	}

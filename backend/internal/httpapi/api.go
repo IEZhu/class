@@ -209,6 +209,15 @@ func (a *API) Router() http.Handler {
 	mux.Handle("GET /lessons/{id}/whiteboard/scene", user(a.handleWhiteboardScene))
 	mux.Handle("PUT /lessons/{id}/whiteboard/scene", user(a.handleSaveWhiteboardScene))
 	mux.Handle("GET /whiteboard/auth", user(a.handleWhiteboardAuth))
+
+	// S3-5: личный словарь (ADR-027) — только у студента (04-api.md);
+	// lookup — статусы слов видимого текста для раскраски ClickableText
+	// (ADR-026), POST: пачка слов в GET-строку не влезает
+	student := func(h http.HandlerFunc) http.Handler { return a.requireAnyRole(h, store.RoleStudent) }
+	mux.Handle("POST /user-terms", student(a.handleSaveUserTerm))
+	mux.Handle("GET /user-terms", student(a.handleListUserTerms))
+	mux.Handle("DELETE /user-terms/{term_id}", student(a.handleDeleteUserTerm))
+	mux.Handle("POST /user-terms/lookup", student(a.handleLookupUserTerms))
 	return mux
 }
 
