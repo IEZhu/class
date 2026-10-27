@@ -210,7 +210,9 @@ LLM с контекстом предложения — **закрывает до
   (`scripts/security/smoke_runtime.sh`).
 - Тесты: `backend/internal/tatoeba/tatoeba_test.go` (разбор строк,
   леммы), `backend/internal/dumpfile/dumpfile_test.go` (в том числе
-  `OpenLazy`: версия до открытия, сменившийся файл),
+  `OpenLazy`: версия до открытия, сменившийся файл; `TestBodyIdleTimeout`:
+  источник, замолчавший после заголовков, — ошибка по таймауту простоя
+  тела, медленная живая загрузка доходит до конца),
   `backend/internal/httpapi/tatoeba_test.go` на фикстуре
   `backend/internal/tatoeba/testdata/` (повтор — тот же корпус,
   испорченные строки, продолжение после обрыва в каждой фазе, смена
@@ -457,9 +459,10 @@ LLM с контекстом предложения — **закрывает до
   маскировка и выдуманные слова отсекаются, правило букв — и для слов
   OEWN (o'clock, x-ray, well-known, came's); `TestLLMShaped`,
   `TestClozeOddShapedAnswersStayOffLLM` — непохожий ответ не получает
-  вариантов LLM; `TestClozeLLMSetWithoutCacheNotServed` — пункт без
-  записи кэша не отдаётся; `TestClozeLockKeepsFirstSet` — закреплённый
-  набор не перезаписывается.
+  вариантов LLM; `TestClozeLLMSetWithoutCacheNotServed`,
+  `TestClozeLLMSetOneCacheRowDeleted` — пункт LLM-набора без записи кэша
+  не отдаётся ни выдачей, ни этим запросом (404, без вызова LLM);
+  `TestClozeLockKeepsFirstSet` — закреплённый набор не перезаписывается.
 - **Для ☑ не хватает.** Живого вызова провайдера (обеих частей S5-8):
   ключей у стенда нет — с первым `LLM_API_KEY` проверить DoD
   «дистракторы правдоподобны» на выдаче cloze.

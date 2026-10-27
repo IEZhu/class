@@ -162,7 +162,8 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   отдаче; с ключом LLM пункты после первого — `pending`; пункт
   с LLM-набором без записи кэша не отдаётся. У непохожего ключа
   (t-shirt, café) среди дистракторов словаря есть такой же непохожий
-  (`PickDistractors`), иначе пункта у слова нет.
+  (`PickDistractors`), иначе пункта у слова нет; у обычного ключа
+  непохожих дистракторов ноль или два.
 - DoD «по словарю урока — валидный тест ≥ 5 пунктов» — тест
   `TestClozeLessonDictionaryGivesTest` (`backend/internal/httpapi/cloze_test.go`):
   пять слов урока, назначенных через `SaveUserTerm`, дают пять пунктов из
@@ -181,7 +182,8 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   choice|typing, response_ms}` (student) → 201 `{item_id, term_id, lemma,
   answer, sentence, correct, exact, rating, counted, duplicate, status,
   card, translation, attribution}` / 200 повтор `attempt_id` / 409 `attempt_conflict`
-  / 404 чужой или нет пункта (или слово убрали) / 400.
+  / 404 чужой или нет пункта (или слово убрали, или у пункта LLM-набор
+  без записи кэша) / 400.
 - Маппинг (`cloze.Check`, `cloze.Rate`): верны ключ термина (и когда
   `lemma.Lemma` уводит его в другое слово: rose → rise) и любая форма
   слова; неверно
@@ -200,7 +202,9 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   прогресс «N из M», счётчики «верно/неверно», что стало с графиком;
   варианты `pending`-пунктов — одним `POST /practice/cloze/distractors`,
   пока их нет — «Подбираем варианты…» и ввод слова; время ответа такого
-  пункта в режиме вариантов — от появления кнопок (`restartClock`).
+  пункта после ожидания в режиме вариантов — от появления кнопок или от
+  перехода к вводу слова (`restartClock`; связка в `cloze-session.tsx`
+  проверяется только шагом «Проверка по задачам» в `deploy/README.md`).
   `web/lib/cloze-session.ts` (`distractorRequestIds`, `itemOptions`,
   `restartClock`, `clozeCredit`, `llmErrorNote` и др.) с тестами
   `npm test`; типы
@@ -224,8 +228,17 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   полная), `TestClozeLLMSetWithoutCacheNotServed`,
   `TestClozeOddShapedAnswersStayOffLLM`, `TestClozeLockKeepsFirstSet`,
   сброс записи материалом без файла в `TestClozeMissCacheNewSources`,
-  `TestPickDistractorsOddShapedTarget`, `TestLLMShaped`. Каждый новый
-  тест убивает свой мутант (замер и мутанты — в результате задачи).
+  `TestPickDistractorsOddShapedTarget`, `TestLLMShaped`. Правки ревью
+  этой правки: `TestClozeLLMSetWithoutCacheNotServed` — ещё и 404
+  у `POST /practice/cloze/distractors` и попытки по пункту без записи
+  кэша, `TestClozeLLMSetOneCacheRowDeleted` (удалена одна запись слова
+  с двумя предложениями — отдаётся только пункт второго, с четырьмя
+  вариантами), `TestClozeFreshMissExclusionPerUser` (пункты другого
+  студента по слову не держат его в очереди), `TestPickDistractorsOddShapeCount`
+  (2000 ключей: у обычного ответа непохожих вариантов ноль или два,
+  у непохожего — не меньше двух), случаи ухода с ожидания во ввод
+  в тесте `restartClock`. Каждый новый тест убивает свой мутант (замер
+  и мутанты — в результате задачи).
 - Тесты — `backend/internal/httpapi/cloze_test.go`: свои слова и тексты
   (чужой урок не виден, урок слова раньше нового, материалы, Tatoeba,
   смена предложения после ответа), оценки easy → ранний верный не в
