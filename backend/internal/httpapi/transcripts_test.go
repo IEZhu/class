@@ -118,6 +118,8 @@ type asrStand struct {
 	asr      *fakeASR
 	files    *storagetest.Server
 	lessonID int64
+	// recording — ключ сегмента, который «записал» Egress
+	recording string
 	// Сессии: участник, teacher урока, админ, чужие студент и teacher
 	student, teacher, admin, outsider, otherTeacher *http.Cookie
 	// id тех же людей — автор правки и маппинг спикеров (S2-4, S2-5)
@@ -149,6 +151,11 @@ func newASRStand(t *testing.T, maxAttempts int) *asrStand {
 	}
 	s.lessonID = lesson.ID
 	if _, err := conn.Exec(ctx, `UPDATE lessons SET status = 'live' WHERE id = $1`, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+	// egress_ended придёт после окна комнаты: урок завершается сразу (ADR-031)
+	moveLesson(t, conn, lesson.ID, -2*time.Hour)
+	if s.recording, err = storage.NewRecordingKey(lesson.ID, "mp4"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -183,9 +190,10 @@ func (s *asrStand) egressEnded(t *testing.T) {
 	t.Helper()
 	w := httptest.NewRecorder()
 	s.h.ServeHTTP(w, signedWebhook(t, &livekit.WebhookEvent{Event: eventEgressEnded, EgressInfo: &livekit.EgressInfo{
+		EgressId:    "EG_asr",
 		RoomName:    roomName(s.lessonID),
 		Status:      livekit.EgressStatus_EGRESS_COMPLETE,
-		FileResults: []*livekit.FileInfo{{Filename: storage.RecordingKey(s.lessonID, "mp4"), Size: 1 << 20}},
+		FileResults: []*livekit.FileInfo{{Filename: s.recording, Size: 1 << 20}},
 	}}))
 	expectStatus(t, w, http.StatusOK)
 }
@@ -314,7 +322,7 @@ func TestASRSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "/" + storagetest.Bucket + "/" + storage.RecordingKey(s.lessonID, "mp4"); audio.Path != want ||
+	if want := "/" + storagetest.Bucket + "/" + s.recording; audio.Path != want ||
 		audio.Query().Get("X-Amz-Expires") != "86400" || audio.Query().Get("X-Amz-Signature") == "" {
 		t.Errorf("audio_url = %s", audio)
 	}

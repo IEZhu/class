@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/harvester"
@@ -101,4 +103,24 @@ func materialFilesDelete(objects MaterialFiles) jobs.Handler {
 		}
 		return nil
 	}
+}
+
+// recordingSweepEvery — период уборки записей: урок уходит дальше
+// не позже чем через 5 минут после закрытия окна комнаты.
+const recordingSweepEvery = 5 * time.Minute
+
+// RegisterRecordingSweep — F1 (ADR-031): уборка записей. Урок, чьё окно
+// комнаты закрылось, а egress_ended его не завершил (комната опустела
+// до конца урока, запись упала, вебхук потерялся), уходит в processing
+// с выбранной записью или в done без неё. Джоба периодическая, расписание
+// ставится рядом с хендлером (ADR-021).
+func RegisterRecordingSweep(r *jobs.Runner, s *jobs.Scheduler, st *store.Store) {
+	r.Handle(store.JobRecordingSweep, func(ctx context.Context, _ jobs.Job) error {
+		n, err := st.SweepRecordings(ctx)
+		if n > 0 {
+			log.Printf("worker: уборка записей завершила уроков: %d", n)
+		}
+		return err
+	})
+	s.Every(store.JobRecordingSweep, recordingSweepEvery)
 }

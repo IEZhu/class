@@ -57,6 +57,8 @@ func main() {
 	} else {
 		runner = jobs.NewRunner(st.Pool(), jobs.Config{})
 		registerCore(runner, st)
+		// F1: уроки, которые egress_ended сам не завершил (ADR-031)
+		worker.RegisterRecordingSweep(runner, scheduler, st)
 	}
 	go scheduler.Run(ctx)
 

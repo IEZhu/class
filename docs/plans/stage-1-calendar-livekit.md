@@ -529,6 +529,49 @@ teacher — только студенты своих групп (состав г
   обратимость 0013); `storage/s3_test.go` — точный набор заголовков
   подписи PUT, `Stat`/`Copy`/`Delete` на httptest.
 
+### Ревью раунда 1, F1: сегменты записи, окно комнаты, вебхук LiveKit (2026-10-26)
+
+Решения — [ADR-031](../architecture/decisions.md); правки текста ADR-009,
+ADR-010, ADR-012 на месте.
+- Миграция `0018_lesson_recordings` (обратима: down удаляет таблицу, джобы
+  и расписание `recording_sweep`): таблица `lesson_recordings` — сегмент
+  на каждый запуск Egress (`egress_id` UNIQUE, `room_sid`, `s3_key`,
+  `status` active/complete/failed, `size_bytes`, `error`, `ended_at`).
+- S3: сегмент `recordings/{lesson_id}/{YYYYMMDDTHHMMSSZ}-{16 hex}.mp4|.ogg`
+  (`storage.NewRecordingKey`; `RecordingKey` с фиксированным `room.*`
+  удалён). `lessons.recording_s3_key` — выбранный сегмент.
+- `store.StartLessonRecording(ctx, lessonID, roomSID, key, start)`: только
+  в окне `starts_at` − 15 мин … `ends_at` + 15 мин
+  (`store.RoomOpensBefore`/`RoomClosesAfter`, `store.RoomWindow`), урок
+  в scheduled или live, без active-сегмента той же сессии комнаты;
+  захват `FOR NO KEY UPDATE SKIP LOCKED` вместо `FOR UPDATE` из S1-5,
+  а `JoinAsGuest` читает урок `FOR KEY SHARE` вместо `FOR SHARE` из S1-11:
+  вход гостя больше не ждёт вызова LiveKit.
+- `store.EndLessonRecording` (вместо `FinishLessonRecording`): upsert
+  сегмента по `egress_id`, затем `closeLessonIfOver` — после окна и без
+  active-сегментов урок → processing с самым большим complete-сегментом
+  и джобой `recording_ready`, без записи → done.
+- Джоба `recording_sweep` (`store.SweepRecordings`,
+  `worker.RegisterRecordingSweep`, каждые 5 мин через `jobs.Scheduler`,
+  только роль core): закрывает уроки с закрытым окном, active-сегмент
+  старше `ends_at` + 3 ч помечает failed «egress_ended не пришёл».
+- `POST /webhooks/livekit`: тело ≤ 1 MiB до проверки подписи (413);
+  `egress_ended` с `EGRESS_FAILED`/`EGRESS_ABORTED` или без файлов — 200,
+  сегмент failed; `lessonIDFromRoom` — только каноническое `lesson-{id}`.
+- `GET /lessons/{id}/room-token`: 409 `room_not_open` до окна,
+  `lesson_finished` после; TTL токена — до конца окна, не больше 3 ч.
+- Хранилище: `storage.New` без `S3_ENDPOINT` отвергает пустой регион
+  и `auto` (`ErrNoRegion`), `Client.Region()` — разрешённый регион, его же
+  получает Egress. Compose: `S3_REGION: ${S3_REGION:-}` у api и worker.
+  Новых ключей `.env` и зависимостей нет.
+- Тесты (схема `security_test`): `httpapi/webhooks_test.go` — сегменты
+  посреди урока, новая сессия комнаты, уборка; сбои Egress и потерянный
+  сегмент; 401 на подделки без изменений; потолок тела; окно комнаты;
+  вход гостя не ждёт вызова LiveKit при запуске записи; обратимость 0018; `httpapi/media_test.go` — матрица доступа к записи;
+  `egress_jobs_test.go` и `transcripts_test.go` (ASR) — на сегментах после
+  окна; `storage/s3_test.go` — ключ сегмента и регион.
+- Долг D-20: плеер и ASR — только самый большой сегмент.
+
 ## Риски этапа
 
 GCP Testing mode (лечится сразу Production); free tier LiveKit ≈ 20 уроков/мес —

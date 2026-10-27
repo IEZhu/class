@@ -18,14 +18,28 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Раскладка бакета зафиксирована в 05-storage-s3.md и на неё завязаны
-// Egress (куда писать) и выдача ссылок (откуда читать).
-func TestRecordingKey(t *testing.T) {
-	if got := RecordingKey(42, "mp4"); got != "recordings/42/room.mp4" {
-		t.Errorf("RecordingKey(42, mp4) = %q", got)
+// Раскладка бакета зафиксирована в 05-storage-s3.md: сегмент записи —
+// под префиксом урока, у каждого запуска Egress свой ключ (ADR-031), иначе
+// второй запуск перезаписал бы первую запись.
+func TestNewRecordingKey(t *testing.T) {
+	shape := regexp.MustCompile(`^recordings/42/\d{8}T\d{6}Z-[0-9a-f]{16}\.mp4$`)
+	a, err := NewRecordingKey(42, "mp4")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := RecordingKey(1, "ogg"); got != "recordings/1/room.ogg" {
-		t.Errorf("RecordingKey(1, ogg) = %q", got)
+	b, err := NewRecordingKey(42, "mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !shape.MatchString(a) || !shape.MatchString(b) {
+		t.Errorf("ключи %q, %q не по раскладке", a, b)
+	}
+	if a == b {
+		t.Errorf("два запуска получили один ключ %q", a)
+	}
+	if ogg, err := NewRecordingKey(1, "ogg"); err != nil || !strings.HasPrefix(ogg, "recordings/1/") ||
+		!strings.HasSuffix(ogg, ".ogg") {
+		t.Errorf("NewRecordingKey(1, ogg) = %q, %v", ogg, err)
 	}
 }
 
@@ -96,11 +110,18 @@ func TestNewRegion(t *testing.T) {
 	if _, err := New(keys); !errors.Is(err, ErrNoRegion) {
 		t.Errorf("AWS без региона: err = %v, хотели ErrNoRegion", err)
 	}
+	// auto — регион только R2: шаблон .env ставит его, и без endpoint
+	// он не должен проходить молча (ссылки подписались бы на s3.auto.…)
+	awsAuto := keys
+	awsAuto.Region = "auto"
+	if _, err := New(awsAuto); !errors.Is(err, ErrNoRegion) {
+		t.Errorf("AWS с регионом auto: err = %v, хотели ErrNoRegion", err)
+	}
 
 	aws := keys
 	aws.Region = "eu-central-1"
-	if c, err := New(aws); err != nil || c == nil {
-		t.Errorf("AWS с регионом: (%v, %v), хотели клиент", c, err)
+	if c, err := New(aws); err != nil || c == nil || c.Region() != "eu-central-1" {
+		t.Errorf("AWS с регионом: (%v, %v), хотели клиент с eu-central-1", c, err)
 	}
 
 	r2 := keys
@@ -108,6 +129,9 @@ func TestNewRegion(t *testing.T) {
 	c, err := New(r2)
 	if err != nil || c == nil {
 		t.Fatalf("R2 без региона: (%v, %v), хотели клиент", c, err)
+	}
+	if c.Region() != "auto" {
+		t.Errorf("R2 без региона: Region() = %q, хотели auto", c.Region())
 	}
 	raw, err := c.PresignGet(context.Background(), "k", time.Minute)
 	if err != nil {

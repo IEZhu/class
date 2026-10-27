@@ -65,9 +65,12 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       # S1-3/S1-5: хранилище записей (R2, ADR-009). Без ключей api живёт,
-      # но /media/{id}/url отвечает 503, а запись не запускается
+      # но /media/{id}/url отвечает 503, а запись не запускается. Пустой
+      # регион означает auto только при S3_ENDPOINT (R2) — подставляет его
+      # storage.New, не compose: без endpoint пустой регион и auto — ошибка
+      # старта (ADR-031)
       S3_BUCKET: ${S3_BUCKET:-}
-      S3_REGION: ${S3_REGION:-auto}
+      S3_REGION: ${S3_REGION:-}
       S3_ENDPOINT: ${S3_ENDPOINT:-}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
@@ -130,7 +133,7 @@ services:
       # досок S3-6 (ADR-020), удаление файлов материалов material_files_delete
       # (долг D-4, ADR-024); без ключей снимки и удаления файлов ждут в очереди
       S3_BUCKET: ${S3_BUCKET:-}
-      S3_REGION: ${S3_REGION:-auto}
+      S3_REGION: ${S3_REGION:-}
       S3_ENDPOINT: ${S3_ENDPOINT:-}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
