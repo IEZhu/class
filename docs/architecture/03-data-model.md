@@ -34,7 +34,8 @@ lesson_recordings(id, lesson_id, egress_id /*UNIQUE*/, room_sid /*сессия �
 materials(id, lesson_id, kind /*homework|material*/, title, body_md,
           s3_key /*materials/{lesson_id}/…, ADR-024*/, file_name, file_content_type,
           file_size, file_uploaded_at /*загрузка подтверждена*/,
-          file_etag /*ETag объекта при подтверждении*/)
+          file_etag /*ETag объекта при подтверждении*/,
+          body_tsv /*хранимые лексемы body_md, GIN; поиск cloze, 0022, ADR-037*/)
 
 -- очередь фоновых задач (этап 1); выполненная джоба удаляется (ADR-013)
 jobs(id, kind, payload jsonb, run_at, attempts, last_error, locked_at, locked_by,
@@ -81,7 +82,8 @@ transcripts(id, lesson_id /*UNIQUE*/, provider /*assemblyai*/,
             external_id, vtt_s3_key, error, created_at)
 utterances(transcript_id, idx, speaker_label, user_id nullable /*ручной маппинг A→Иван*/,
            start_ms, end_ms, text, PRIMARY KEY(transcript_id, idx),
-           edited_at, edited_by /*правка текста преподавателем, 0014, ADR-025*/)
+           edited_at, edited_by /*правка текста преподавателем, 0014, ADR-025*/,
+           text_tsv /*хранимые лексемы text, GIN; поиск cloze, 0022, ADR-037*/)
 
 -- индекс субтитров (практика-видео); состояние сборщика — ADR-022
 videos(id, source /*youtube|ted*/, external_id, title, channel, duration_s, lang, added_at,
@@ -118,7 +120,10 @@ cloze_items(id, user_id, term_id /*ответ — лемма; FK на user_terms
             lesson_id, material_id, generated_text_id, tatoeba_id /*ровно свой источник*/,
             sentence /*снимок, до 300 символов*/, blank_start, blank_len /*символы*/,
             context_hash /*sha256 пропуска и предложения*/, distractors text[3] /*леммы*/,
+            option_source /*list|llm — набор вариантов, отданный пункту; NULL — ещё нет*/,
             created_at, UNIQUE(user_id, term_id, context_hash))
+cloze_misses(user_id, term_id, checked_at, PRIMARY KEY(user_id, term_id))
+                    -- отрицательный кэш: нового предложения слову не нашлось
 cloze_distractors(term_id, context_hash, options text[3], provider, model, created_at,
                   PRIMARY KEY(term_id, context_hash))  -- кэш LLM-дистракторов, общий
 cloze_attempts(id, item_id, user_id, client_id /*uuid, UNIQUE(user_id, client_id)*/,

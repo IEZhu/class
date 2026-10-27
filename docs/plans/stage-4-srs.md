@@ -123,9 +123,13 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   `lesson|material|generated|tatoeba` со ссылкой на урок, материал, текст
   или предложение Tatoeba, снимок предложения, пропуск `blank_start` +
   `blank_len`, `context_hash`, `distractors text[3]`; `UNIQUE (user_id,
-  term_id, context_hash)`), `cloze_distractors` (кэш LLM, S5-8 часть 2),
+  term_id, context_hash)`; `option_source` — набор вариантов, закреплённый
+  при первой отдаче), `cloze_misses` (слова без нового предложения,
+  `checked_at`), `cloze_distractors` (кэш LLM, S5-8 часть 2),
   `cloze_attempts` (журнал ответов, `UNIQUE (user_id, client_id)`,
-  `review_id` → `srs_reviews`).
+  `review_id` → `srs_reviews`); хранимые лексемы `utterances.text_tsv`
+  и `materials.body_tsv` (generated `to_tsvector('english', …)`) с GIN
+  `utterances_text_tsv_idx`, `materials_body_tsv_idx`.
 - `backend/internal/cloze/` — `Sentences`, `Find` (пропуск формы слова:
   ровно одно вхождение, не часть составного слова, 4–30 слов, до 200
   символов, без разметки), `Parts`, `Hash`, `PickDistractors` (словарь
@@ -133,16 +137,26 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   `Options` (порядок по ключу пункта); тесты `cloze_test.go`,
   `distractors_test.go`. В `internal/lemma` — `WordSpans` (места слов
   токенизатора `Words`) и `POS` (части речи OEWN).
-- Store (`backend/internal/store/cloze.go`): `ClozeTargets` (к показу,
-  шаги обучения, остальные), `ClozeWords`, `ClozeItemRefs`,
-  `ClozeLessonTexts` (реплики и материалы своих уроков одним проходом FTS
-  на все слова), `ClozeOtherTexts` (свои `generated_texts`, Tatoeba через
-  `Examples`), `CreateClozeItem`, `ClozeItems`.
+- Store (`backend/internal/store/cloze.go`): `ClozeTargets` (страница
+  очереди: к показу, шаги обучения, остальные; `Checked` — свежая запись
+  `cloze_misses`), `RecordClozeMisses`, `ClozeWords`, `ClozeItemRefs`,
+  `ClozeLessonTexts` (реплики и видимые участникам материалы своих уроков:
+  tsquery слов одним запросом, тексты — запросом на слово по хранимым
+  лексемам; тест плана `TestClozeLessonTextsUseIndexes` в
+  `backend/internal/store/cloze_test.go`), `ClozeOtherTexts` (свои
+  `generated_texts`, Tatoeba через `Examples`), `CreateClozeItem`,
+  `ClozeItems`, `LockClozeOptions`.
 - `GET /practice/cloze?limit=` (student, 10, до 20;
   `backend/internal/httpapi/cloze.go`) → `{items[{id, before, after,
-  options[4], distractor_source, source, lesson_id, attribution, due}],
-  due_total, llm_available}`; ответа (леммы, термина, перевода) в выдаче
-  нет. У слова — неотвеченный пункт, иначе новое предложение, иначе давний.
+  options[], distractor_source: list|llm|pending, source, lesson_id,
+  attribution: {author, license, license_url}, due}], due_total,
+  llm_available}`; ответа (леммы, термина, перевода) и ссылок на
+  tatoeba.org в выдаче нет. У слова — неотвеченный пункт, иначе новое
+  предложение, иначе давний; предложение — не больше чем в одном пункте
+  выдачи; слова идут страницами до 200, слово без нового предложения час
+  не ищется (раньше — после нового материала, своего текста, импорта
+  Tatoeba). Набор вариантов пункта закрепляется при первой отдаче; с
+  ключом LLM пункты после первого — `pending`.
 - DoD «по словарю урока — валидный тест ≥ 5 пунктов» — тест
   `TestClozeLessonDictionaryGivesTest` (`backend/internal/httpapi/cloze_test.go`):
   пять слов урока, назначенных через `SaveUserTerm`, дают пять пунктов из
@@ -154,9 +168,11 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
 - `POST /practice/cloze/{id}/attempts {attempt_id, answer, mode:
   choice|typing, response_ms}` (student) → 201 `{item_id, term_id, lemma,
   answer, sentence, correct, exact, rating, counted, duplicate, status,
-  card, translation}` / 200 повтор `attempt_id` / 409 `attempt_conflict`
+  card, translation, attribution}` / 200 повтор `attempt_id` / 409 `attempt_conflict`
   / 404 чужой или нет пункта (или слово убрали) / 400.
-- Маппинг (`cloze.Check`, `cloze.Rate`): верна любая форма слова; неверно
+- Маппинг (`cloze.Check`, `cloze.Rate`): верны ключ термина (и когда
+  `lemma.Lemma` уводит его в другое слово: rose → rise) и любая форма
+  слова; неверно
   — again, верно не дольше порога — easy (выбор 5 с, ввод 8 с; подобрать
   по `cloze_attempts`), иначе good. Засчитывается ответ по карточке к
   показу и промах по любой; верный ответ раньше показа — только в журнал
@@ -166,12 +182,30 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
   `srs_reviews.source = 'cloze'`, статус слова по карточке.
 - web: `/practice/cloze` (`web/app/practice/cloze/page.tsx`,
   `cloze-session.tsx`): текст до и после пропуска через `<ClickableText>`,
-  после ответа — предложение целиком и перевод Tatoeba с подписью;
+  после ответа — предложение целиком и перевод Tatoeba, ссылки на его
+  страницу и перевод (до ответа — только автор и лицензия);
   варианты кнопками и клавишами 1–4 или ввод слова, Enter — дальше,
-  прогресс «N из M», счётчики «верно/неверно», что стало с графиком.
-  `web/lib/cloze-session.ts` с тестами `npm test`; типы `ClozeItem`,
-  `ClozePage`, `ClozeOptions`, `ClozeAttemptResult` в `web/lib/api.ts`;
-  ссылка «Вставь слово» в шапке студента.
+  прогресс «N из M», счётчики «верно/неверно», что стало с графиком;
+  варианты `pending`-пунктов — одним `POST /practice/cloze/distractors`,
+  пока их нет — «Подбираем варианты…» и ввод слова.
+  `web/lib/cloze-session.ts` (`distractorRequestIds`, `itemOptions`,
+  `clozeCredit`, `llmErrorNote` и др.) с тестами `npm test`; типы
+  `ClozeItem`, `ClozePage`, `ClozeOptions`, `ClozeAttemptResult`
+  в `web/lib/api.ts`; ссылка «Вставь слово» в шапке студента.
+- Тесты правок ревью cloze (`backend/internal/httpapi/cloze_test.go`,
+  `backend/internal/cloze/*_test.go`): ключ термина для rose, wound,
+  found, bore, saw, fell, better выбором и вводом; 35 слов без
+  предложений во главе очереди — полная выдача, запись `cloze_misses`
+  и её устаревание через час; сброс записи своим текстом, импортом
+  Tatoeba и подтверждением файла материала (новый транскрипт — нет);
+  разные предложения в выдаче; материал без загруженного файла — не
+  источник; свой сгенерированный текст — источник, чужой — нет; ответ
+  у вариантов словаря — лемма, а не форма; конфликты `attempt_id` по
+  пункту и режиму и гонка ключа до `UNIQUE` (409, оценка откатилась);
+  каскады при удалении материала, отмене урока, удалении своего текста
+  и предложения Tatoeba; составное слово, служебные слова и неизвестная
+  часть речи в подборе дистракторов. Каждый новый тест убивает свой
+  мутант (замер и мутанты — в результате задачи).
 - Тесты — `backend/internal/httpapi/cloze_test.go`: свои слова и тексты
   (чужой урок не виден, урок слова раньше нового, материалы, Tatoeba,
   смена предложения после ответа), оценки easy → ранний верный не в
