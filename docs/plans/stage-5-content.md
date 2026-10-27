@@ -187,7 +187,8 @@ LLM с контекстом предложения — **закрывает до
   `backend/cmd/tatoebaimport` (в образе worker'а,
   `/usr/local/bin/tatoebaimport`; флаги `-links`, `-english`, `-russian`,
   `-restart`, `-max-runes` 150, `-max-translations` 1), make-цель
-  `tatoeba-import` (`TATOEBA_DIR` — локальные файлы). Источник по
+  `tatoeba-import` (`TATOEBA_DIR` — локальные файлы, `TATOEBA_ARGS` —
+  флаги команды, например `-restart`). Источник по
   умолчанию — поязыковые выгрузки tatoeba.org `eng-rus_links.tsv.bz2`,
   `eng_sentences_detailed.tsv.bz2`, `rus_sentences_detailed.tsv.bz2`
   (формат сверен с выгрузкой 2026-10-24). Загрузка и чтение дампов —
