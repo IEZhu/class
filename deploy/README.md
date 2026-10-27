@@ -549,8 +549,8 @@ make logs
 контейнеры работают на своих образах до шага 4.
 Скрипту нужны `zstd` на хосте и свой бакет `BACKUP_S3_*` (раздел
 «Бэкапы Postgres»); с пустыми `BACKUP_S3_*` он пишет дамп в бакет записей
-под токеном `S3_*`, который получает LiveKit (долг D-8). Без своего
-бакета или без `zstd` шаг 2 заменяет локальная копия:
+под токеном `S3_*`, который получает LiveKit (долг D-8). Если своего
+бакета `BACKUP_S3_*` или `zstd` нет, вместо шага 2 снимите локальную копию:
 
 ```bash
 install -d -m 0700 ~/lingua-backups
@@ -569,10 +569,15 @@ docker compose -f deploy/docker-compose.yml exec -T postgres \
 
 **Откат** (миграция упала или новый код не встал): база возвращается
 к копии шага 2 начисто, а не `--clean` поверх — таблиц 0006–0024 в копии
-нет, и `--clean` их не удаляет (раздел «Восстановление»).
+нет, и `--clean` их не удаляет (раздел «Восстановление»). Сначала
+останавливаются все клиенты базы, включая `harvester` под профилем
+(`stop` его останавливает, если он запущен, и молча пропускает, если нет):
+иначе он переподключится, пока `pg_restore` разворачивает копию.
+Сборщик, запущенный с другой машины с `DATABASE_URL` этой базы,
+останавливают там же.
 
 ```bash
-docker compose -f deploy/docker-compose.yml stop caddy web api worker
+docker compose -f deploy/docker-compose.yml stop caddy web api worker harvester
 docker compose -f deploy/docker-compose.yml exec -T postgres \
     sh -c 'dropdb -U "$POSTGRES_USER" --force "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
 # локальная копия; копия из бакета — sudo deploy/restore-pg.sh --db <POSTGRES_DB> --date <дата шага 2, UTC>
