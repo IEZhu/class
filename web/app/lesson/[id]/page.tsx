@@ -1,17 +1,19 @@
 import { notFound, redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../../lib/api";
-import type { LessonDetail, Material, User } from "../../../lib/api";
+import type { LessonDetail, LessonTerm, Material, User } from "../../../lib/api";
 import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
 import ClickableText from "../../clickable-text";
 import UserBar from "../../user-bar";
 import GuestLink from "./guest-link";
+import LessonDictionary from "./lesson-dictionary";
 import LessonReplay from "./lesson-replay";
 import LessonRoom from "./lesson-room";
 import { DeleteMaterial, FileDownload, MaterialUpload } from "./material-files";
 import LiveTabs from "./live-tabs";
+import TermPicker from "./term-picker";
 import Whiteboard from "./whiteboard";
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", {
@@ -79,6 +81,14 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
   const isTeacher = me.id === lesson.teacher_id;
   const materials = lesson.materials.filter((m) => m.kind === "material");
   const homework = lesson.materials.filter((m) => m.kind === "homework");
+  // Словарь урока (S3-8): преподаватель собирает его в чеклисте, когда урок
+  // начался; остальным участникам — подтверждённые слова. Сбой запроса
+  // (например, миграция 0019 не применена) — страница без словаря
+  const lessonTerms = isTeacher
+    ? []
+    : await apiFetch<{ items: LessonTerm[] }>(`/lessons/${lesson.id}/terms`)
+        .then((r) => r.items)
+        .catch(() => []);
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
@@ -100,7 +110,7 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
 
       {phase === "live" && (
         <section style={liveSectionStyle}>
-          {/* Доска — только на живом уроке (S3-6); словарь урока приедет в S3-7 */}
+          {/* Доска — только на живом уроке (S3-6); словарь урока — ниже (S3-8) */}
           <LiveTabs
             room={<LessonRoom lessonId={lesson.id} />}
             board={<Whiteboard lessonId={lesson.id} userName={me.name} />}
@@ -134,6 +144,16 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
           <p>Урок завершён. Запись и транскрипт будут появляться здесь начиная с этапов 1–2.</p>
         </section>
       )}
+
+      {isTeacher && phase !== "scheduled" && (
+        <TermPicker
+          lessonId={lesson.id}
+          students={lesson.participants
+            .filter((p) => p.role === "student" && !p.archived)
+            .map((p) => ({ user_id: p.user_id, name: p.name }))}
+        />
+      )}
+      <LessonDictionary items={lessonTerms} />
 
       {isTeacher && <MaterialUpload lessonId={lesson.id} />}
       <MaterialsSection title="Материалы" items={materials} isTeacher={isTeacher} />
