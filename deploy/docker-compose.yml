@@ -94,6 +94,8 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_DAILY_LIMIT: ${LLM_DAILY_LIMIT:-}
+      # S5-8: суточный лимит «объясни» (ADR-039)
+      LLM_EXPLAIN_DAILY_LIMIT: ${LLM_EXPLAIN_DAILY_LIMIT:-}
     # S3-3: translate — внутренняя сеть до libretranslate
     networks: [default, translate]
     depends_on:

@@ -26,7 +26,8 @@ Caddyfile            '/' → web, '/api' → api, '/whiteboard/lesson-{id}/socke
                           WHITEBOARD_ENABLED (ADR-020)
                        5: HARVESTER_COOKIES_FILE, HARVESTER_DATABASE_URL (ADR-022),
                           LLM_PROVIDER, LLM_API_KEY, LLM_MODEL,
-                          LLM_DAILY_LIMIT (S5-6, ADR-029)
+                          LLM_DAILY_LIMIT (S5-6, ADR-029),
+                          LLM_EXPLAIN_DAILY_LIMIT (S5-8, ADR-039)
 backup-pg.sh         ночной pg_dump | zstd → S3, retention 7/30 (S1-7)
 restore-pg.sh        восстановление из копии в S3 (S1-7)
 backup-lib.sh        общая часть двух скриптов выше

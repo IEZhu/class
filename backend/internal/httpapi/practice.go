@@ -124,7 +124,7 @@ func (a *API) handleGenerateText(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	ok, err := a.store.ReserveLLMRequest(r.Context(), u.ID, a.llmDailyLimit)
+	ok, err := a.store.ReserveLLMRequest(r.Context(), u.ID, store.LLMKindGenerate, a.llmDailyLimit)
 	if err != nil {
 		internalError(w, "reserve llm request", err)
 		return
