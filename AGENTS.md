@@ -27,7 +27,8 @@ Status: stage 0 is done, stage 1 is in progress (last commit 2026-08-02); the cu
   decompression shared by the imports), `internal/tatoeba/` (ADR-028), `internal/llm/` (LLM
   providers, ADR-029), `internal/textgen/` (prompt and coverage validator, ADR-030),
   `internal/lessonterms/` (lesson dictionary candidates from whiteboard text, ADR-033),
-  `internal/srs/` (FSRS scheduling over go-fsrs, ADR-036),
+  `internal/srs/` (FSRS scheduling over go-fsrs, ADR-036), `internal/explain/` (the popup
+  «объясни» prompt and output bounds, ADR-039),
   `internal/testdb/` (the shared DB test harness),
   `migrations/` (golang-migrate `NNNN_*.up.sql` / `.down.sql`, plus `seed.sql`, which is not a
   migration).
@@ -87,7 +88,7 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   `HARVESTER_DATABASE_URL` (the harvester's own least-privilege role, created by
   `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022),
   `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_DAILY_LIMIT` (api only: text generation,
-  503 without the key, ADR-029). The api also
+  503 without the key, ADR-029), `LLM_EXPLAIN_DAILY_LIMIT` (the popup «объясни», ADR-039). The api also
   reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
   `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
   `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots and `material_files_delete`

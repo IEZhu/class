@@ -49,12 +49,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("api: %v", err)
 	}
-	llmDailyLimit := 0
-	if v := os.Getenv("LLM_DAILY_LIMIT"); v != "" {
-		if llmDailyLimit, err = strconv.Atoi(v); err != nil || llmDailyLimit < 1 {
-			log.Fatalf("api: LLM_DAILY_LIMIT=%q — целое число не меньше 1", v)
-		}
-	}
+	llmDailyLimit := limitFromEnv("LLM_DAILY_LIMIT")
+	// S5-8: объяснения слов — свой счётчик и лимит (ADR-039)
+	llmExplainDailyLimit := limitFromEnv("LLM_EXPLAIN_DAILY_LIMIT")
 	api, err := httpapi.New(st, httpapi.Config{
 		PublicBaseURL: "https://" + domain,
 		// Ключи интеграций опциональны: без них работает всё, кроме
@@ -73,6 +70,7 @@ func main() {
 		LibreTranslateURL:       os.Getenv("LIBRETRANSLATE_URL"),
 		LLM:                     provider,
 		LLMDailyLimit:           llmDailyLimit,
+		LLMExplainDailyLimit:    llmExplainDailyLimit,
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)
@@ -84,7 +82,7 @@ func main() {
 		log.Printf("api: LIBRETRANSLATE_URL пуст — клик по слову отвечает без перевода")
 	}
 	if provider == nil {
-		log.Printf("api: LLM_API_KEY пуст — генерация текстов отвечает 503")
+		log.Printf("api: LLM_API_KEY пуст — генерация текстов и «объясни» отвечают 503")
 	} else {
 		log.Printf("api: LLM %s, модель %s", provider.Name(), provider.Model())
 	}
@@ -103,4 +101,18 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// limitFromEnv — суточный лимит из окружения: пусто — 0 (умолчание
+// httpapi), иначе целое не меньше 1, или api не стартует.
+func limitFromEnv(name string) int {
+	v := os.Getenv(name)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		log.Fatalf("api: %s=%q — целое число не меньше 1", name, v)
+	}
+	return n
 }

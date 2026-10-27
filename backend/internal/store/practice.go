@@ -32,18 +32,26 @@ type GeneratedText struct {
 	CreatedAt    time.Time
 }
 
-// ReserveLLMRequest занимает место в суточном лимите генераций
-// пользователя (ADR-029): false — лимит на сегодня (UTC) исчерпан.
+// Виды вызовов LLM — у каждого свой суточный счётчик llm_usage.kind
+// (ADR-039): объяснение слова дешевле генерации на порядок и не должно
+// съедать её лимит.
+const (
+	LLMKindGenerate = "generate"
+	LLMKindExplain  = "explain"
+)
+
+// ReserveLLMRequest занимает место в суточном лимите вызовов вида kind
+// у пользователя (ADR-029): false — лимит на сегодня (UTC) исчерпан.
 // Проверка и инкремент — один оператор, поэтому параллельные запросы
 // не проскочат мимо лимита.
-func (s *Store) ReserveLLMRequest(ctx context.Context, userID int64, dailyLimit int) (bool, error) {
+func (s *Store) ReserveLLMRequest(ctx context.Context, userID int64, kind string, dailyLimit int) (bool, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO llm_usage (user_id, day, requests)
-		 VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 1)
-		 ON CONFLICT (user_id, day) DO UPDATE SET requests = llm_usage.requests + 1
-		 WHERE llm_usage.requests < $2
-		 RETURNING requests`, userID, dailyLimit).Scan(&n)
+		`INSERT INTO llm_usage (user_id, day, kind, requests)
+		 VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $2, 1)
+		 ON CONFLICT (user_id, day, kind) DO UPDATE SET requests = llm_usage.requests + 1
+		 WHERE llm_usage.requests < $3
+		 RETURNING requests`, userID, kind, dailyLimit).Scan(&n)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

@@ -149,6 +149,22 @@ export interface TermClick {
   examples: TermExample[];
   // Статус в личном словаре студента (S3-5); null — слова там нет
   status: TermStatus | null;
+  // Показывать ли «объясни» (S5-8): термин есть, LLM настроен, зритель
+  // не гость события (ADR-039)
+  explain_available: boolean;
+}
+
+// Ответ POST /terms/{id}/explain (S5-8, ADR-039): объяснение слова в
+// предложении простым текстом, абзацы через пустую строку; cached — из
+// кэша, без вызова LLM.
+export interface TermExplanation {
+  term_id: number;
+  lemma: string;
+  explanation: string;
+  cached: boolean;
+  provider: string;
+  model: string;
+  created_at: string;
 }
 
 // Пример Tatoeba в ответе клика. CC BY 2.0 FR разрешает показ, только

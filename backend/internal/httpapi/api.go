@@ -53,6 +53,9 @@ type Config struct {
 	// пользователя в сутки; 0 — DefaultLLMDailyLimit (ADR-029).
 	LLM           llm.Provider
 	LLMDailyLimit int
+	// LLMExplainDailyLimit — объяснений слов (S5-8) на пользователя в
+	// сутки, свой счётчик; 0 — DefaultLLMExplainDailyLimit (ADR-039).
+	LLMExplainDailyLimit int
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -80,8 +83,9 @@ type API struct {
 	// translator — nil, если LibreTranslate не настроен
 	translator *translate.LibreTranslate
 	// llm — nil, если ключ LLM не задан (S5-6)
-	llm           llm.Provider
-	llmDailyLimit int
+	llm                  llm.Provider
+	llmDailyLimit        int
+	llmExplainDailyLimit int
 	// srs — планировщик FSRS карточек (S4-3, ADR-036); now — часы оценок
 	// и очереди, тесты подставляют свои
 	srs *srs.Scheduler
@@ -120,6 +124,10 @@ func New(s *store.Store, cfg Config) (*API, error) {
 	a.llm, a.llmDailyLimit = cfg.LLM, cfg.LLMDailyLimit
 	if a.llmDailyLimit <= 0 {
 		a.llmDailyLimit = DefaultLLMDailyLimit
+	}
+	a.llmExplainDailyLimit = cfg.LLMExplainDailyLimit
+	if a.llmExplainDailyLimit <= 0 {
+		a.llmExplainDailyLimit = DefaultLLMExplainDailyLimit
 	}
 	// Без ключей storage.New отдаёт nil-указатель; в интерфейс его класть
 	// нельзя — проверка a.storage == nil перестала бы его видеть
@@ -278,6 +286,10 @@ func (a *API) Router() http.Handler {
 	// под слова вызывающего и субтитры одного видео для плеера
 	mux.Handle("GET /practice/videos", learner(a.handlePracticeVideos))
 	mux.Handle("GET /practice/videos/{id}", learner(a.handlePracticeVideo))
+
+	// S5-8: «объясни» в попапе слова — LLM по предложению, кэш по термину
+	// и предложению (ADR-039). Гостю события нет: вызов стоит денег
+	mux.Handle("POST /terms/{id}/explain", a.requireAnyRole(http.HandlerFunc(a.handleExplainTerm), explainRoles...))
 	return mux
 }
 

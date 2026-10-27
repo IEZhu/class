@@ -45,11 +45,21 @@ func (s *Store) EnsureTerm(ctx context.Context, lang, lemma, surface string) (*T
 }
 
 func (s *Store) termByLemma(ctx context.Context, lang, lemma string) (*Term, error) {
-	t := &Term{}
-	err := s.pool.QueryRow(ctx,
+	return s.scanTerm(s.pool.QueryRow(ctx,
 		`SELECT id, lang, lemma, surface, translation_cache FROM terms
-		 WHERE lang = $1 AND lemma = $2`, lang, lemma).
-		Scan(&t.ID, &t.Lang, &t.Lemma, &t.Surface, &t.Translations)
+		 WHERE lang = $1 AND lemma = $2`, lang, lemma))
+}
+
+// TermByID — термин по id из ответа клика («объясни», S5-8);
+// ErrNotFound — такого нет.
+func (s *Store) TermByID(ctx context.Context, id int64) (*Term, error) {
+	return s.scanTerm(s.pool.QueryRow(ctx,
+		`SELECT id, lang, lemma, surface, translation_cache FROM terms WHERE id = $1`, id))
+}
+
+func (s *Store) scanTerm(row pgx.Row) (*Term, error) {
+	t := &Term{}
+	err := row.Scan(&t.ID, &t.Lang, &t.Lemma, &t.Surface, &t.Translations)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -34,8 +34,9 @@
   `translate`: `LT_LOAD_ONLY=en,ru`, один процесс (`LT_THREADS=1`),
   внутренняя сеть `translate` без выхода наружу, адрес для api —
   `LIBRETRANSLATE_URL` ([ADR-018](../decisions.md), долг D-10).
-- DeepL и LLM-объяснение (шаги 4–5) не реализованы: «второе мнение» —
-  по мере надобности, «объясни» — S5-8 (долг D-2).
+- DeepL (шаг 4) не реализован — «второе мнение» по мере надобности.
+  LLM-объяснение (шаг 5) — `POST /terms/{id}/explain` с кэшем по слову и
+  предложению (S5-8, [ADR-039](../decisions.md), долг D-2 закрыт).
 
 Связано: [../02-services.md](../02-services.md) ·
 план [stage-3](../../plans/stage-3-dictionary-whiteboard.md) ·

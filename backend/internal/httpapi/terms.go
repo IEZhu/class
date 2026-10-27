@@ -29,8 +29,8 @@ const (
 
 type termClickRequest struct {
 	Surface string `json:"surface"`
-	// ContextSentence пока только проверяется: по нему будет работать
-	// «объясни» (S5-8, долг D-2)
+	// ContextSentence пока только проверяется: попап шлёт его же в
+	// «объясни» (S5-8)
 	ContextSentence string `json:"context_sentence"`
 	// LessonID — клик на странице урока: у участника он ещё и кандидат
 	// словаря урока (S3-7, ADR-033)
@@ -51,8 +51,8 @@ type termDefinition struct {
 
 type termClickResponse struct {
 	// TermID — ссылка для следующих шагов попапа: «в мой словарь» (S3-5),
-	// «объясни» (S5-8). 0 — слово незнакомо (нет ни в OEWN, ни в датасете):
-	// термин не заводится
+	// «объясни» (S5-8, POST /terms/{id}/explain). 0 — слово незнакомо
+	// (нет ни в OEWN, ни в датасете): термин не заводится
 	TermID  int64  `json:"term_id"`
 	Lemma   string `json:"lemma"`
 	Surface string `json:"surface"`
@@ -66,6 +66,9 @@ type termClickResponse struct {
 	// Status — статус слова в личном словаре студента (S3-5); null — слова
 	// в словаре нет или словаря у роли нет
 	Status *int `json:"status"`
+	// ExplainAvailable — попап показывает «объясни» (S5-8): у слова есть
+	// термин, LLM настроен, роль допускает (canExplain)
+	ExplainAvailable bool `json:"explain_available"`
 }
 
 // termExample — английское предложение с леммой и его русский перевод.
@@ -153,6 +156,7 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 	if req.LessonID != nil {
 		a.recordClickCandidate(ctx, *req.LessonID, term.ID, surface)
 	}
+	resp.ExplainAvailable = a.canExplain(userFrom(ctx))
 	resp.Examples = a.examples(ctx, term)
 	if tr, ok := term.Translations[translationLang]; ok {
 		resp.Translation = &termTranslation{Text: tr.Text, Source: tr.Source}
@@ -170,7 +174,8 @@ func (a *API) handleTermClick(w http.ResponseWriter, r *http.Request) {
 
 // checkClickLesson — клик на уроке: урок существует и виден кликнувшему,
 // поэтому кандидата в чужой урок не записать. Та же проверка стережёт
-// source_lesson_id личного словаря (S3-5).
+// source_lesson_id личного словаря (S3-5) и предложение урока у «объясни»
+// (S5-8).
 func (a *API) checkClickLesson(w http.ResponseWriter, r *http.Request, lessonID int64) bool {
 	if lessonID <= 0 {
 		writeError(w, http.StatusBadRequest, "bad_request", "некорректный lesson_id")

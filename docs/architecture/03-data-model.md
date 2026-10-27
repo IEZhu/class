@@ -105,7 +105,11 @@ generated_texts(id, user_id, level, genre, max_words, target_lemmas text[] /*= t
                 lemmas text[] /*леммы всего текста для поиска S5-7 (0020, ADR-035); NULL — до 0020*/,
                 body /*абзацы без разметки*/, word_count, coverage, occurrences jsonb,
                 unknown_share, attempts, provider, model, created_at)
-llm_usage(user_id, day /*UTC*/, requests)   -- суточный лимит генераций (ADR-029)
+llm_usage(user_id, day /*UTC*/, kind /*generate|explain, 0024*/, requests)
+                                            -- суточные лимиты LLM (ADR-029, ADR-039)
+-- кэш «объясни» (0024, ADR-039): ключ — термин и sha256 нормализованного предложения
+term_explanations(term_id, context_hash, context, body /*простой текст*/, provider, model,
+                  created_at, PRIMARY KEY(term_id, context_hash))
 cloze_tests(id, source /*lesson|generated_text*/, source_id, term_ids int[])
 cloze_items(test_id, idx, sentence, answer_term_id, distractor_term_ids int[])
 cloze_attempts(id, test_id, user_id, answers jsonb, score, finished_at)
@@ -136,6 +140,7 @@ whiteboards(lesson_id, scene_s3_key, updated_at)   -- бэкап JSON-сцены
 | tatoeba_sentences, tatoeba_links, tatoeba_imports (миграция `0016_tatoeba`) | 5 | S5-4 |
 | generated_texts, llm_usage (миграция `0017_generated_texts`) | 5 | S5-6 |
 | колонка generated_texts.lemmas, индекс sessions_expires_idx (миграция `0020_text_practice`, ADR-035) | 5 | S5-7, долг D-15 |
+| term_explanations, колонка llm_usage.kind (миграция `0024_term_explanations`) | 5 | S5-8 |
 
 ## Инварианты модели
 

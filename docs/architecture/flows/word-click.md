@@ -2,7 +2,7 @@
 
 > Работает в любом тексте системы через единый компонент `<ClickableText>`
 > (инвариант). Реализуется на этапе 3; примеры Tatoeba подключены в S5-4
-> (долг D-1 закрыт), LLM-объяснение — на этапе 5 (долг D-2).
+> (долг D-1 закрыт), LLM-объяснение — в S5-8 (долг D-2 закрыт, ADR-039).
 
 ## Последовательность
 
@@ -11,6 +11,7 @@ sequenceDiagram
     participant B as Browser (ClickableText)
     participant A as api
     participant LT as LibreTranslate
+    participant LLM as LLM-провайдер
     B->>A: POST /terms/click {surface, context_sentence, lesson_id?}
     A->>A: лемматизация (en)
     A->>A: дефиниции из словарного датасета (PG) — по лемме и по самой форме
@@ -25,8 +26,18 @@ sequenceDiagram
     else незнакомое слово
         A->>A: term_id 0, translation null, examples [], в базу ничего
     end
-    A-->>B: {term_id, lemma, surface, translation | null, definitions[], examples[], status}
+    A-->>B: {term_id, lemma, surface, translation | null, definitions[], examples[], status, explain_available}
     B->>A: POST /user-terms («в мой словарь»)
+    opt кнопка «объясни» (explain_available)
+        B->>A: POST /terms/{term_id}/explain {surface, context_sentence, lesson_id?}
+        A->>A: term_explanations по термину и sha256 предложения?
+        alt кэш-мисс
+            A->>A: место в суточном лимите объяснений
+            A->>LLM: промпт: слово и предложение — данные
+            LLM-->>A: объяснение (пишем в кэш)
+        end
+        A-->>B: {explanation, cached}
+    end
 ```
 
 Контракт — [04-api.md](../04-api.md): `translation` — `null`, если перевода
@@ -50,7 +61,11 @@ sequenceDiagram
   русским переводом, с подписью по CC BY 2.0 FR (авторы и ссылки на
   tatoeba.org в `attribution`). Корпус не импортирован — список пуст,
   блок скрыт. Импорт — [../integrations/tatoeba.md](../integrations/tatoeba.md).
-- Кнопка «объясни» → LLM с контекстом предложения *(после S5-8, долг D-2)*.
+- Кнопка «объясни» → LLM с контекстом предложения (S5-8, ADR-039): по-русски
+  значение слова в этом предложении и заметка о грамматике, простым текстом
+  через `<ClickableText>`. Кэш — по термину и нормализованному предложению,
+  общий: повтор не зовёт LLM и не тратит суточный лимит. Кнопки нет без
+  ключа LLM и у гостя события (`explain_available: false`, долг D-27).
 - Кнопка «в мой словарь» → `user_terms(status=1)`; клик участника урока
   по знакомому слову дополнительно пишет кандидата
   `lesson_term_candidates(source='click')` — счётчик кликов, клики

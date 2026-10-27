@@ -4,11 +4,11 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyn
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import type { TermClick, TermExample } from "../lib/api";
+import type { TermClick, TermExample, TermExplanation } from "../lib/api";
 import type { TermStatus } from "../lib/term-status";
 import { sentenceAround, tokenize, uniqueKeys } from "../lib/tokenize";
 import { requestJson } from "./forms";
-import TermStatusControl, { termStatuses } from "./term-status-control";
+import TermStatusControl, { buttonStyle, termStatuses } from "./term-status-control";
 
 // <ClickableText> — единственный рендер текста в системе (инвариант,
 // S3-1, ADR-026): материалы, домашка, транскрипт, субтитры, Tatoeba,
@@ -247,6 +247,15 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
           {scope.dictionary && hasTerm(data) && (
             <TermStatusControl termId={data.term_id} lemma={data.lemma} status={status} lessonId={scope.lessonId} />
           )}
+          {hasTerm(data) && data.explain_available && (
+            <TermExplain
+              key={`${data.term_id}:${word.context}`}
+              termId={data.term_id}
+              word={word}
+              lessonId={scope.lessonId}
+              onWord={setWord}
+            />
+          )}
           {data.definitions.length > 0 && (
             <div style={sectionStyle}>
               <ol style={{ margin: 0, paddingLeft: "1.25rem" }}>
@@ -301,6 +310,65 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// TermExplain — «объясни» (S5-8, ADR-039): LLM объясняет слово в том
+// предложении, где его кликнули. Ответ — простой текст: абзацы идут в
+// ClickableText (инвариант единого рендера), английские слова в нём
+// кликаются и переводят попап к ним. Кнопка — только по явному нажатию:
+// вызов стоит денег, повтор того же предложения api берёт из кэша.
+function TermExplain({
+  termId,
+  word,
+  lessonId,
+  onWord,
+}: {
+  termId: number;
+  word: WordClick;
+  lessonId: number | null;
+  onWord: (word: WordClick) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
+
+  async function explain() {
+    setBusy(true);
+    setError(null);
+    try {
+      const d = await requestJson<TermExplanation>(`/api/terms/${termId}/explain`, "POST", {
+        surface: word.surface,
+        context_sentence: word.context,
+        lesson_id: lessonId ?? undefined,
+      });
+      setText(d.explanation);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "не удалось получить объяснение");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (text !== null) {
+    return (
+      <div style={sectionStyle}>
+        <b>Объяснение</b>
+        {text.split("\n\n").map((p, i) => (
+          <p key={i} style={{ margin: "0.25rem 0 0" }}>
+            <ClickableText text={p} onWord={onWord} />
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div style={sectionStyle}>
+      <button type="button" disabled={busy} onClick={() => void explain()} style={buttonStyle}>
+        {busy ? "объясняем…" : "объясни"}
+      </button>
+      {error && <p style={{ margin: "0.25rem 0 0", color: "crimson" }}>{error}</p>}
     </div>
   );
 }
