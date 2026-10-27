@@ -66,8 +66,8 @@ func DistractorRequest(items []LLMItem) llm.Request {
 // ParseDistractors — проверенные варианты по id пункта. Ответ модели —
 // данные: берётся JSON-объект от первой { до последней } (модель может
 // обернуть его в текст или ограждение кода), из него — пункты с
-// известным id. Вариант годится, если это одно слово (lemma.IsWord), не
-// ответ и не другая его форма (ключ словаря или лемма совпали бы с
+// известным id. Вариант годится, если это известное слово (llmOption),
+// не ответ и не другая его форма (ключ словаря или лемма совпали бы с
 // ответом или леммой термина) и не повтор уже взятого. Пункт, у которого
 // годных вариантов меньше Distractors, в карту не попадает — для него
 // остаются дистракторы из словаря.
@@ -107,7 +107,7 @@ func validOptions(it LLMItem, raw []string) []string {
 	out := make([]string, 0, Distractors)
 	for _, o := range raw {
 		o = strings.ToLower(strings.TrimSpace(o))
-		if !lemma.IsWord(o) {
+		if !llmOption(o) {
 			continue
 		}
 		n, l := lemma.Normalize(o), lemma.Lemma(o)
@@ -120,6 +120,29 @@ func validOptions(it LLMItem, raw []string) []string {
 		}
 	}
 	return nil
+}
+
+// maxOptionBytes — потолок длины варианта LLM: самые длинные слова
+// упражнения короче, длиннее — уже не слово, а текст.
+const maxOptionBytes = 24
+
+// llmOption — вариант модели годится в кнопку: одно слово из строчных
+// латинских букв не длиннее maxOptionBytes, известное словарю, — его
+// лемма есть в OEWN (lemma.Known) или это служебное слово. Варианты
+// ложатся в общий кэш и показываются другим студентам (ADR-037), поэтому
+// ни ссылка, ни фраза, ни выдуманное или замаскированное слово (k1ll,
+// sh!t) туда не попадут. Настоящее слово OEWN, неуместное в упражнении,
+// проверка не отличит — это остаточный риск ADR-037.
+func llmOption(o string) bool {
+	if o == "" || len(o) > maxOptionBytes {
+		return false
+	}
+	for i := 0; i < len(o); i++ {
+		if o[i] < 'a' || o[i] > 'z' {
+			return false
+		}
+	}
+	return lemma.Known(lemma.Lemma(o)) || lemma.FunctionWord(o)
 }
 
 // Generate — LLM-дистракторы пачки пунктов одним вызовом: проверенные
