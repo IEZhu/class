@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyn
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import type { TermClick } from "../lib/api";
+import type { TermClick, TermExample } from "../lib/api";
 import type { TermStatus } from "../lib/term-status";
 import { sentenceAround, tokenize, uniqueKeys } from "../lib/tokenize";
 import { requestJson } from "./forms";
@@ -107,6 +107,9 @@ export default function ClickableText({
     if (window.getSelection()?.toString()) return;
     const t = tokens[Number(el.dataset.i)];
     if (!t?.key) return;
+    // Клик по слову — этого текста: строка вокруг (перемотка реплики
+    // транскрипта, S2-4) его не получает
+    e.stopPropagation();
     const word = { surface: t.text, key: t.key, context: sentenceAround(text, t.start, t.start + t.text.length) };
     if (onWord) {
       onWord(word);
@@ -201,8 +204,11 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
   const status = data ? (termStatuses.statusOf(word.key) ?? null) : null;
 
   return (
+    // Клики попапа по дереву React всплыли бы в обработчики вокруг текста
+    // (перемотка реплики): попап — не часть строки, в которой открыт
     <div
       ref={ref}
+      onClick={(e) => e.stopPropagation()}
       role="dialog"
       aria-label={`Слово ${word.surface}`}
       style={{
@@ -276,14 +282,42 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
                 {data.examples.map((ex, i) => (
                   <li key={i}>
                     <ClickableText text={ex.text} onWord={setWord} />
-                    {ex.translation && <div style={mutedStyle}>{ex.translation}</div>}
+                    <div style={mutedStyle}>{ex.translation}</div>
+                    <ExampleAuthors example={ex} />
                   </li>
                 ))}
               </ul>
+              {/* CC BY 2.0 FR требует подписи: авторы — у каждого примера (ADR-028) */}
+              <p style={{ ...mutedStyle, fontSize: "0.85em", margin: "0.25rem 0 0" }}>
+                <a href="https://tatoeba.org" target="_blank" rel="noreferrer">
+                  Tatoeba
+                </a>
+                ,{" "}
+                <a href={data.examples[0].attribution.license_url} target="_blank" rel="noreferrer">
+                  {data.examples[0].attribution.license}
+                </a>
+              </p>
             </div>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ExampleAuthors — подпись примера Tatoeba: авторы предложения и перевода
+// со ссылками на их страницы (условие CC BY 2.0 FR, ADR-028)
+function ExampleAuthors({ example: { attribution: a } }: { example: TermExample }) {
+  const small = { ...mutedStyle, fontSize: "0.8em" };
+  return (
+    <div style={small}>
+      <a href={a.url} target="_blank" rel="noreferrer">
+        {a.author || "автор не указан"}
+      </a>
+      {" · перевод: "}
+      <a href={a.translation_url} target="_blank" rel="noreferrer">
+        {a.translation_author || "автор не указан"}
+      </a>
     </div>
   );
 }

@@ -142,10 +142,28 @@ export interface TermClick {
   // null — перевода нет в кэше, а LibreTranslate не настроен или не ответил
   translation: { text: string; source: string } | null;
   definitions: { word: string; pos: string; glosses: string[]; translations_ru: string[] }[];
-  // Примеры Tatoeba с переводом (S5-4, долг D-1); до них — пустой список
-  examples: { text: string; translation: string | null }[];
+  // До двух примеров Tatoeba с переводом (S5-4, ADR-028); корпус
+  // не импортирован или слово незнакомо — пустой список
+  examples: TermExample[];
   // Статус в личном словаре студента (S3-5); null — слова там нет
   status: TermStatus | null;
+}
+
+// Пример Tatoeba в ответе клика. CC BY 2.0 FR разрешает показ, только
+// назвав автора: у предложения и у перевода — автор и страница на
+// tatoeba.org; пустой автор — у предложения нет владельца.
+export interface TermExample {
+  text: string;
+  translation: string;
+  source: "tatoeba";
+  attribution: {
+    author: string;
+    url: string;
+    translation_author: string;
+    translation_url: string;
+    license: string;
+    license_url: string;
+  };
 }
 
 // Слово личного словаря (GET/POST /user-terms, S3-5, ADR-027).
