@@ -235,14 +235,15 @@ func (a *API) clozeItemIDs(ctx context.Context, userID int64, now time.Time, lim
 	b := &clozeBatch{limit: limit, sentences: map[string]bool{}}
 	page := limit * clozeScan
 	for offset := 0; !b.full() && offset < clozeMaxTargets; offset += page {
-		targets, err := a.store.ClozeTargets(ctx, userID, now, now.Add(-clozeMissTTL), page, offset)
+		n := min(page, clozeMaxTargets-offset)
+		targets, err := a.store.ClozeTargets(ctx, userID, now, now.Add(-clozeMissTTL), n, offset)
 		if err != nil {
 			return nil, err
 		}
 		if err := a.clozeFill(ctx, userID, now, b, targets); err != nil {
 			return nil, err
 		}
-		if len(targets) < page {
+		if len(targets) < n {
 			break
 		}
 	}

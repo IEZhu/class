@@ -814,7 +814,9 @@ func TestTranscriptsMigrationReverts(t *testing.T) {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
-	// 0014 (S2-4) надстраивает utterances — её снимаем первой, как golang-migrate
+	// 0022 (S4-4, лексемы) и 0014 (S2-4) надстраивают utterances — их
+	// снимаем первыми, как golang-migrate
+	apply("0022_cloze.down.sql")
 	apply("0014_utterance_edits.down.sql")
 	check()
 	apply("0008_transcripts.down.sql")

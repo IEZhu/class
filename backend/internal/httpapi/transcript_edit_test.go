@@ -307,7 +307,9 @@ func TestTranscriptWritesStayInLesson(t *testing.T) {
 }
 
 // 0014 добавляет к utterances отметки правки; откат их убирает, текст
-// правки остаётся, повторный накат возвращает колонки.
+// правки остаётся, повторный накат возвращает колонки. 0022 (S4-4)
+// надстраивает utterances хранимыми лексемами — её снимаем первой и
+// накатываем последней, как golang-migrate.
 func TestUtteranceEditsMigrationReverts(t *testing.T) {
 	s := newASRStand(t, 0)
 	ctx := context.Background()
@@ -337,8 +339,12 @@ func TestUtteranceEditsMigrationReverts(t *testing.T) {
 		}
 	}
 	const base = "transcript_id,idx,speaker_label,user_id,start_ms,end_ms,text"
-	if got := columns(); got != base+",edited_at,edited_by" {
+	if got := columns(); got != base+",edited_at,edited_by,text_tsv" {
 		t.Fatalf("utterances: %s", got)
+	}
+	apply("0022_cloze.down.sql")
+	if got := columns(); got != base+",edited_at,edited_by" {
+		t.Fatalf("после отката 0022: %s", got)
 	}
 	apply("0014_utterance_edits.down.sql")
 	if got := columns(); got != base {
@@ -355,5 +361,9 @@ func TestUtteranceEditsMigrationReverts(t *testing.T) {
 	_, err := s.conn.Exec(ctx, `UPDATE utterances SET edited_by = $1 WHERE idx = 0`, s.teacherID)
 	if store.PgErrorCode(err) != pgCheckViolation {
 		t.Fatalf("автор правки без времени: %v, хотели check violation", err)
+	}
+	apply("0022_cloze.up.sql")
+	if got := columns(); got != base+",edited_at,edited_by,text_tsv" {
+		t.Fatalf("после повторного наката 0022: %s", got)
 	}
 }
