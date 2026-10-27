@@ -105,3 +105,54 @@ func TestWhiteboardFile(t *testing.T) {
 		t.Fatalf("file %s", body)
 	}
 }
+
+// Сцена в пределе — как есть, с надгробиями. Больше предела — уходят
+// надгробия, самые давние первыми, ровно столько, чтобы влезло; живые
+// элементы остаются. Без надгробий больше предела — ErrSceneTooLarge.
+func TestFitScene(t *testing.T) {
+	pad := `,"points":"` + strings.Repeat("x", 100) + `"`
+	scene := []json.RawMessage{
+		el("live1", 1, 1, pad),
+		el("old", 2, 1, `,"isDeleted":true,"updated":1000`+pad),
+		el("live2", 1, 1, pad),
+		el("newest", 2, 1, `,"isDeleted":true,"updated":3000`+pad),
+		el("middle", 2, 1, `,"isDeleted":true,"updated":2000`+pad),
+	}
+	full, err := json.Marshal(scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := func(elements ...json.RawMessage) int {
+		b, err := json.Marshal(elements)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(b)
+	}
+	for _, c := range []struct {
+		name     string
+		maxBytes int
+		want     string
+	}{
+		{"влезает", len(full), "live1@1,old@2,live2@1,newest@2,middle@2"},
+		{"без самого давнего", len(full) - 1, "live1@1,live2@1,newest@2,middle@2"},
+		{"впритык без двух", size(scene[0], scene[2], scene[3]), "live1@1,live2@1,newest@2"},
+		{"только живые", size(scene[0], scene[2]), "live1@1,live2@1"},
+	} {
+		got, err := fitScene(scene, c.maxBytes)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		var elements []json.RawMessage
+		if err := json.Unmarshal(got, &elements); err != nil {
+			t.Fatal(err)
+		}
+		if ids(elements) != c.want || len(got) > c.maxBytes {
+			t.Errorf("%s: %s (%d байт из %d), хотели %s", c.name, ids(elements), len(got), c.maxBytes, c.want)
+		}
+	}
+	if _, err := fitScene(scene, size(scene[0], scene[2])-1); !errors.Is(err, ErrSceneTooLarge) {
+		t.Errorf("живые элементы больше предела: %v, хотели ErrSceneTooLarge", err)
+	}
+}

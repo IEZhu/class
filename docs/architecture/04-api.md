@@ -21,7 +21,7 @@
 | `GET /lessons` | список уроков по роли: teacher — свои, student — своих групп | все | 0 |
 | `GET /lessons/{id}` | урок + материалы + состояние; организатору события (admin, teacher) ещё `has_guest_link` — выпущена ли гостевая ссылка (ADR-032) | участники | 0 |
 | `PATCH /lessons/{id}` | перенос (starts_at/ends_at), только `scheduled` | teacher урока | 0 |
-| `DELETE /lessons/{id}` | отмена урока, только `scheduled`; файлы материалов удаляет worker (`material_files_delete`, ADR-024) | teacher урока | 0 |
+| `DELETE /lessons/{id}` | отмена урока, только `scheduled`; файлы материалов и снимок доски удаляет worker (`material_files_delete`, ADR-024, ADR-020) | teacher урока | 0 |
 | `POST /lessons/{id}/materials` | прикрепить материал; с `file: {name, content_type, size}` — заготовка файла и presigned PUT на 10 мин под `materials-pending/` (тип по белому списку, до 50 MiB, ключ выбирает api, расширение имени — по типу, ADR-024) | teacher | 0 |
 | `POST /lessons/{id}/homework` | прикрепить домашку; `file` — как у материала | teacher | 0 |
 | `POST /materials/{id}/confirm` | подтвердить загрузку файла: объекта нет — 409, размер или тип не совпали — объект и материал удаляются, 422; годный объект копируется в хранилище на постоянный ключ, ETag запоминается; повтор — 200 | teacher урока | 1 |

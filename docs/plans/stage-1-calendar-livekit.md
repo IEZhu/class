@@ -523,7 +523,9 @@ teacher — только студенты своих групп (состав г
   в api — за интерфейсом `objectStore` (`api.go`). `GET /lessons/{id}`
   прячет неподтверждённые файлы от участников.
 - Джоба `material_files_delete` (`store.JobMaterialFilesDelete`, payload
-  `{"keys": [постоянные ключи]}`): ставят `store.CancelLesson` в транзакции
+  `{"keys": [постоянные ключи], "objects": [прочие объекты урока]}` —
+  `objects` с ревью волны A: снимок доски отменённого урока, удаляется как
+  есть, ADR-020): ставят `store.CancelLesson` в транзакции
   отмены урока и `store.DeleteMaterial`, когда api не удалось удалить
   объект; хендлер — `worker.RegisterMaterialFiles` в
   `backend/internal/worker/worker.go` (оба объекта каждого ключа),

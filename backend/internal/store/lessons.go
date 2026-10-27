@@ -268,7 +268,9 @@ func (s *Store) RescheduleLesson(ctx context.Context, lessonID, teacherID int64,
 // в статус-машине нет (03-data-model.md). Материалы с файлами удаляются
 // явным DELETE … RETURNING s3_key: их объекты в той же транзакции уходят
 // в джобу JobMaterialFilesDelete (ADR-024) — каскад до бакета не достаёт.
-// Остальные материалы и участники удаляются каскадом. Событие в календаре
+// Так же уходит снимок доски: доска открыта и до начала урока, и снимок
+// мог уже лечь в бакет (ADR-020). Остальные материалы, доска без снимка
+// и участники удаляются каскадом. Событие в календаре
 // удаляет джоба calendar_sync: строки урока к её запуску уже нет, поэтому
 // id события и организатор уходят в payload (ADR-023).
 func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) error {
@@ -290,7 +292,16 @@ func (s *Store) CancelLesson(ctx context.Context, lessonID, teacherID int64) err
 	if err != nil {
 		return err
 	}
-	if err := queueMaterialFilesDelete(ctx, tx, keys); err != nil {
+	rows, err = tx.Query(ctx,
+		`DELETE FROM whiteboards WHERE lesson_id = $1 AND scene_s3_key IS NOT NULL RETURNING scene_s3_key`, lessonID)
+	if err != nil {
+		return err
+	}
+	snapshots, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	if err := queueMaterialFilesDelete(ctx, tx, MaterialFilesDelete{Keys: keys, Objects: snapshots}); err != nil {
 		return err
 	}
 	var eventID *string

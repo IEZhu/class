@@ -96,19 +96,22 @@ type MaterialFiles interface {
 }
 
 // materialFilesDelete удаляет постоянный объект и загрузку под
-// materials-pending/ каждого ключа. Отсутствующий ключ — не ошибка, поэтому
-// повтор после сбоя хранилища доделывает то, что не успела прошлая попытка.
+// materials-pending/ каждого ключа материала и прочие объекты урока как
+// есть. Отсутствующий ключ — не ошибка, поэтому повтор после сбоя
+// хранилища доделывает то, что не успела прошлая попытка.
 func materialFilesDelete(objects MaterialFiles) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p store.MaterialFilesDelete
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("payload: %w", err)
 		}
+		var keys []string
 		for _, key := range p.Keys {
-			for _, k := range storage.MaterialFileKeys(key) {
-				if err := objects.Delete(ctx, k); err != nil {
-					return err
-				}
+			keys = append(keys, storage.MaterialFileKeys(key)...)
+		}
+		for _, k := range append(keys, p.Objects...) {
+			if err := objects.Delete(ctx, k); err != nil {
+				return err
 			}
 		}
 		return nil

@@ -127,14 +127,18 @@ func (s *Store) ConfirmMaterialFile(ctx context.Context, id int64, etag string) 
 
 // JobMaterialFilesDelete — удалить объекты файлов материалов, строк
 // которых уже нет (ADR-024): отмена урока и удаление материала, когда
-// хранилище не ответило. Удаление отсутствующего ключа — не ошибка,
-// поэтому повтор джобы безопасен.
+// хранилище не ответило. Отмена урока убирает той же джобой и снимок его
+// доски (ADR-020). Удаление отсутствующего ключа — не ошибка, поэтому
+// повтор джобы безопасен.
 const JobMaterialFilesDelete = "material_files_delete"
 
-// MaterialFilesDelete — payload джобы JobMaterialFilesDelete: постоянные
-// ключи файлов; копии под materials-pending/ worker выводит из них сам.
+// MaterialFilesDelete — payload джобы JobMaterialFilesDelete: Keys —
+// постоянные ключи файлов материалов, копии под materials-pending/ worker
+// выводит из них сам; Objects — другие объекты урока (снимок доски),
+// удаляются как есть.
 type MaterialFilesDelete struct {
-	Keys []string `json:"keys"`
+	Keys    []string `json:"keys"`
+	Objects []string `json:"objects,omitempty"`
 }
 
 // DeleteMaterial — удалить материал. Объект в хранилище удаляет
@@ -154,7 +158,7 @@ func (s *Store) DeleteMaterial(ctx context.Context, id int64, leftKeys []string)
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if err := queueMaterialFilesDelete(ctx, tx, leftKeys); err != nil {
+	if err := queueMaterialFilesDelete(ctx, tx, MaterialFilesDelete{Keys: leftKeys}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -163,13 +167,13 @@ func (s *Store) DeleteMaterial(ctx context.Context, id int64, leftKeys []string)
 // QueueMaterialFilesDelete — поставить уборку объектов, на которые строк
 // уже нет, вне транзакции вызывающего.
 func (s *Store) QueueMaterialFilesDelete(ctx context.Context, keys []string) error {
-	return queueMaterialFilesDelete(ctx, s.pool, keys)
+	return queueMaterialFilesDelete(ctx, s.pool, MaterialFilesDelete{Keys: keys})
 }
 
-func queueMaterialFilesDelete(ctx context.Context, db jobs.DB, keys []string) error {
-	if len(keys) == 0 {
+func queueMaterialFilesDelete(ctx context.Context, db jobs.DB, p MaterialFilesDelete) error {
+	if len(p.Keys) == 0 && len(p.Objects) == 0 {
 		return nil
 	}
-	_, err := jobs.Enqueue(ctx, db, JobMaterialFilesDelete, MaterialFilesDelete{Keys: keys})
+	_, err := jobs.Enqueue(ctx, db, JobMaterialFilesDelete, p)
 	return err
 }
