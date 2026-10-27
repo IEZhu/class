@@ -41,7 +41,7 @@ export default async function PracticeClozePage() {
       </p>
       <ClickableTextScope studentId={me.id}>
         {/* Новая выдача — новая сессия: счётчики начинаются с нуля */}
-        <ClozeSession key={Date.now()} page={page} />
+        <ClozeSession key={Date.now()} page={page} studentId={me.id} />
       </ClickableTextScope>
     </main>
   );

@@ -36,8 +36,9 @@ type Options = Pick<ClozeItem, "options" | "distractor_source">;
 // заводится при первой попытке ответа и живёт до следующего пункта:
 // повтор после сбоя сети api засчитает один раз. С LLM-дистракторами
 // (llm_available) выдача просит их для пунктов после первого: первый уже
-// на экране, менять ему варианты на глазах нельзя.
-export default function ClozeSession({ page }: { page: ClozePage }) {
+// на экране, менять ему варианты на глазах нельзя. studentId — чей словарь
+// перекрашивает ответ (кэш статусов по студенту, ADR-026).
+export default function ClozeSession({ page, studentId }: { page: ClozePage; studentId: number }) {
   const router = useRouter();
   const [index, setIndex] = useState(0);
   const [mode, setMode] = useState<ClozeMode>("choice");
@@ -105,7 +106,7 @@ export default function ClozeSession({ page }: { page: ClozePage }) {
         mode: how,
         response_ms: ms,
       });
-      termStatuses.setStatus(res.lemma, res.status);
+      termStatuses.setStatus(studentId, res.lemma, res.status);
       setResult(res);
       setTally((t) => (res.correct ? { ...t, correct: t.correct + 1 } : { ...t, wrong: t.wrong + 1 }));
     } catch (e) {

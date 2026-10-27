@@ -9,9 +9,16 @@ import (
 	"testing"
 )
 
+// unused — номера, зарезервированные под задачу, которой миграция не
+// понадобилась. Занимать их нельзя: база выше номера его уже не получит.
+var unused = map[int]string{
+	23: "S5-5 обошлась без миграции (ADR-038)",
+}
+
 // TestMigrationsAreContiguous: golang-migrate накатывает только версии выше
 // текущей, поэтому база, успевшая дойти до N+1 без N, миграцию N уже никогда
-// не получит («no change»). Номера идут подряд с 0001, у каждого up — свой down.
+// не получит («no change»). Номера идут подряд с 0001 (кроме unused), у
+// каждого up — свой down.
 func TestMigrationsAreContiguous(t *testing.T) {
 	entries, err := os.ReadDir(migrations)
 	if err != nil {
@@ -45,10 +52,20 @@ func TestMigrationsAreContiguous(t *testing.T) {
 		t.Fatalf("no migrations in %s", filepath.Clean(migrations))
 	}
 	sort.Ints(versions)
-	for i, v := range versions {
-		if v != i+1 {
-			t.Fatalf("migration %04d missing before %s", i+1, ups[v])
+	for v, why := range unused {
+		if name, ok := ups[v]; ok {
+			t.Errorf("migration %s takes number %04d reserved as unused (%s)", name, v, why)
 		}
+	}
+	want := 1
+	for _, v := range versions {
+		for unused[want] != "" && want != v {
+			want++
+		}
+		if v != want {
+			t.Fatalf("migration %04d missing before %s", want, ups[v])
+		}
+		want++
 		if !downs[v] {
 			t.Errorf("migration %s has no down", ups[v])
 		}
