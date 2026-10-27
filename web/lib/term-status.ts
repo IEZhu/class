@@ -35,7 +35,16 @@ function isStatus(n: number): n is TermStatus {
 // просят свои слова, кэш собирает их за один такт в общую пачку и
 // спрашивает api только о новых словах; сохранение статуса в попапе
 // перекрашивает все формы леммы без запроса.
+//
+// Кэш — словарь одного студента: каждый вызов называет его id (student).
+// Выход и вход — клиентская навигация, модуль её переживает, и без этого
+// следующий в той же вкладке видел бы раскраску чужого словаря. Другой
+// студент сбрасывает кэш, ответы, спрошенные до сброса, отбрасываются.
 export class TermStatuses {
+  // Чей словарь в кэше; null — ещё ничей
+  private student: number | null = null;
+  // Номер сброса: ответ lookup с другим номером — о прежнем студенте
+  private epoch = 0;
   private readonly lemmas = new Map<string, string>();
   private readonly statuses = new Map<string, TermStatus>();
   // Слова, о которых уже спросили или спрашивают
@@ -57,7 +66,8 @@ export class TermStatuses {
   // request ставит в очередь слова, о которых ещё не спрашивали. Эффекты
   // всех текстов одного рендера отрабатывают синхронно подряд, поэтому
   // отправка после микрозадачи собирает их в одну пачку.
-  request(keys: Iterable<string>): Promise<void> {
+  request(student: number, keys: Iterable<string>): Promise<void> {
+    this.useStudent(student);
     for (const key of keys) {
       if (this.requested.has(key)) continue;
       this.requested.add(key);
@@ -71,9 +81,11 @@ export class TermStatuses {
 
   private async flush(): Promise<void> {
     while (this.queue.length > 0) {
+      const epoch = this.epoch;
       const batch = this.queue.splice(0, this.chunk);
       try {
         const res = await this.lookup(batch);
+        if (epoch !== this.epoch) continue;
         for (const [word, lemma] of Object.entries(res.lemmas)) this.lemmas.set(word, lemma);
         for (const [lemma, status] of Object.entries(res.statuses)) {
           if (isStatus(status)) this.statuses.set(lemma, status);
@@ -82,14 +94,16 @@ export class TermStatuses {
       } catch {
         // api или сеть недоступны: текст остаётся без раскраски, клик
         // работает; слова забываем, чтобы следующий текст спросил их снова
-        for (const word of batch) this.requested.delete(word);
+        if (epoch === this.epoch) for (const word of batch) this.requested.delete(word);
       }
     }
     this.flushing = null;
   }
 
-  // statusOf — статус слова по его ключу (wordKey); undefined — не в словаре
-  statusOf(key: string): TermStatus | undefined {
+  // statusOf — статус слова по его ключу (wordKey) в словаре студента;
+  // undefined — не в словаре или кэш ещё чужой
+  statusOf(student: number, key: string): TermStatus | undefined {
+    if (student !== this.student) return undefined;
     return this.statuses.get(this.lemmas.get(key) ?? key);
   }
 
@@ -101,9 +115,10 @@ export class TermStatuses {
     this.changed();
   }
 
-  // setStatus — статус леммы после клика или сохранения; null — слова нет
-  // в словаре
-  setStatus(lemma: string, status: TermStatus | null): void {
+  // setStatus — статус леммы в словаре студента после клика или
+  // сохранения; null — слова нет в словаре
+  setStatus(student: number, lemma: string, status: TermStatus | null): void {
+    this.useStudent(student);
     if ((this.statuses.get(lemma) ?? null) === status) return;
     if (status === null) this.statuses.delete(lemma);
     else this.statuses.set(lemma, status);
@@ -119,6 +134,20 @@ export class TermStatuses {
   };
 
   getVersion = (): number => this.version;
+
+  // useStudent делает кэш кэшем студента student: чужой сбрасывается,
+  // а тексты, ещё раскрашенные по нему, перерисовываются
+  private useStudent(student: number): void {
+    if (student === this.student) return;
+    const previous = this.student;
+    this.student = student;
+    this.epoch++;
+    this.lemmas.clear();
+    this.statuses.clear();
+    this.requested.clear();
+    this.queue = [];
+    if (previous !== null) this.changed();
+  }
 
   private changed(): void {
     this.version++;

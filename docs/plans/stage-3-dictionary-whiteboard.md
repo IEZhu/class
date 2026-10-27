@@ -239,12 +239,14 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
 - `web/lib/tokenize.ts` — `tokenize` (слова и всё между ними, склейка
   токенов = исходный текст), `wordKey`, `uniqueKeys`, `sentenceAround`
   (`context_sentence` ≤ 1000 символов); `web/lib/term-status.ts` —
-  `TermStatuses` (кэш статусов на вкладку, пачки lookup по 2000 слов),
-  `TermStatus`, `STATUS_LABELS`. Тесты — `web/lib/tokenize.test.ts`,
-  `web/lib/term-status.test.ts`, `npm test` (`node --test`, шаг web
+  `TermStatuses` (кэш статусов на вкладку, ключ — id студента, пачки
+  lookup по 2000 слов), `TermStatus`, `STATUS_LABELS`;
+  `web/lib/selection.ts` — `isTextSelection` (клик-выделение — не жест).
+  Тесты — `web/lib/tokenize.test.ts`, `web/lib/term-status.test.ts`,
+  `web/lib/selection.test.ts`, `npm test` (`node --test`, шаг web
   в `.github/workflows/ci.yml`).
 - `web/app/clickable-text.tsx` — `ClickableText` (по умолчанию) и
-  `ClickableTextScope` (`lessonId`, `dictionary`); попап — лемма и форма,
+  `ClickableTextScope` (`lessonId`, `studentId`); попап — лемма и форма,
   перевод, статус, дефиниции с подписью «Wiktionary, CC BY-SA», примеры
   Tatoeba с переводом и подписью (`ExampleAuthors`: авторы предложения и
   перевода со ссылками на tatoeba.org, под списком «Tatoeba, CC BY 2.0 FR»,

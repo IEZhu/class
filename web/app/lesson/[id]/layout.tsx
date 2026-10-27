@@ -14,7 +14,10 @@ export default async function LessonLayout({ children, params }: { children: Rea
   const me = await apiFetch<User>("/auth/me").catch(() => null);
   const lessonId = Number(id);
   return (
-    <ClickableTextScope lessonId={Number.isSafeInteger(lessonId) && lessonId > 0 ? lessonId : null} dictionary={me?.role === "student"}>
+    <ClickableTextScope
+      lessonId={Number.isSafeInteger(lessonId) && lessonId > 0 ? lessonId : null}
+      studentId={me?.role === "student" ? me.id : null}
+    >
       {children}
     </ClickableTextScope>
   );

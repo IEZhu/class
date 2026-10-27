@@ -110,7 +110,7 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
                 </td>
                 <td style={cellStyle}>{it.translation ?? "—"}</td>
                 <td style={cellStyle}>
-                  <DictionaryStatus termId={it.term_id} lemma={it.lemma} status={it.status} />
+                  <DictionaryStatus studentId={me.id} termId={it.term_id} lemma={it.lemma} status={it.status} />
                 </td>
                 <td style={cellStyle}>
                   {it.source_lesson ? (

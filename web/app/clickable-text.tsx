@@ -18,26 +18,28 @@ import TermStatusControl, { termStatuses } from "./term-status-control";
 
 interface Scope {
   lessonId: number | null;
-  dictionary: boolean;
+  studentId: number | null;
 }
 
-const ScopeContext = createContext<Scope>({ lessonId: null, dictionary: false });
+const ScopeContext = createContext<Scope>({ lessonId: null, studentId: null });
 
 // ClickableTextScope — что текстам страницы известно о ней: урок (клик
 // уходит с lesson_id — по нему S3-7 запишет кандидатов словаря урока,
-// а «в мой словарь» — источник слова) и есть ли у зрителя личный словарь
-// (раскраска и статус — только у студента, 04-api.md). Без обёртки
-// текст кликается, но не красится.
+// а «в мой словарь» — источник слова) и чей личный словарь красит текст:
+// id зрителя-студента (раскраска и статус — только у студента, 04-api.md),
+// null — у зрителя словаря нет. По id кэш статусов вкладки не покажет
+// следующему вошедшему чужие цвета. Без обёртки текст кликается, но не
+// красится.
 export function ClickableTextScope({
   lessonId = null,
-  dictionary,
+  studentId,
   children,
 }: {
   lessonId?: number | null;
-  dictionary: boolean;
+  studentId: number | null;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ lessonId, dictionary }), [lessonId, dictionary]);
+  const value = useMemo(() => ({ lessonId, studentId }), [lessonId, studentId]);
   return <ScopeContext.Provider value={value}>{children}</ScopeContext.Provider>;
 }
 
@@ -87,8 +89,8 @@ export default function ClickableText({
   const close = useRef(() => setPopup(null)).current;
 
   useEffect(() => {
-    if (scope.dictionary) void termStatuses.request(uniqueKeys(tokens));
-  }, [scope.dictionary, tokens]);
+    if (scope.studentId !== null) void termStatuses.request(scope.studentId, uniqueKeys(tokens));
+  }, [scope.studentId, tokens]);
 
   useEffect(
     () => () => {
@@ -100,14 +102,14 @@ export default function ClickableText({
   // Один обработчик на текст вместо тысяч у слов: в транскрипте урока
   // десятки тысяч токенов
   function handleClick(e: MouseEvent<HTMLSpanElement>) {
-    const el = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
-    // Клик из попапа всплывает и сюда по дереву React: попап в портале,
     // Выделение текста мышью — не клик: ни попапа, ни перемотки реплики
     // вокруг текста
     if (isTextSelection(window.getSelection())) {
       e.stopPropagation();
       return;
     }
+    const el = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
+    // Клик из попапа всплывает и сюда по дереву React: попап в портале,
     // его слова — не наши
     if (!el || !e.currentTarget.contains(el)) return;
     const t = tokens[Number(el.dataset.i)];
@@ -135,7 +137,7 @@ export default function ClickableText({
     <span onClick={handleClick} style={{ whiteSpace: "pre-wrap" }}>
       {tokens.map((t, i) => {
         if (!t.key) return t.text;
-        const status = scope.dictionary ? termStatuses.statusOf(t.key) : undefined;
+        const status = scope.studentId !== null ? termStatuses.statusOf(scope.studentId, t.key) : undefined;
         return (
           <span key={i} data-i={i} style={status ? statusStyles[status] : wordStyle}>
             {t.text}
@@ -178,7 +180,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
       .then((d) => {
         if (cancelled) return;
         termStatuses.learn(word.key, d.lemma);
-        if (scope.dictionary && hasTerm(d)) termStatuses.setStatus(d.lemma, d.status);
+        if (scope.studentId !== null && hasTerm(d)) termStatuses.setStatus(scope.studentId, d.lemma, d.status);
         setData(d);
       })
       .catch((e: unknown) => {
@@ -187,7 +189,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
     return () => {
       cancelled = true;
     };
-  }, [word, scope.lessonId, scope.dictionary]);
+  }, [word, scope.lessonId, scope.studentId]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -206,7 +208,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
 
   // Попап не вылезает за правый край окна
   const left = Math.max(window.scrollX + 8, Math.min(start.left, window.scrollX + window.innerWidth - POPUP_WIDTH - 8));
-  const status = data ? (termStatuses.statusOf(word.key) ?? null) : null;
+  const status = data && scope.studentId !== null ? (termStatuses.statusOf(scope.studentId, word.key) ?? null) : null;
 
   return (
     // Клики попапа по дереву React всплыли бы в обработчики вокруг текста
@@ -249,8 +251,14 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
           <p style={{ margin: "0.25rem 0 0.5rem" }}>
             {data.translation ? data.translation.text : <span style={mutedStyle}>перевода пока нет</span>}
           </p>
-          {scope.dictionary && hasTerm(data) && (
-            <TermStatusControl termId={data.term_id} lemma={data.lemma} status={status} lessonId={scope.lessonId} />
+          {scope.studentId !== null && hasTerm(data) && (
+            <TermStatusControl
+              studentId={scope.studentId}
+              termId={data.term_id}
+              lemma={data.lemma}
+              status={status}
+              lessonId={scope.lessonId}
+            />
           )}
           {data.definitions.length > 0 && (
             <div style={sectionStyle}>
