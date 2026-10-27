@@ -15,6 +15,7 @@ import (
 	"github.com/IEZhu/class/backend/internal/assemblyai"
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/livekitapi"
+	"github.com/IEZhu/class/backend/internal/llm"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/translate"
@@ -46,6 +47,11 @@ type Config struct {
 	// WhiteboardEnabled — в compose поднят ретранслятор доски (профиль
 	// whiteboard, S3-6). Без него доска отвечает 503, остальное работает.
 	WhiteboardEnabled bool
+	// LLM (S5-6) — провайдер генерации текстов из llm.New; nil — ключа
+	// нет, генерация отвечает 503. LLMDailyLimit — генераций на
+	// пользователя в сутки; 0 — DefaultLLMDailyLimit (ADR-029).
+	LLM           llm.Provider
+	LLMDailyLimit int
 }
 
 // liveKitConfigured — заданы все три ключа LiveKit. Без URL некуда
@@ -72,6 +78,9 @@ type API struct {
 	google  *gcal.Client // nil, если Google Calendar не настроен
 	// translator — nil, если LibreTranslate не настроен
 	translator *translate.LibreTranslate
+	// llm — nil, если ключ LLM не задан (S5-6)
+	llm           llm.Provider
+	llmDailyLimit int
 }
 
 // New не падает без ключей интеграций: стенд должен подниматься, а
@@ -97,6 +106,10 @@ func New(s *store.Store, cfg Config) (*API, error) {
 		livekit:    livekitapi.New(cfg.LiveKitURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret),
 		google:     google,
 		translator: translate.NewLibreTranslate(cfg.LibreTranslateURL),
+	}
+	a.llm, a.llmDailyLimit = cfg.LLM, cfg.LLMDailyLimit
+	if a.llmDailyLimit <= 0 {
+		a.llmDailyLimit = DefaultLLMDailyLimit
 	}
 	// Без ключей storage.New отдаёт nil-указатель; в интерфейс его класть
 	// нельзя — проверка a.storage == nil перестала бы его видеть
@@ -218,6 +231,15 @@ func (a *API) Router() http.Handler {
 	mux.Handle("GET /user-terms", student(a.handleListUserTerms))
 	mux.Handle("DELETE /user-terms/{term_id}", student(a.handleDeleteUserTerm))
 	mux.Handle("POST /user-terms/lookup", student(a.handleLookupUserTerms))
+
+	// S5-6: генерация учебного текста LLM и история своих текстов
+	// (ADR-029, ADR-030). Студент и преподаватель: гостю события и
+	// админу генерация не нужна, а каждый вызов стоит денег
+	learner := func(h http.HandlerFunc) http.Handler {
+		return a.requireAnyRole(h, store.RoleStudent, store.RoleTeacher)
+	}
+	mux.Handle("POST /practice/generate-text", learner(a.handleGenerateText))
+	mux.Handle("GET /practice/texts", learner(a.handleListGeneratedTexts))
 	return mux
 }
 

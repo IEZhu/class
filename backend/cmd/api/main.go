@@ -5,11 +5,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/IEZhu/class/backend/internal/gcal"
 	"github.com/IEZhu/class/backend/internal/httpapi"
+	"github.com/IEZhu/class/backend/internal/llm"
 	"github.com/IEZhu/class/backend/internal/storage"
 	"github.com/IEZhu/class/backend/internal/store"
 )
@@ -42,6 +44,17 @@ func main() {
 		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		TokenKey:     os.Getenv("GOOGLE_TOKEN_KEY"),
 	}
+	// S5-6: без LLM_API_KEY генерация текстов отвечает 503 (ADR-029)
+	provider, err := llm.New(llm.ConfigFromEnv())
+	if err != nil {
+		log.Fatalf("api: %v", err)
+	}
+	llmDailyLimit := 0
+	if v := os.Getenv("LLM_DAILY_LIMIT"); v != "" {
+		if llmDailyLimit, err = strconv.Atoi(v); err != nil || llmDailyLimit < 1 {
+			log.Fatalf("api: LLM_DAILY_LIMIT=%q — целое число не меньше 1", v)
+		}
+	}
 	api, err := httpapi.New(st, httpapi.Config{
 		PublicBaseURL: "https://" + domain,
 		// Ключи интеграций опциональны: без них работает всё, кроме
@@ -58,6 +71,8 @@ func main() {
 		// S2-2: без секрета вебхук AssemblyAI отвечает 503
 		AssemblyAIWebhookSecret: os.Getenv("ASSEMBLYAI_WEBHOOK_SECRET"),
 		LibreTranslateURL:       os.Getenv("LIBRETRANSLATE_URL"),
+		LLM:                     provider,
+		LLMDailyLimit:           llmDailyLimit,
 	})
 	if err != nil {
 		log.Fatalf("api: httpapi: %v", err)
@@ -67,6 +82,11 @@ func main() {
 	}
 	if os.Getenv("LIBRETRANSLATE_URL") == "" {
 		log.Printf("api: LIBRETRANSLATE_URL пуст — клик по слову отвечает без перевода")
+	}
+	if provider == nil {
+		log.Printf("api: LLM_API_KEY пуст — генерация текстов отвечает 503")
+	} else {
+		log.Printf("api: LLM %s, модель %s", provider.Name(), provider.Model())
 	}
 	apiHandler := api.Router()
 

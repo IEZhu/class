@@ -71,8 +71,8 @@
 | `POST /reviews` | рейтинг карточки (again/hard/good/easy) | student | 4 |
 | `POST /cloze/{id}/attempt` | ответы cloze-теста → счёт → FSRS | student | 4 |
 | `GET /practice/videos?words=…` | подбор видео по FTS субтитров | student | 5 |
-| `GET /practice/texts?words=…` | поиск текстов (generated/Tatoeba) | student | 5 |
-| `POST /practice/generate-text` | LLM-генерация текста с валидатором | student/teacher | 5 |
+| `GET /practice/texts` | свои сгенерированные тексты, новые первыми (до 50); поиск по словам среди generated/Tatoeba (`?words=…`) — S5-7 | student, teacher | 5 |
+| `POST /practice/generate-text` | `{words[], level, genre?, max_words?}` → 201 `{id, level, genre, max_words, target_lemmas[], body, word_count, coverage, occurrences{лемма: n}, unknown_share, attempts, provider, model, created_at}`; LLM пишет текст, валидатор покрытия (каждое слово ≥ 2 раз, один ретрай) — ADR-029/030. 400 — слово не из букв, слов > 20, уровень не CEFR, жанр не из `story\|dialogue\|article\|letter\|description`, длина вне 50–400 или < 10 на слово, нет `words` (подбор из личного словаря — долг D-19); 422 `coverage_failed` `{missing[], coverage}`; 429 — суточный лимит; 503 `llm_not_configured` без ключа, `llm_unavailable` — провайдер перегружен/недоступен; 502 `llm_failed` | student, teacher | 5 |
 
 ## Правила
 

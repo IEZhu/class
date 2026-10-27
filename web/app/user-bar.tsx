@@ -47,6 +47,12 @@ export default function UserBar({ name, role }: { name: string; role: Role }) {
             Словарь
           </Link>
         )}
+        {/* S5-6: генерация текстов — студенту и преподавателю */}
+        {(role === "student" || role === "teacher") && (
+          <Link href="/practice/text" style={{ marginRight: "0.75rem" }}>
+            Тексты
+          </Link>
+        )}
         <Link href="/account" style={{ marginRight: "0.75rem" }}>
           {name}
         </Link>

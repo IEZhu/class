@@ -60,7 +60,9 @@ make seed      # migrate, then load backend/migrations/seed.sql (SEED_PASSWORD o
   are comma-separated: `translate,whiteboard`),
   `HARVESTER_COOKIES_FILE` (YouTube cookies for the `harvester` profile, readable by uid 10001),
   `HARVESTER_DATABASE_URL` (the harvester's own least-privilege role, created by
-  `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022). The api also
+  `deploy/harvester-db-role.sh`; empty → the owner DSN, ADR-022),
+  `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_DAILY_LIMIT` (api only: text generation,
+  503 without the key, ADR-029). The api also
   reads `DATABASE_URL` and `API_ADDR` (default `:8080`); the worker reads `DATABASE_URL`,
   `WORKER_ROLE` (`core` by default; `harvester` runs only the subtitle harvester jobs, plus
   `HARVESTER_COOKIES`, ADR-022) and `S3_*` (whiteboard snapshots and `material_files_delete`

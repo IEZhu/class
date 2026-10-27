@@ -221,6 +221,44 @@ LLM с контекстом предложения — **закрывает до
   и проверка DoD на частотных словах; примеры с подписью рисует попап
   S3-1.
 
+### S5-6 LLM-модуль и генерация текстов (2026-10-26) — ◐
+
+- Модуль LLM — `backend/internal/llm` (ADR-029): интерфейс `llm.Provider`
+  (`Name`, `Model`, `Generate`), клиенты Anthropic Messages API, OpenAI
+  Responses API и DeepSeek Chat Completions на `net/http`, `llm.New(cfg)`
+  (nil без ключа), `llm.ConfigFromEnv`, ошибки `*llm.Error` с видами
+  `ErrAuth`, `ErrRateLimited`, `ErrUnavailable`, `ErrTimeout`, `ErrRejected`,
+  `ErrTruncated`, `ErrEmpty`, `ErrTooLarge`, `ErrBadResponse` и
+  `llm.Temporary`. Фейк для тестов — `backend/internal/llm/llmtest`.
+- Генерация и валидатор — `backend/internal/textgen` (ADR-030):
+  `NewParams` (белые списки, `lemma.IsWord`), промпт со словами-данными в
+  `<target_words>`, `Check` (покрытие по леммам, вхождения, доля слов вне
+  словаря), `Generate` (один ретрай с `<missing_words>`).
+- Миграция `backend/migrations/0017_generated_texts.up.sql` (откат —
+  `.down.sql`): `generated_texts` (+ индекс `generated_texts_user_idx`) и
+  `llm_usage` (суточный лимит). Store — `backend/internal/store/practice.go`:
+  `ReserveLLMRequest`, `CreateGeneratedText`, `GeneratedTextsByUser`.
+- Эндпоинты — `backend/internal/httpapi/practice.go` (student, teacher):
+  `POST /practice/generate-text`, `GET /practice/texts` (своя история;
+  `?words=` — S5-7). Шов личного словаря — `userTermWords` (долг D-19).
+- Ключи `.env` (`deploy/.env.example`, compose — только api):
+  `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_DAILY_LIMIT`; без
+  `LLM_API_KEY` в журнале api строка «генерация текстов отвечает 503».
+- Web — `/practice/text` (`web/app/practice/text/`): форма генерации,
+  текст простыми абзацами (`renderParagraph` в `generated-text.tsx`) с
+  покрытием, история; ссылка «Тексты» в шапке у студента и преподавателя.
+- Тесты: `backend/internal/llm/llm_test.go` (форма запроса, заголовки,
+  разбор ответа, коды ошибок, таймаут, большой ответ — на httptest),
+  `backend/internal/textgen/*_test.go` (валидатор, промпт, ретрай),
+  `backend/internal/httpapi/practice_test.go` (401/403, 503 без ключа, 201
+  с сохранением, 400/422, 503/502 сбоя провайдера, 429 лимита, история
+  только своя, откат 0017).
+- **Для ☑ не хватает.** DoD «текст кликается» — `<ClickableText>` (S3-1)
+  подключается в волне C заменой `renderParagraph`. Живой вызов
+  провайдера не проверен — ключей у стенда нет: с первым `LLM_API_KEY`
+  сгенерировать текст на стенде. Подбор слов из личного словаря без
+  списка в запросе — после S3-5 (долг D-19).
+
 ## Риски этапа
 
 Блокировка IP YouTube (рейт/cookies/backoff, fallback — домашняя машина,

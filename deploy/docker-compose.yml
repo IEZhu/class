@@ -85,6 +85,12 @@ services:
       # S3-6: 1 — поднят ретранслятор доски (профиль whiteboard, ADR-020);
       # пусто — доска отвечает 503
       WHITEBOARD_ENABLED: ${WHITEBOARD_ENABLED:-}
+      # S5-6: LLM-генерация текстов (ADR-029); без LLM_API_KEY
+      # POST /practice/generate-text отвечает 503
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_DAILY_LIMIT: ${LLM_DAILY_LIMIT:-}
     # S3-3: translate — внутренняя сеть до libretranslate
     networks: [default, translate]
     depends_on:

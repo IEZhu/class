@@ -164,6 +164,26 @@ export interface UserTermPage {
   next_cursor: string | null;
 }
 
+// Текст, сгенерированный LLM по целевым словам (S5-6, ADR-029/030).
+// body — абзацы через пустую строку; coverage — доля целевых лемм,
+// встреченных не реже двух раз; unknown_share — доля слов вне словаря.
+export interface GeneratedText {
+  id: number;
+  level: string;
+  genre: string;
+  max_words: number;
+  target_lemmas: string[];
+  body: string;
+  word_count: number;
+  coverage: number;
+  occurrences: Record<string, number>;
+  unknown_share: number;
+  attempts: number;
+  provider: string;
+  model: string;
+  created_at: string;
+}
+
 const API_TIMEOUT_MS = 5000;
 
 export async function apiFetch<T>(path: string): Promise<T> {
