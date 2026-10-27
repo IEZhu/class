@@ -62,7 +62,56 @@ UI теста; `POST /cloze/{id}/attempt` → `cloze_attempts` (answers, score) 
 
 ## Факт (заполняется по ходу реализации)
 
-_пока пусто_
+### S4-1 go-fsrs + инициализация карточек (2026-10-27, закрывает D-3)
+
+- Решение — [ADR-036](../architecture/decisions.md). Зависимость
+  `github.com/open-spaced-repetition/go-fsrs/v4 v4.0.0` (MIT, FSRS-6) в
+  `backend/go.mod`; новых ключей `.env` нет.
+- Миграция `backend/migrations/0021_srs` (up/down): `srs_cards` (PK
+  `(user_id, term_id)`, поля карточки go-fsrs, FK на `user_terms`
+  `ON DELETE CASCADE`, индекс `srs_cards_user_due_idx`) и `srs_reviews`
+  (identity, `client_id uuid`, `UNIQUE (user_id, client_id)`, rating,
+  source `card|cloze`, reviewed_at; FK на карточку с каскадом).
+- `backend/internal/srs/` — планировщик (`NewScheduler`, `Review`),
+  `NewCard`, `ParseRating`, состояния и оценки строками схемы, правило
+  статуса слова `Status`; тесты `srs_test.go` с подставленным временем.
+- Хук: `store.SaveUserTerm` (`backend/internal/store/user_terms.go`) —
+  новая строка `user_terms` и её карточка в одной транзакции; этим же
+  вызовом назначает слова S3-8. Удаление слова уносит карточку и журнал.
+- Бэкфилл: `store.BackfillSRSCards` (`backend/internal/store/srs.go`),
+  идемпотентный; вызывает `cmd/worker` (роль core) на каждом старте,
+  число заведённых карточек — в журнале worker.
+
+### S4-2 Очередь повторений (2026-10-27)
+
+- `GET /practice/queue?limit=` (student; `backend/internal/httpapi/reviews.go`)
+  → `{items, due_total, next_due_at}`: свои карточки с `due_at <= сейчас`,
+  по `due_at`, затем `term_id`, до 20 (потолок 50); в карточке лемма,
+  перевод из кэша, до двух статей словаря, примеры Tatoeba, статус и
+  состояние карточки. Store: `DueCards`, `DueStats`.
+
+### S4-3 UI карточек + reviews (2026-10-27)
+
+- `POST /reviews {review_id, term_id, rating}` (student) → пересчёт FSRS
+  (`store.ReviewCard`), строка `srs_reviews` (`source='card'`), статус
+  слова по карточке; 201 / 200 повтор `review_id` / 409 `not_due`,
+  `review_conflict` / 404 чужая или нет карточки.
+- web: `/practice/cards` (`web/app/practice/cards/page.tsx`,
+  `cards-session.tsx`): лицо — лемма, оборот — перевод, статьи, примеры
+  с подписями, все тексты через `<ClickableText>`; пробел/Enter — оборот,
+  1–4 — оценка; прогресс «N из M», счётчики оценок, когда следующий показ.
+  `web/lib/review-session.ts` (клавиши, `review_id`, подписи интервалов)
+  с тестами `npm test`; типы `PracticeQueue`, `ReviewResult` в
+  `web/lib/api.ts`; ссылка «Карточки» в шапке студента.
+- Тесты — `backend/internal/httpapi/reviews_test.go`: карточка в
+  транзакции слова (и откат слова при сбое карточки), бэкфилл дважды,
+  очередь на сидированных due (только свои, порядок, limit, 400/401/403),
+  оценки good → 10 мин → review → again (переобучение), журнал, статус,
+  повтор и гонка одного `review_id`, `not_due`, чужая карточка — 404,
+  откат и накат 0021.
+- Для S4-5 и S5-5: оценки cloze — `store.ReviewCard` с `Source: "cloze"`
+  (правило `not_due` решает S4-5); очередь и «забытые» — `srs_cards`
+  (`due_at`, `lapses`, `state`).
 
 ## Риски этапа
 
