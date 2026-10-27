@@ -178,11 +178,36 @@ func (s *Store) WhiteboardForSnapshot(ctx context.Context, lessonID int64) (*Whi
 // свежий. Узкий случай остаётся: старая записала объект раньше, чем
 // новая отметилась, — тогда старый объект под новой отметкой живёт
 // до следующего изменения доски.
+//
+// Доски уже нет — урок отменили, пока снимок выгружался, и CancelLesson
+// не знал этого ключа: key уходит в JobMaterialFilesDelete той же
+// транзакцией, а возвращается ErrNotFound. Урок захватывается FOR KEY
+// SHARE: отмена (FOR UPDATE) либо уже зафиксирована и строки нет, либо
+// ждёт отметки и затем сама найдёт ключ в строке доски — между удалением
+// доски и урока отметка не вклинится, и объект без строки не останется.
 func (s *Store) MarkWhiteboardSnapshot(ctx context.Context, lessonID int64, key string, version int64) error {
-	_, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE whiteboards SET scene_s3_key = $2, snapshot_version = $3
-		 WHERE lesson_id = $1`, lessonID, key, version)
-	return err
+		 WHERE lesson_id = (SELECT id FROM lessons WHERE id = $1 FOR KEY SHARE)`, lessonID, key, version)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return tx.Commit(ctx)
+	}
+	if err := queueMaterialFilesDelete(ctx, tx, MaterialFilesDelete{Objects: []string{key}}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return ErrNotFound
 }
 
 // WhiteboardFile — сцена в формате файла .excalidraw: снимок открывается

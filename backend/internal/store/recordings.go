@@ -36,6 +36,11 @@ func RoomWindow(startsAt, endsAt time.Time) (opens, closes time.Time) {
 	return startsAt.Add(-RoomOpensBefore), endsAt.Add(RoomClosesAfter)
 }
 
+// ErrLessonBusy — строку урока держит другая транзакция (перенос, отмена,
+// параллельный запуск записи): запуск сейчас не сделать, а повтор доставки
+// вебхука его сделает (ADR-012).
+var ErrLessonBusy = errors.New("lesson row is locked by another transaction")
+
 // seconds — длительность для SQL: `$n::bigint * interval '1 second'`.
 func seconds(d time.Duration) int64 { return int64(d / time.Second) }
 
@@ -52,11 +57,13 @@ func seconds(d time.Duration) int64 { return int64(d / time.Second) }
 // сегментом, даже если egress_ended прошлой ещё не дошёл. Пустой sid
 // совпадает с любым.
 //
-// Строка урока захватывается FOR NO KEY UPDATE SKIP LOCKED: параллельная
+// Строка урока захватывается FOR NO KEY UPDATE NOWAIT: параллельная
 // доставка room_started не ждёт идущий запуск и второй Egress не запускает,
 // а вход гостя (FOR KEY SHARE) захвату не мешает и не ждёт вызова LiveKit.
-// ErrNotFound — урока нет, окно закрыто, запись в этой сессии уже идёт или
-// запуск идёт прямо сейчас, то есть запускать нечего.
+// Занятая строка — ErrLessonBusy, а не пропуск: держать её может и перенос
+// или отмена урока, и тогда пропуск с ответом 200 оставил бы урок без
+// записи — LiveKit повторяет только не-2xx. ErrNotFound — урока нет, окно
+// закрыто или запись в этой сессии уже идёт, то есть запускать нечего.
 func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, roomSID, key string, start func(context.Context) (egressID string, err error)) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -69,16 +76,18 @@ func (s *Store) StartLessonRecording(ctx context.Context, lessonID int64, roomSI
 		`SELECT id FROM lessons
 		 WHERE id = $1 AND status IN ('scheduled', 'live')
 		   AND now() BETWEEN starts_at - $2::bigint * interval '1 second' AND ends_at + $3::bigint * interval '1 second'
-		 FOR NO KEY UPDATE SKIP LOCKED`,
+		 FOR NO KEY UPDATE NOWAIT`,
 		lessonID, seconds(RoomOpensBefore), seconds(RoomClosesAfter)).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
-	}
-	if err != nil {
+	case PgErrorCode(err) == "55P03": // lock_not_available
+		return ErrLessonBusy
+	case err != nil:
 		return err
 	}
-	// Отдельный запрос после захвата: он видит сегменты, зафиксированные
-	// параллельными транзакциями, пока эта ждала строку
+	// Отдельный запрос после захвата: его снимок свежее, и он видит
+	// сегменты, которые прежний владелец строки зафиксировал до захвата
 	var recording bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM lesson_recordings

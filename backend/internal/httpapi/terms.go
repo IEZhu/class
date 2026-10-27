@@ -197,8 +197,9 @@ func (a *API) checkClickLesson(w http.ResponseWriter, r *http.Request, lessonID 
 }
 
 // recordClickCandidate — клик на уроке становится кандидатом словаря урока
-// source='click' (S3-7, ADR-033); store пишет только клик участника
-// из снапшота урока, клики преподавателя и админа — нет. Сбой записи
+// source='click' (S3-7, ADR-033); store засчитывает только клик участника
+// из снапшота урока в окне комнаты, раз на человека и в пределах потолка
+// кандидатов урока; клики преподавателя и админа — нет. Сбой записи
 // попап не ломает: кандидат — подсказка преподавателю, а ответ клика
 // нужен ученику сейчас.
 func (a *API) recordClickCandidate(ctx context.Context, lessonID, termID int64, surface string) {

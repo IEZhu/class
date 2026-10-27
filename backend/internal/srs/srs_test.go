@@ -129,6 +129,28 @@ func TestReviewIsDeterministic(t *testing.T) {
 	}
 }
 
+// Интервалы — эталон параметров стенда (go-fsrs v4.0.0, умолчания FSRS-6,
+// без fuzz): easy у новой карточки, затем good точно в срок. Сравнение
+// двух планировщиков их не стережёт — fuzz у go-fsrs детерминирован от
+// карточки и момента, — а включённый fuzz или новые веса сдвинули бы
+// каждый график и пороги статусов 7 и 30 дней (ADR-036). Обновление
+// go-fsrs, меняющее эти числа, — осознанное: эталон правят вместе с ним.
+func TestReviewIntervalsGolden(t *testing.T) {
+	s := NewScheduler()
+	c := graduated(t, s, t0)
+	got := []int{c.ScheduledDays}
+	for range 3 {
+		c = review(t, s, c, Good, c.Due)
+		got = append(got, c.ScheduledDays)
+	}
+	want := []int{8, 39, 153, 510}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("интервалы easy, good, good, good: %v дней, эталон %v", got, want)
+		}
+	}
+}
+
 func TestStatusThresholds(t *testing.T) {
 	cases := []struct {
 		card Card

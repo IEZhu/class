@@ -314,12 +314,18 @@ excalidraw-complete в compose; вкладка доски в `/lesson/{id}` (liv
   джобы `whiteboard_terms`): таблица `lesson_term_candidates` (lesson_id
   `ON DELETE CASCADE`, term_id, source click/whiteboard/manual, surface,
   count, added_by, first_seen_at, last_seen_at; PK
-  `(lesson_id, term_id, source)`); в той же миграции `lesson_terms` (S3-8).
+  `(lesson_id, term_id, source)`) и `lesson_term_clicks` (lesson_id,
+  term_id, user_id — кто уже кликнул слово; добавлена по ревью волны C);
+  в той же миграции `lesson_terms` (S3-8).
 - Клики: `POST /terms/click` с `lesson_id`
   (`backend/internal/httpapi/terms.go`, `recordClickCandidate`) —
   у знакомого слова `store.RecordClickCandidate`
-  (`backend/internal/store/lesson_terms.go`): upsert со счётчиком, только
-  участник из `lesson_participants`, не преподаватель урока.
+  (`backend/internal/store/lesson_terms.go`): upsert со счётчиком разных
+  кликнувших, только участник из `lesson_participants`, не преподаватель
+  урока, только в окне комнаты урока, не больше `MaxClickCandidates` = 300
+  кандидатов-кликов на урок; чеклист `LessonCandidates` — не больше
+  `MaxCandidatesPerSource` = 500 на источник плюс подтверждённые (ревью
+  волны C).
 - Доска: пакет `backend/internal/lessonterms` — `SceneTexts` (живые
   элементы `type: "text"`, `originalText`, иначе `text`), `TextWords`
   (`lemma.Words`, без `lemma.FunctionWord`, по леммам со счётчиком),

@@ -67,11 +67,11 @@ func (a *API) canExplain(u *store.User) bool {
 // handleExplainTerm — POST /terms/{id}/explain (S5-8, ADR-039): LLM
 // объясняет по-русски значение слова в предложении и его грамматику.
 // Предложение — то, в котором слово кликнули; с lesson_id — урок должен
-// быть виден вызывающему, как у клика. Ответ кэшируется по термину и
-// нормализованному предложению для всех: повторный клик провайдера не
-// зовёт и лимит не тратит. Без ключа LLM — 503; место в суточном лимите
-// объяснений занимается до вызова и при сбое не возвращается (как у
-// генерации, ADR-029).
+// быть виден вызывающему, как у клика. Ответ кэшируется для всех по
+// термину, форме слова и нормализованному предложению: повторный клик
+// провайдера не зовёт и лимит не тратит. Без ключа LLM — 503; место
+// в суточном лимите объяснений занимается до вызова и при сбое
+// не возвращается (как у генерации, ADR-029).
 func (a *API) handleExplainTerm(w http.ResponseWriter, r *http.Request) {
 	if a.llm == nil {
 		writeError(w, http.StatusServiceUnavailable, "llm_not_configured", "LLM не настроен")
@@ -121,7 +121,7 @@ func (a *API) handleExplainTerm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "surface — форма другого слова, не термина "+term.Lemma)
 		return
 	}
-	hash := explain.Hash(sentence)
+	hash := explain.Hash(surface, sentence)
 	cached, err := a.store.TermExplanation(ctx, term.ID, hash)
 	switch {
 	case err == nil:

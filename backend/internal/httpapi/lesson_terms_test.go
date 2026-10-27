@@ -15,6 +15,7 @@ import (
 
 	"github.com/IEZhu/class/backend/internal/dictionary"
 	"github.com/IEZhu/class/backend/internal/jobs"
+	"github.com/IEZhu/class/backend/internal/lessonterms"
 	"github.com/IEZhu/class/backend/internal/store"
 	"github.com/IEZhu/class/backend/internal/testdb"
 	"github.com/IEZhu/class/backend/internal/worker"
@@ -95,7 +96,6 @@ func (f *pickerFixture) clickOnLesson(t *testing.T, cookie *http.Cookie, surface
 // участники (PUT /lessons/{id}/whiteboard/scene).
 func (f *pickerFixture) openBoard(t *testing.T, lessonID int64) {
 	t.Helper()
-	ctx := context.Background()
 	raw, err := os.ReadFile(sceneFixture)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +104,13 @@ func (f *pickerFixture) openBoard(t *testing.T, lessonID int64) {
 	if err := json.Unmarshal(raw, &elements); err != nil {
 		t.Fatal(err)
 	}
+	f.openBoardWith(t, lessonID, elements)
+}
+
+// openBoardWith — доска урока со сценой elements.
+func (f *pickerFixture) openBoardWith(t *testing.T, lessonID int64, elements []json.RawMessage) {
+	t.Helper()
+	ctx := context.Background()
 	room, err := newWhiteboardRoom()
 	if err != nil {
 		t.Fatal(err)
@@ -138,9 +145,10 @@ func (f *pickerFixture) userTermCount(t *testing.T, userID int64) int {
 }
 
 // DoD S3-7, клики: клик участника урока по знакомому слову заводит
-// кандидата source='click', клики по другим формам и параллельные клики
-// растят один счётчик; незнакомое слово, клик без урока, клики
-// преподавателя и чужого студента кандидатов не пишут.
+// кандидата source='click'; счётчик — число разных кликнувших (ADR-033):
+// клики того же человека по другим формам и параллельные клики его
+// не растят. Незнакомое слово, клик без урока, клики преподавателя (даже
+// попавшего в снапшот участников) и чужого студента кандидатов не пишут.
 func TestClickCandidatesFromParticipants(t *testing.T) {
 	f := newPickerFixture(t)
 
@@ -154,6 +162,10 @@ func TestClickCandidatesFromParticipants(t *testing.T) {
 	}
 
 	f.clickOnLesson(t, f.alice, "ran")
+	f.clickOnLesson(t, f.alice, "running")
+	if c := bySource(f.candidates(t, f.lessonID), store.CandidateClick)["run"]; c.Count != 1 {
+		t.Fatalf("повторные клики Алисы засчитаны: %+v", c)
+	}
 	f.clickOnLesson(t, f.bob, "runs")
 	var wg sync.WaitGroup
 	for range 20 {
@@ -172,18 +184,120 @@ func TestClickCandidatesFromParticipants(t *testing.T) {
 		t.Fatalf("незнакомое слово завело термин: %+v", unknown)
 	}
 	click(t, f.h, f.alice, `{"surface":"bank"}`)
+	// Преподаватель — и участник урока (так бывает, если он состоит
+	// в группе): его клик — всё равно не сигнал учеников
+	if _, err := f.conn.Exec(context.Background(),
+		`INSERT INTO lesson_participants (lesson_id, user_id) VALUES ($1, $2)`, f.lessonID, f.teacherID); err != nil {
+		t.Fatal(err)
+	}
 	f.clickOnLesson(t, f.teacher, "polish")
 	expectStatus(t, securityRequest(f.h, "POST", "/terms/click",
 		fmt.Sprintf(`{"surface":"building","lesson_id":%d}`, f.lessonID), f.outsider), http.StatusForbidden)
 
 	got = bySource(f.candidates(t, f.lessonID), store.CandidateClick)
-	if c := got["run"]; len(got) != 1 || c.Count != 23 || c.Surface != "Running" || !c.LastSeenAt.After(c.FirstSeenAt) {
-		t.Fatalf("кандидаты кликов: %+v; ждали только run ×23", got)
+	if c := got["run"]; len(got) != 1 || c.Count != 2 || c.Surface != "Running" || !c.LastSeenAt.After(c.FirstSeenAt) {
+		t.Fatalf("кандидаты кликов: %+v; ждали только run ×2 — Алиса и Боб", got)
 	}
 	var addedBy int64
 	if err := f.conn.QueryRow(context.Background(),
 		`SELECT added_by FROM lesson_term_candidates WHERE lesson_id = $1`, f.lessonID).Scan(&addedBy); err != nil || addedBy != f.aliceID {
 		t.Fatalf("added_by %d (%v), ждали первого кликнувшего", addedBy, err)
+	}
+}
+
+// Клик — кандидат только в окне комнаты урока (ADR-033, окно — ADR-031):
+// за 15 минут до начала уже да, раньше и после окна — нет; сам клик
+// при этом отвечает как обычно.
+func TestClickCandidatesOnlyInLessonWindow(t *testing.T) {
+	f := newPickerFixture(t)
+	for _, c := range []struct {
+		name     string
+		startsIn time.Duration
+		surface  string
+		want     bool
+	}{
+		{"урок кончился два часа назад", -3 * time.Hour, "house", false},
+		{"урок через час", time.Hour, "school", false},
+		{"урок через 10 минут", 10 * time.Minute, "homework", true},
+		{"урок идёт", -30 * time.Minute, "cat", true},
+	} {
+		moveLesson(t, f.conn, f.lessonID, c.startsIn)
+		if resp := f.clickOnLesson(t, f.alice, c.surface); resp.TermID == 0 {
+			t.Fatalf("%s: клик без термина: %+v", c.name, resp)
+		}
+		if _, ok := bySource(f.candidates(t, f.lessonID), store.CandidateClick)[c.surface]; ok != c.want {
+			t.Fatalf("%s: кандидат %s записан = %v, хотели %v", c.name, c.surface, ok, c.want)
+		}
+	}
+}
+
+// seedCandidates — n терминов prefix000, prefix001… с кандидатами source
+// у урока фикстуры, мимо api: столько знакомых слов в словарной фикстуре
+// нет. Возвращает id терминов по лемме.
+func (f *pickerFixture) seedCandidates(t *testing.T, prefix, source string, n int) map[string]int64 {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := f.conn.Exec(ctx,
+		`WITH t AS (
+		     INSERT INTO terms (lemma, surface)
+		     SELECT $1 || lpad(g::text, 3, '0'), $1 || lpad(g::text, 3, '0') FROM generate_series(0, $2 - 1) g
+		     RETURNING id, lemma)
+		 INSERT INTO lesson_term_candidates (lesson_id, term_id, source, surface)
+		 SELECT $3, id, $4, lemma FROM t`, prefix, n, f.lessonID, source); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.conn.Query(ctx, `SELECT lemma, id FROM terms WHERE starts_with(lemma, $1)`, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int64{}
+	var lemma string
+	var id int64
+	if _, err := pgx.ForEachRow(rows, []any{&lemma, &id}, func() error { ids[lemma] = id; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != n {
+		t.Fatalf("заведено %d терминов %s, хотели %d", len(ids), prefix, n)
+	}
+	return ids
+}
+
+// Потолки чеклиста (ADR-033): кандидатов-кликов у урока не больше
+// MaxClickCandidates — новое слово сверх него не заводится, а клик нового
+// человека по уже заведённому засчитывается; чеклист отдаёт не больше
+// MaxCandidatesPerSource слов источника — самые частые и все
+// подтверждённые, даже если они ниже среза.
+func TestLessonCandidatesCapped(t *testing.T) {
+	f := newPickerFixture(t)
+	ctx := context.Background()
+	clicked := f.seedCandidates(t, "capclick", store.CandidateClick, store.MaxClickCandidates)
+
+	if resp := f.clickOnLesson(t, f.alice, "house"); resp.TermID == 0 {
+		t.Fatalf("клик сверх потолка: %+v", resp)
+	}
+	got := bySource(f.candidates(t, f.lessonID), store.CandidateClick)
+	if _, ok := got["house"]; ok || len(got) != store.MaxClickCandidates {
+		t.Fatalf("сверх потолка: %d кандидатов-кликов, house записан = %v", len(got), ok)
+	}
+	if recorded, err := f.a.store.RecordClickCandidate(ctx, f.lessonID, f.bobID, clicked["capclick007"], "capclick007"); err != nil || !recorded {
+		t.Fatalf("клик по заведённому слову при полном потолке: %v, %v", recorded, err)
+	}
+	if c := bySource(f.candidates(t, f.lessonID), store.CandidateClick)["capclick007"]; c.Count != 2 {
+		t.Fatalf("capclick007 после клика Боба: %+v", c)
+	}
+
+	manual := f.seedCandidates(t, "capmanual", store.CandidateManual, store.MaxCandidatesPerSource+2)
+	last := fmt.Sprintf("capmanual%03d", store.MaxCandidatesPerSource+1)
+	cut := fmt.Sprintf("capmanual%03d", store.MaxCandidatesPerSource)
+	if _, err := f.conn.Exec(ctx, `INSERT INTO lesson_terms (lesson_id, term_id) VALUES ($1, $2)`, f.lessonID, manual[last]); err != nil {
+		t.Fatal(err)
+	}
+	got = bySource(f.candidates(t, f.lessonID), store.CandidateManual)
+	if len(got) != store.MaxCandidatesPerSource+1 || !got[last].Confirmed {
+		t.Fatalf("чеклист ручного ввода: %d слов, подтверждённое %s — %+v", len(got), last, got[last])
+	}
+	if _, ok := got[cut]; ok {
+		t.Fatalf("%s ниже среза, а в чеклисте", cut)
 	}
 }
 
@@ -269,6 +383,45 @@ func TestWhiteboardCandidatesFromScene(t *testing.T) {
 	var left int
 	if err := f.conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1`, store.JobWhiteboardTerms).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("джоба не снята: %d (%v)", left, err)
+	}
+}
+
+// Потолок доски (ADR-033): статья, вставленная на доску, даёт не больше
+// MaxWhiteboardTerms кандидатов — самые частые слова, при равенстве —
+// первые по лемме. Знакомые слова здесь — статьи датасета, которых нет
+// в OEWN: столько слов в словарной фикстуре нет.
+func TestWhiteboardCandidatesCapped(t *testing.T) {
+	f := newPickerFixture(t)
+	ctx := context.Background()
+	words := make([]string, lessonterms.MaxWhiteboardTerms+2)
+	for i := range words {
+		words[i] = "zq" + string([]byte{byte('a' + i/676), byte('a' + i/26%26), byte('a' + i%26)})
+	}
+	if _, err := f.conn.Exec(ctx,
+		`WITH imp AS (INSERT INTO definition_imports (source) VALUES ('cap-test') RETURNING id)
+		 INSERT INTO definitions (word, lemma, pos, glosses, source_line, import_id)
+		 SELECT w, w, 'noun', ARRAY['test word'], n, imp.id FROM imp, unnest($1::text[]) WITH ORDINALITY AS u(w, n)`,
+		words); err != nil {
+		t.Fatal(err)
+	}
+	// Последнее по алфавиту слово — дважды: оно самое частое и остаётся
+	frequent := words[len(words)-1]
+	text := strings.Join(append(words, frequent), " ")
+	f.openBoardWith(t, f.lessonID, []json.RawMessage{json.RawMessage(element("article", 1, text))})
+
+	w := securityRequest(f.h, "POST", f.path(f.lessonID, "/term-candidates/whiteboard"), "", f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var resp whiteboardCandidatesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Candidates != lessonterms.MaxWhiteboardTerms {
+		t.Fatalf("разбор доски: %s (%v), ждали %d", w.Body.String(), err, lessonterms.MaxWhiteboardTerms)
+	}
+	got := bySource(f.candidates(t, f.lessonID), store.CandidateWhiteboard)
+	kept, dropped := words[lessonterms.MaxWhiteboardTerms-2], words[lessonterms.MaxWhiteboardTerms-1]
+	if len(got) != lessonterms.MaxWhiteboardTerms || got[frequent].Count != 2 || got[kept].Count != 1 {
+		t.Fatalf("кандидатов доски %d; %s: %+v, %s: %+v", len(got), frequent, got[frequent], kept, got[kept])
+	}
+	if _, ok := got[dropped]; ok {
+		t.Fatalf("%s сверх потолка, а в кандидатах", dropped)
 	}
 }
 
@@ -496,6 +649,41 @@ func TestPickerConfirmAndAssign(t *testing.T) {
 	}
 }
 
+// Назначение обходит студентов, ушедших в архив после создания урока
+// (ADR-034): снапшот участников их помнит, но {"all":true} им ничего
+// не пишет, а явный student_ids с ними — 400 not_student.
+func TestAssignSkipsArchivedStudents(t *testing.T) {
+	f := newPickerFixture(t)
+	ctx := context.Background()
+	w := securityRequest(f.h, "POST", f.path(f.lessonID, "/term-candidates"), `{"words":["run"]}`, f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var manual manualCandidatesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &manual); err != nil || len(manual.Added) != 1 {
+		t.Fatalf("кандидаты: %s", w.Body.String())
+	}
+	expectStatus(t, securityRequest(f.h, "PUT", f.path(f.lessonID, "/terms"),
+		fmt.Sprintf(`{"term_ids":[%d]}`, manual.Added[0].TermID), f.teacher), http.StatusOK)
+	if _, err := f.conn.Exec(ctx, `UPDATE users SET deactivated_at = now() WHERE id = $1`, f.bobID); err != nil {
+		t.Fatal(err)
+	}
+
+	w = securityRequest(f.h, "POST", f.path(f.lessonID, "/terms/assignments"), `{"all":true}`, f.teacher)
+	expectStatus(t, w, http.StatusOK)
+	var resp assignLessonTermsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil ||
+		resp != (assignLessonTermsResponse{Students: 1, Terms: 1, Added: 1, Kept: 0}) {
+		t.Fatalf("назначение всем при Бобе в архиве: %s", w.Body.String())
+	}
+	if n := f.userTermCount(t, f.bobID); n != 0 {
+		t.Fatalf("Бобу в архиве назначено %d слов", n)
+	}
+	w = securityRequest(f.h, "POST", f.path(f.lessonID, "/terms/assignments"), fmt.Sprintf(`{"student_ids":[%d]}`, f.bobID), f.teacher)
+	expectStatus(t, w, http.StatusBadRequest)
+	if !jsonHasCode(t, w.Body.Bytes(), "not_student") {
+		t.Fatalf("Боб в архиве явно: %s", w.Body.String())
+	}
+}
+
 // Интеграция S3-8 и S4-1 (D-3): назначение словаря урока идёт через
 // store.SaveUserTerm, поэтому каждое новое назначенное слово получает
 // карточку FSRS в транзакции слова и сразу встаёт в очередь повторений.
@@ -606,21 +794,23 @@ func TestLessonTermsMigrationReversible(t *testing.T) {
 		var cols, idx string
 		if err := conn.QueryRow(ctx, `SELECT coalesce(string_agg(table_name || '.' || column_name, ',' ORDER BY table_name, column_name), '')
 			FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name IN ('lesson_term_candidates', 'lesson_terms')`).Scan(&cols); err != nil {
+			WHERE table_schema = current_schema()
+			  AND table_name IN ('lesson_term_candidates', 'lesson_term_clicks', 'lesson_terms')`).Scan(&cols); err != nil {
 			t.Fatal(err)
 		}
 		if err := conn.QueryRow(ctx, `SELECT coalesce(string_agg(indexname, ',' ORDER BY indexname), '')
 			FROM pg_indexes WHERE schemaname = current_schema()
-			  AND tablename IN ('lesson_term_candidates', 'lesson_terms')`).Scan(&idx); err != nil {
+			  AND tablename IN ('lesson_term_candidates', 'lesson_term_clicks', 'lesson_terms')`).Scan(&idx); err != nil {
 			t.Fatal(err)
 		}
 		return cols + " " + idx
 	}
 	want := "lesson_term_candidates.added_by,lesson_term_candidates.count,lesson_term_candidates.first_seen_at," +
 		"lesson_term_candidates.last_seen_at,lesson_term_candidates.lesson_id,lesson_term_candidates.source," +
-		"lesson_term_candidates.surface,lesson_term_candidates.term_id,lesson_terms.confirmed_at," +
+		"lesson_term_candidates.surface,lesson_term_candidates.term_id,lesson_term_clicks.lesson_id," +
+		"lesson_term_clicks.term_id,lesson_term_clicks.user_id,lesson_terms.confirmed_at," +
 		"lesson_terms.confirmed_by,lesson_terms.lesson_id,lesson_terms.term_id " +
-		"lesson_term_candidates_pkey,lesson_terms_pkey"
+		"lesson_term_candidates_pkey,lesson_term_clicks_pkey,lesson_terms_pkey"
 	if got := state(); got != want {
 		t.Fatalf("схема 0019: %s", got)
 	}

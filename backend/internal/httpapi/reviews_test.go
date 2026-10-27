@@ -347,10 +347,16 @@ func TestReviewMovesCardAndLogs(t *testing.T) {
 	if _, reviews := srsCardCount(t, conn, studentID, termID); reviews != 1 {
 		t.Fatalf("повтор записал оценку: %d", reviews)
 	}
-	expectStatus(t, securityRequest(h, "POST", "/reviews",
-		fmt.Sprintf(`{"review_id":%q,"term_id":%d,"rating":"easy"}`, reviewID(1), termID), student), http.StatusConflict)
-	// Новая оценка до следующего показа (вторая вкладка) — 409 not_due
+	// Тот же ключ с другой оценкой — review_conflict, а не not_due: ключ
+	// занят, хотя карточка и не к показу
 	w := securityRequest(h, "POST", "/reviews",
+		fmt.Sprintf(`{"review_id":%q,"term_id":%d,"rating":"easy"}`, reviewID(1), termID), student)
+	expectStatus(t, w, http.StatusConflict)
+	if !jsonHasCode(t, w.Body.Bytes(), "review_conflict") {
+		t.Fatalf("ждали review_conflict: %s", w.Body.String())
+	}
+	// Новая оценка до следующего показа (вторая вкладка) — 409 not_due
+	w = securityRequest(h, "POST", "/reviews",
 		fmt.Sprintf(`{"review_id":%q,"term_id":%d,"rating":"easy"}`, reviewID(2), termID), student)
 	expectStatus(t, w, http.StatusConflict)
 	if !jsonHasCode(t, w.Body.Bytes(), "not_due") {

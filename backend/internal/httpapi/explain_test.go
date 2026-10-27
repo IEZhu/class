@@ -109,8 +109,8 @@ func TestExplainAvailableInClick(t *testing.T) {
 }
 
 // DoD S5-8 (часть 1) на фейке: объяснение уходит к провайдеру один раз и
-// кэшируется по термину и нормализованному предложению; повтор — у того
-// же или другого пользователя, в другой форме и с другими пробелами —
+// кэшируется по термину, форме слова и нормализованному предложению;
+// повтор — у того же или другого пользователя, с другими пробелами —
 // провайдера не зовёт и лимит не тратит, другое предложение — новый вызов.
 func TestExplainCachesPerTermAndContext(t *testing.T) {
 	fake := llmtest.Texts(runExplanation, "Здесь ran — «бежала».\n\nГрамматика: прошедшее время.")
@@ -135,7 +135,7 @@ func TestExplainCachesPerTermAndContext(t *testing.T) {
 		sentence string
 	}{
 		{student, "run", "I run every morning."},
-		{student, "Run", "  I run\nevery   morning. "},
+		{student, "run", "  I run\nevery   morning. "},
 		{teacher, "run", "I run every morning."},
 	} {
 		again := explainOK(t, h, c.cookie, term.ID, c.surface, c.sentence)
@@ -163,6 +163,66 @@ func TestExplainCachesPerTermAndContext(t *testing.T) {
 	}
 	if n := countRows(t, conn, `SELECT count(*) FROM llm_usage WHERE kind <> 'explain'`); n != 0 {
 		t.Fatalf("объяснения заняли лимит генераций: %d строк", n)
+	}
+}
+
+// Форма слова — часть ключа кэша (ревью волны C): две формы одного термина
+// в одном предложении — два вызова провайдера и два объяснения, и вторая
+// форма не получает объяснение первой. Повтор каждой берётся из кэша.
+func TestExplainCacheKeepsSurfacesApart(t *testing.T) {
+	fake := llmtest.Texts("Здесь ran — «бегал».\n\nГрамматика: прошедшее время.", runExplanation)
+	a, conn, term := explainAPI(t, fake, 0)
+	h := a.Router()
+	_, alice := securityUser(t, a, conn, store.RoleStudent, "explain-alice")
+	_, bob := securityUser(t, a, conn, store.RoleStudent, "explain-bob")
+	sentence := "I run every day, but yesterday I ran twice."
+
+	ran := explainOK(t, h, alice, term.ID, "ran", sentence)
+	run := explainOK(t, h, bob, term.ID, "run", sentence)
+	if ran.Cached || run.Cached || ran.Explanation == run.Explanation || !strings.HasPrefix(run.Explanation, "Здесь run") {
+		t.Fatalf("две формы в одном предложении: ran %+v, run %+v", ran, run)
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 2 || !strings.HasPrefix(reqs[0].Prompt, "<word>ran</word>") || !strings.HasPrefix(reqs[1].Prompt, "<word>run</word>") {
+		t.Fatalf("запросы к провайдеру: %+v", reqs)
+	}
+	for surface, want := range map[string]string{"ran": ran.Explanation, "run": run.Explanation} {
+		if again := explainOK(t, h, alice, term.ID, surface, sentence); !again.Cached || again.Explanation != want {
+			t.Fatalf("повтор %s: %+v", surface, again)
+		}
+	}
+	if len(fake.Requests()) != 2 {
+		t.Fatalf("повторы позвали провайдера: %d вызовов", len(fake.Requests()))
+	}
+	if n := countRows(t, conn, `SELECT count(*) FROM term_explanations WHERE term_id = $1`, term.ID); n != 2 {
+		t.Fatalf("в кэше %d объяснений, ждали 2", n)
+	}
+}
+
+// Два первых клика по одному ключу разошлись: оба позвали провайдера,
+// и второй пишет в кэш позже. В кэше остаётся первый текст, а второй
+// ответ отдаёт его же с его временем — оба и все следующие клики видят
+// одно объяснение (ADR-039).
+func TestSaveTermExplanationKeepsFirst(t *testing.T) {
+	a, conn, term := explainAPI(t, nil, 0)
+	ctx := context.Background()
+	hash := explain.Hash("run", "I run.")
+	first := store.Explanation{TermID: term.ID, ContextHash: hash, Context: "I run.", Body: "первый",
+		Provider: llmtest.Name, Model: llmtest.Model}
+	if err := a.store.SaveTermExplanation(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+	second := store.Explanation{TermID: term.ID, ContextHash: hash, Context: "I run.", Body: "второй",
+		Provider: "other", Model: "other-model"}
+	if err := a.store.SaveTermExplanation(ctx, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.Body != "первый" || second.Provider != llmtest.Name || second.Model != llmtest.Model ||
+		first.CreatedAt.IsZero() || !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("второе сохранение: %+v, первое: %+v", second, first)
+	}
+	if n := countRows(t, conn, `SELECT count(*) FROM term_explanations WHERE term_id = $1`, term.ID); n != 1 {
+		t.Fatalf("в кэше %d строк, ждали 1", n)
 	}
 }
 
@@ -346,7 +406,7 @@ func TestTermExplanationsMigrationReversible(t *testing.T) {
 			t.Fatalf("%s: %v, %v", kind, ok, err)
 		}
 	}
-	e := store.Explanation{TermID: term.ID, ContextHash: explain.Hash("I run."), Context: "I run.", Body: "x",
+	e := store.Explanation{TermID: term.ID, ContextHash: explain.Hash("run", "I run."), Context: "I run.", Body: "x",
 		Provider: llmtest.Name, Model: llmtest.Model}
 	if err := a.store.SaveTermExplanation(ctx, &e); err != nil {
 		t.Fatal(err)

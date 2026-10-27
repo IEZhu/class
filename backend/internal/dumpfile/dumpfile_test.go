@@ -6,10 +6,14 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -145,5 +149,83 @@ func TestLazy(t *testing.T) {
 	}
 	if _, err := OpenLazy(ctx, filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("версия несуществующего файла")
+	}
+}
+
+// trustTestCert — клиент выгрузок до конца теста доверяет сертификату
+// httptest: он один у всех TLS-серверов httptest. Меняется только TLS
+// транспорта, проверка переадресаций — та же, что в работе.
+func trustTestCert(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	tr := client.Transport.(*http.Transport)
+	prev := tr.TLSClientConfig
+	tr.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	t.Cleanup(func() {
+		tr.CloseIdleConnections()
+		tr.TLSClientConfig = prev
+	})
+}
+
+// Переадресация, как и сам источник, — только на https (ревью PR #17):
+// https → https читается, https → http — ошибка, а открытый адрес даже
+// не запрашивается; потолок — 10 переадресаций, как у http.Client.
+func TestRedirectsHTTPSOnly(t *testing.T) {
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainHits.Add(1)
+		fmt.Fprint(w, "1\t2\n")
+	}))
+	defer plain.Close()
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		fmt.Fprint(w, "1\t2\n")
+	}))
+	defer target.Close()
+	var loops atomic.Int32
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/secure":
+			http.Redirect(w, r, target.URL+"/dump.tsv", http.StatusFound)
+		case "/downgrade":
+			http.Redirect(w, r, plain.URL+"/dump.tsv", http.StatusFound)
+		case "/loop":
+			loops.Add(1)
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer redirector.Close()
+	trustTestCert(t, redirector)
+	ctx := context.Background()
+
+	rc, version, err := Open(ctx, redirector.URL+"/secure")
+	if err != nil {
+		t.Fatalf("https → https: %v", err)
+	}
+	body, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil || string(body) != "1\t2\n" || version != `"v1"` {
+		t.Fatalf("https → https: %q, версия %q, %v", body, version, err)
+	}
+	if version, err := Stat(ctx, redirector.URL+"/secure"); err != nil || version != `"v1"` {
+		t.Fatalf("HEAD https → https: %q, %v", version, err)
+	}
+
+	if _, _, err := Open(ctx, redirector.URL+"/downgrade"); err == nil || !strings.Contains(err.Error(), "только https") {
+		t.Fatalf("GET https → http: %v, ждали отказ", err)
+	}
+	if _, err := Stat(ctx, redirector.URL+"/downgrade"); err == nil || !strings.Contains(err.Error(), "только https") {
+		t.Fatalf("HEAD https → http: %v, ждали отказ", err)
+	}
+	if n := plainHits.Load(); n != 0 {
+		t.Fatalf("по http ушло %d запросов", n)
+	}
+
+	if _, _, err := Open(ctx, redirector.URL+"/loop"); err == nil || !strings.Contains(err.Error(), "больше 10 переадресаций") {
+		t.Fatalf("петля переадресаций: %v", err)
+	}
+	if n := loops.Load(); n != maxRedirects {
+		t.Fatalf("по петле сделано %d запросов, ждали %d", n, maxRedirects)
 	}
 }

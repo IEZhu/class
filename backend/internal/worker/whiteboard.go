@@ -20,7 +20,9 @@ type SceneStorage interface {
 // whiteboardSnapshot — снимок сцены доски в whiteboards/{lesson_id}.json
 // (S3-6, ADR-020). Идемпотентен: снимок уже унёс текущую версию сцены —
 // ничего не делает; повтор после записи объекта, но до отметки в БД,
-// перезапишет тот же объект.
+// перезапишет тот же объект. Урок отменили, пока объект выгружался, —
+// отметка ставит его в удаление (material_files_delete), и джоба
+// закончена.
 func whiteboardSnapshot(st *store.Store, objects SceneStorage) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p store.WhiteboardSnapshotJob
@@ -45,6 +47,10 @@ func whiteboardSnapshot(st *store.Store, objects SceneStorage) jobs.Handler {
 		if err := objects.PutObject(ctx, key, "application/json", body); err != nil {
 			return err
 		}
-		return st.MarkWhiteboardSnapshot(ctx, p.LessonID, key, snap.SceneVersion)
+		err = st.MarkWhiteboardSnapshot(ctx, p.LessonID, key, snap.SceneVersion)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
 	}
 }

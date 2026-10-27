@@ -87,20 +87,42 @@ func httpVersion(h http.Header) string {
 	return h.Get("Last-Modified")
 }
 
+// client — клиент выгрузок. Без общего таймаута: полный дамп качается
+// минутами; зависание соединения ловят таймауты установки и первого
+// ответа. Переадресации — только на https (httpsOnly).
+var client = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: time.Minute,
+	},
+	CheckRedirect: httpsOnly,
+}
+
+// maxRedirects — потолок переадресаций, как у http.Client по умолчанию:
+// своя CheckRedirect заменяет его проверку целиком.
+const maxRedirects = 10
+
+// httpsOnly — переадресация, как и сам источник (checkSource), только
+// на https: зеркало или CDN, ответившие Location: http://…, отдали бы дамп
+// открытым текстом, и его можно было бы подменить по дороге.
+func httpsOnly(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("переадресация на %s: только https, дамп не должен подменяться по дороге", req.URL.Redacted())
+	}
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("больше %d переадресаций", maxRedirects)
+	}
+	return nil
+}
+
 // fetch — запрос к источнику по https; ответ не 200 — ошибка.
 func fetch(ctx context.Context, method, source string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, source, nil)
 	if err != nil {
 		return nil, err
 	}
-	// Без общего таймаута: полный дамп качается минутами. Зависание
-	// соединения ловят таймауты установки и первого ответа.
-	client := &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   30 * time.Second,
-		ResponseHeaderTimeout: time.Minute,
-	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

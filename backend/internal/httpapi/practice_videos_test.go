@@ -181,8 +181,9 @@ func TestPracticeVideosRankByLearningWords(t *testing.T) {
 }
 
 // С srs_cards (0021, S4-1) веса — по карточкам FSRS: dog к повторению
-// и дважды забыт, у go карточки нет (как к повторению), cat повторять не
-// пора. dogOnly обгоняет cat-видео, хотя по статусу cat новее.
+// и забыт десять раз, но забывания в весе — не больше трёх (2 + 3), у go
+// карточки нет (как к повторению), cat повторять не пора. dogOnly обгоняет
+// cat-видео, хотя по статусу cat новее.
 func TestPracticeVideosSRSWeights(t *testing.T) {
 	f := newVideoFixture(t)
 	ctx := context.Background()
@@ -201,13 +202,13 @@ func TestPracticeVideosSRSWeights(t *testing.T) {
 		}
 	}
 	card("cat", time.Now().Add(24*time.Hour), 5)
-	card("dog", time.Now().Add(-time.Hour), 2)
+	card("dog", time.Now().Add(-time.Hour), 10)
 	if _, err := f.conn.Exec(ctx, `DELETE FROM srs_cards WHERE term_id = (SELECT id FROM terms WHERE lemma = 'go')`); err != nil {
 		t.Fatal(err)
 	}
 
 	page := getVideos(t, f.a.Router(), f.student, "")
-	if got := targetWords(page.videoTargetsResponse); got != "srs dog:4 go:2 cat:1" {
+	if got := targetWords(page.videoTargetsResponse); got != "srs dog:5 go:2 cat:1" {
 		t.Fatalf("цели %s", got)
 	}
 	if got := videoOrder(page); got != "allThree001 dogOnly0001 catLots0001 catSlow0001" {
