@@ -445,3 +445,56 @@ func TestTermClickExamples(t *testing.T) {
 		t.Fatalf("без таблиц корпуса: %+v", got)
 	}
 }
+
+// Один обработчик клика совмещает три правила: незнакомое слово — term_id 0
+// без термина, статуса и примеров (ADR-017); у знакомого — статус в
+// личном словаре кликнувшего студента (S3-5, у преподавателя — null)
+// и до двух примеров Tatoeba с подписью (S5-4).
+func TestTermClickCombinesKnownWordStatusAndExamples(t *testing.T) {
+	a, conn := securityDB(t)
+	ctx := context.Background()
+	studentID, student := securityUser(t, a, conn, store.RoleStudent, "combined-student")
+	_, teacher := securityUser(t, a, conn, store.RoleTeacher, "combined-teacher")
+	h := a.Router()
+	importTatoeba(t, a, readTatoebaFixture(t).sources("v1"), tatoeba.Options{})
+	clickJSON := func(cookie *http.Cookie, surface string) (termClickResponse, string) {
+		t.Helper()
+		w := securityRequest(h, "POST", "/terms/click", `{"surface":"`+surface+`"}`, cookie)
+		expectStatus(t, w, http.StatusOK)
+		var resp termClickResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp, w.Body.String()
+	}
+
+	unknown, raw := clickJSON(student, "zzyzxq")
+	if unknown.TermID != 0 || unknown.Status != nil || len(unknown.Examples) != 0 ||
+		!strings.Contains(raw, `"examples":[]`) || !strings.Contains(raw, `"status":null`) {
+		t.Fatalf("незнакомое слово: %s", raw)
+	}
+	var stored int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM terms WHERE lemma = 'zzyzxq'`).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("незнакомое слово завело термин: %d, %v", stored, err)
+	}
+
+	known, raw := clickJSON(student, "running")
+	if known.TermID == 0 || known.Lemma != "run" || known.Status != nil || len(known.Examples) != 2 ||
+		known.Examples[1].Attribution.Author != "fixture_en" ||
+		known.Examples[1].Attribution.TranslationURL != "https://tatoeba.org/sentences/show/102" ||
+		known.Examples[0].Attribution.License != tatoeba.License {
+		t.Fatalf("знакомое слово вне словаря: %s", raw)
+	}
+	status := 3
+	if _, err := a.store.SaveUserTerm(ctx, studentID, known.TermID, &status, nil); err != nil {
+		t.Fatal(err)
+	}
+	inDict, raw := clickJSON(student, "ran")
+	if inDict.TermID != known.TermID || inDict.Status == nil || *inDict.Status != 3 || len(inDict.Examples) != 2 {
+		t.Fatalf("слово из словаря студента: %s", raw)
+	}
+	byTeacher, raw := clickJSON(teacher, "run")
+	if byTeacher.TermID != known.TermID || byTeacher.Status != nil || len(byTeacher.Examples) != 2 {
+		t.Fatalf("клик преподавателя: %s", raw)
+	}
+}
