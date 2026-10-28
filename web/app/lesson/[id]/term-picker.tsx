@@ -1,11 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
 import type { AssignResult, CandidateSource, LessonTerm, ManualCandidatesResult, TermCandidate } from "../../../lib/api";
 import ClickableText from "../../clickable-text";
 import { FormStatus, requestJson, useSubmit } from "../../forms";
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { EmptyState } from "../../ui/empty";
+import { Field } from "../../ui/field";
+import { Icon } from "../../ui/icons";
+import { Skeleton } from "../../ui/skeleton";
+import styles from "./picker.module.css";
 
 // Post-lesson word picker (S3-8, ADR-034): преподаватель урока отмечает
 // кандидатов (клики учеников, доска, свой ввод — S3-7, ADR-033),
@@ -27,10 +34,6 @@ const rejectReasons: Record<ManualCandidatesResult["rejected"][number]["reason"]
   not_a_word: "не одно слово",
   unknown: "незнакомое слово",
 };
-
-const sectionStyle: CSSProperties = { border: "1px solid #ddd", borderRadius: 8, padding: "1rem", margin: "1rem 0" };
-const cellStyle: CSSProperties = { padding: "0.25rem 0.5rem", borderBottom: "1px solid #eee", verticalAlign: "top" };
-const mutedStyle: CSSProperties = { color: "#666" };
 
 const candidatesPath = (lessonId: number) => `/api/lessons/${lessonId}/term-candidates`;
 
@@ -95,17 +98,37 @@ export default function TermPicker({ lessonId, students }: { lessonId: number; s
   const dirty = !sameSet(checked, saved);
 
   return (
-    <section style={sectionStyle}>
-      <h2 style={{ marginTop: 0 }}>Словарь урока</h2>
-      <p style={mutedStyle}>
+    <section id="picker" className={cx("card section", styles.picker)} aria-labelledby="picker-title">
+      <div className="card-head">
+        <h2 id="picker-title">Подбор слов</h2>
+        <span className="spacer" />
+        {candidates !== null && <span className="pill pill--accent">Отмечено {checked.size}</span>}
+      </div>
+      <p className={cx("hint", styles.intro)}>
         Отметьте слова, которые войдут в словарь урока, сохраните и назначьте студентам — слова появятся в их
         личных словарях со статусом «новое». Слова, которые студент уже учит, сохранят его статус.
       </p>
-      {loadError && <p style={{ color: "crimson" }}>{loadError}</p>}
-      {candidates === null && !loadError && <p style={mutedStyle}>Загружаем кандидатов…</p>}
+      {loadError && (
+        <div className={styles.pad}>
+          <Alert tone="danger">
+            <span className={styles.cap}>{loadError}</span>
+          </Alert>
+        </div>
+      )}
+      {candidates === null && !loadError && (
+        <div className={styles.pad}>
+          <Skeleton lines={5} label="Загружаем кандидатов…" showLabel />
+        </div>
+      )}
       {candidates !== null && (
-        <>
-          {candidates.length === 0 && <p style={mutedStyle}>Кандидатов пока нет: соберите слова с доски или добавьте свои.</p>}
+        // Обёртка ограничивает липкое сохранение списком кандидатов: оно не
+        // наезжает на шапку карточки и не тянется к инструментам ниже
+        <div className={styles.candidates}>
+          {candidates.length === 0 && (
+            <EmptyState icon="search" title="Кандидатов пока нет" titleAs="h3">
+              Соберите слова с доски или добавьте свои.
+            </EmptyState>
+          )}
           {sources.map((source) => (
             <CandidateGroup
               key={source}
@@ -115,18 +138,26 @@ export default function TermPicker({ lessonId, students }: { lessonId: number; s
               onToggle={toggle}
             />
           ))}
-          <form onSubmit={save.submit} style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-            <button type="submit" disabled={save.busy || !dirty}>
+          {/* Сохранение липнет к низу экрана, пока видны кандидаты: длинный
+              список не надо проматывать до кнопки (DESIGN §6.3) */}
+          <form onSubmit={save.submit} className={cx("card-foot", styles.saveBar)}>
+            <Button type="submit" variant="primary" disabled={save.busy || !dirty} busy={save.busy}>
               Сохранить словарь урока ({checked.size})
-            </button>
+            </Button>
             <FormStatus error={save.error} done={save.done && !dirty} doneText="сохранено" />
-            {dirty && !save.error && <span style={mutedStyle}>есть несохранённые отметки</span>}
+            {dirty && !save.error && <span className="small muted">есть несохранённые отметки</span>}
           </form>
-        </>
+        </div>
       )}
-      <ManualInput lessonId={lessonId} onAdded={(ids) => reload(ids)} />
-      <BoardCollect lessonId={lessonId} onCollected={() => reload()} />
-      <Assign lessonId={lessonId} students={students} disabledReason={assignBlocker(saved.size, dirty)} />
+      <div className={styles.tools}>
+        <div className={styles.toolsCol}>
+          <ManualInput lessonId={lessonId} onAdded={(ids) => reload(ids)} />
+          <BoardCollect lessonId={lessonId} onCollected={() => reload()} />
+        </div>
+        <div className={styles.toolsCol}>
+          <Assign lessonId={lessonId} students={students} disabledReason={assignBlocker(saved.size, dirty)} />
+        </div>
+      </div>
     </section>
   );
 }
@@ -150,43 +181,45 @@ function CandidateGroup({
 }) {
   if (items.length === 0) return null;
   return (
-    <div style={{ margin: "1rem 0" }}>
-      <h3 style={{ margin: "0 0 0.5rem" }}>
-        {sourceTitles[source]} ({items.length})
+    <div className={styles.group}>
+      <h3 className={styles.groupTitle}>
+        {sourceTitles[source]} <span className="muted">({items.length})</span>
       </h3>
-      <table style={{ borderCollapse: "collapse", width: "100%" }}>
-        <tbody>
-          {items.map((c) => (
-            <tr key={c.term_id}>
-              <td style={{ ...cellStyle, width: "2rem" }}>
-                {/* Чекбокс отдельно от слова: клик по слову открывает попап,
-                    а не переключает отметку */}
-                <input
-                  type="checkbox"
-                  aria-label={`в словарь урока: ${c.lemma}`}
-                  checked={checked.has(c.term_id)}
-                  onChange={() => onToggle(c.term_id)}
-                />
-              </td>
-              <td style={cellStyle}>
-                <strong>
-                  <ClickableText text={c.lemma} />
-                </strong>
-                {c.surface.toLowerCase() !== c.lemma && (
-                  <span style={mutedStyle}>
-                    {" "}
-                    (<ClickableText text={c.surface} />)
-                  </span>
-                )}
-              </td>
-              <td style={cellStyle}>{c.translation ?? "—"}</td>
-              <td style={{ ...cellStyle, ...mutedStyle, textAlign: "right", whiteSpace: "nowrap" }}>
-                {source !== "manual" && `×${c.count}`}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className={cx("table table--dense", styles.table)}>
+          <tbody>
+            {items.map((c) => (
+              <tr key={c.term_id} className={cx(checked.has(c.term_id) && styles.checked)}>
+                <td className={styles.checkCell}>
+                  {/* Чекбокс отдельно от слова: клик по слову открывает попап,
+                      а не переключает отметку. Подпись-ячейка — цель 32px */}
+                  <label className={styles.checkLabel}>
+                    <input
+                      type="checkbox"
+                      aria-label={`в словарь урока: ${c.lemma}`}
+                      checked={checked.has(c.term_id)}
+                      onChange={() => onToggle(c.term_id)}
+                    />
+                  </label>
+                </td>
+                <td>
+                  <strong className={styles.lemma}>
+                    <ClickableText text={c.lemma} />
+                  </strong>
+                  {c.surface.toLowerCase() !== c.lemma && (
+                    <span className="muted">
+                      {" "}
+                      (<ClickableText text={c.surface} />)
+                    </span>
+                  )}
+                </td>
+                <td>{c.translation ?? "—"}</td>
+                <td className={cx("muted", styles.countCell)}>{source !== "manual" && `×${c.count}`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -208,22 +241,19 @@ function ManualInput({ lessonId, onAdded }: { lessonId: number; onAdded: (termId
     await onAdded(res.added.map((a) => a.term_id));
   });
   return (
-    <form onSubmit={submit} style={{ margin: "1rem 0" }}>
-      <label style={{ display: "block", marginBottom: "0.25rem" }}>
-        Добавить свои слова (через запятую или с новой строки)
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={2}
-          style={{ display: "block", width: "100%", boxSizing: "border-box" }}
-        />
-      </label>
-      <button type="submit" disabled={busy}>
-        Добавить
-      </button>{" "}
-      <FormStatus error={error} done={done} doneText="добавлено" />
+    <form onSubmit={submit} className={styles.tool}>
+      <Field label="Добавить свои слова" hint="Через запятую или с новой строки">
+        <textarea className="textarea" value={text} onChange={(e) => setText(e.target.value)} rows={2} />
+      </Field>
+      <div className="row">
+        <Button type="submit" variant="secondary" disabled={busy} busy={busy}>
+          <Icon name="plus" size="sm" />
+          Добавить
+        </Button>
+        <FormStatus error={error} done={done} doneText="добавлено" />
+      </div>
       {rejected.length > 0 && (
-        <p style={mutedStyle}>
+        <p className="small muted">
           Не добавлены: {rejected.map((r) => `${r.word || "(пусто)"} — ${rejectReasons[r.reason]}`).join("; ")}
         </p>
       )}
@@ -242,12 +272,13 @@ function BoardCollect({ lessonId, onCollected }: { lessonId: number; onCollected
     await onCollected();
   });
   return (
-    <form onSubmit={submit} style={{ margin: "1rem 0" }}>
-      <button type="submit" disabled={busy}>
+    <form onSubmit={submit} className={cx("row", styles.tool)}>
+      <Button type="submit" variant="secondary" disabled={busy} busy={busy}>
+        <Icon name="edit" size="sm" />
         Собрать слова с доски
-      </button>{" "}
-      {error && <span style={{ color: "crimson" }}>{error}</span>}
-      {!error && found !== null && <span style={mutedStyle}>знакомых слов на доске: {found}</span>}
+      </Button>
+      <FormStatus error={error} done={false} doneText="" />
+      {!error && found !== null && <span className="small muted">знакомых слов на доске: {found}</span>}
     </form>
   );
 }
@@ -264,6 +295,7 @@ function Assign({
   const [all, setAll] = useState(true);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [result, setResult] = useState<AssignResult | null>(null);
+  const id = useId();
   const { busy, error, submit } = useSubmit(async () => {
     setResult(null);
     const body = all ? { all: true } : { student_ids: [...picked] };
@@ -271,50 +303,58 @@ function Assign({
   });
 
   if (students.length === 0) {
-    return <p style={mutedStyle}>У урока нет студентов — назначать словарь некому.</p>;
+    return <p className="small muted">У урока нет студентов — назначать словарь некому.</p>;
   }
   const blocked = disabledReason ?? (!all && picked.size === 0 ? "выберите студентов" : null);
   return (
-    <form onSubmit={submit} style={{ margin: "1rem 0", borderTop: "1px solid #eee", paddingTop: "0.75rem" }}>
-      <h3 style={{ margin: "0 0 0.5rem" }}>Назначить словарь урока</h3>
-      <label style={{ marginRight: "1rem" }}>
-        <input type="radio" checked={all} onChange={() => setAll(true)} /> всем студентам урока ({students.length})
-      </label>
-      <label>
-        <input type="radio" checked={!all} onChange={() => setAll(false)} /> выбранным
-      </label>
-      {!all && (
-        <div style={{ margin: "0.5rem 0" }}>
-          {students.map((s) => (
-            <label key={s.user_id} style={{ display: "block" }}>
-              <input
-                type="checkbox"
-                checked={picked.has(s.user_id)}
-                onChange={() =>
-                  setPicked((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(s.user_id)) next.delete(s.user_id);
-                    else next.add(s.user_id);
-                    return next;
-                  })
-                }
-              />{" "}
-              {s.name}
-            </label>
-          ))}
-        </div>
-      )}
-      <div style={{ marginTop: "0.5rem" }}>
-        <button type="submit" disabled={busy || blocked !== null}>
-          Назначить
-        </button>{" "}
-        {blocked && <span style={mutedStyle}>{blocked}</span>}
-        {error && <span style={{ color: "crimson" }}>{error}</span>}
-        {result && !error && (
-          <span style={{ color: "#2a7" }}>
-            назначено студентам: {result.students}; новых слов в словарях: {result.added}, уже были: {result.kept}
-          </span>
+    <form onSubmit={submit} className={styles.tool}>
+      <fieldset className="fieldset">
+        <legend>Назначить словарь урока</legend>
+        <label className="check">
+          <input type="radio" name={`${id}-whom`} checked={all} onChange={() => setAll(true)} />
+          всем студентам урока ({students.length})
+        </label>
+        <label className="check">
+          <input type="radio" name={`${id}-whom`} checked={!all} onChange={() => setAll(false)} />
+          выбранным
+        </label>
+        {!all && (
+          <fieldset className={cx("fieldset", styles.students)}>
+            <legend className="sr-only">Кому назначить</legend>
+            {students.map((s) => (
+              <label key={s.user_id} className="check">
+                <input
+                  type="checkbox"
+                  checked={picked.has(s.user_id)}
+                  onChange={() =>
+                    setPicked((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(s.user_id)) next.delete(s.user_id);
+                      else next.add(s.user_id);
+                      return next;
+                    })
+                  }
+                />
+                {s.name}
+              </label>
+            ))}
+          </fieldset>
         )}
+      </fieldset>
+      <div className="row">
+        <Button type="submit" variant="primary" disabled={busy || blocked !== null} busy={busy}>
+          Назначить
+        </Button>
+        {blocked && <span className="small muted">{blocked}</span>}
+        <FormStatus
+          error={error}
+          done={result !== null}
+          doneText={
+            result
+              ? `назначено студентам: ${result.students}; новых слов в словарях: ${result.added}, уже были: ${result.kept}`
+              : ""
+          }
+        />
       </div>
     </form>
   );

@@ -1,0 +1,156 @@
+/* Подбор слов преподавателя (DESIGN §6.3, TermPicker): кандидаты
+   таблицами по источникам, липкое сохранение, свои слова, назначение. */
+
+/* Колонка minmax(0, 1fr): широкая таблица прокручивается в своей обёртке,
+   а не растягивает карточку шире экрана телефона */
+.picker {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.intro {
+  max-width: 72ch;
+  padding: var(--sp-4) var(--sp-5) 0;
+}
+
+.pad {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+.cap {
+  display: inline-block;
+}
+
+.cap::first-letter {
+  text-transform: uppercase;
+}
+
+/* Группа кандидатов: заголовок источника и таблица строк */
+.group {
+  padding: var(--sp-5) var(--sp-5) 0;
+}
+
+.groupTitle {
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-md);
+}
+
+.table td {
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Отмеченная строка — фоном выбранного; галочка остаётся главным признаком */
+.checked,
+.table tbody tr.checked:hover {
+  background: var(--c-primary-soft);
+}
+
+/* Ячейка-подпись чекбокса: щелчок по ней переключает отметку */
+.table .checkCell {
+  width: 44px;
+  padding: 0;
+}
+
+.checkLabel {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 40px;
+  cursor: pointer;
+}
+
+/* Фокус с клавиатуры не прячет строку под липким сохранением */
+.checkLabel input {
+  scroll-margin-bottom: calc(var(--shell-bottom) + var(--h-md) + 2 * var(--sp-4));
+}
+
+.lemma {
+  font-weight: 600;
+}
+
+.table .countCell {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.candidates {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Сохранение словаря урока: липнет к низу экрана (над нижней навигацией
+   телефона), пока в карточке видны кандидаты */
+.saveBar {
+  position: sticky;
+  bottom: var(--shell-bottom);
+  z-index: var(--z-sticky);
+  margin-top: var(--sp-5);
+  background: var(--c-surface);
+}
+
+/* Свои слова и сбор с доски — слева, назначение — справа */
+.tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--c-border);
+}
+
+.toolsCol {
+  display: grid;
+  align-content: start;
+  gap: var(--sp-5);
+  padding: var(--sp-5);
+  min-width: 0;
+}
+
+.toolsCol + .toolsCol {
+  border-left: 1px solid var(--c-border);
+}
+
+.tool {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.tool:global(.row) {
+  display: flex;
+}
+
+.students {
+  padding-left: var(--sp-6);
+}
+
+@media (max-width: 767px) {
+  .intro {
+    padding: var(--sp-3) var(--sp-4) 0;
+  }
+
+  .pad,
+  .group {
+    padding-inline: var(--sp-4);
+  }
+
+  .tools {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolsCol {
+    padding: var(--sp-4);
+  }
+
+  .toolsCol + .toolsCol {
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+  }
+
+  /* Таблица на телефоне — с узкими полями ячеек, чтобы влезть в 390px */
+  .table td:not(.checkCell) {
+    padding-inline: var(--sp-2);
+  }
+}
