@@ -10,12 +10,18 @@ import { useSyncExternalStore } from "react";
 const UTC = "UTC";
 const utcAliases = new Set(["UTC", "Etc/UTC", "Etc/GMT", "GMT", "Etc/UCT", "UCT", "Etc/Universal", "Etc/Zulu"]);
 
+// Пояс браузера не меняется за время жизни страницы: он считается один
+// раз, подписка пустая
+let viewerZone: string | null = null;
+
 function browserZone(): string {
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return zone && !utcAliases.has(zone) ? zone : UTC;
+  if (viewerZone === null) {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    viewerZone = zone && !utcAliases.has(zone) ? zone : UTC;
+  }
+  return viewerZone;
 }
 
-// Пояс браузера не меняется за время жизни страницы: подписка пустая
 function subscribe(): () => void {
   return () => {};
 }
@@ -29,8 +35,24 @@ export function useViewerTimeZone(): string {
   return useSyncExternalStore(subscribe, browserZone, serverZone);
 }
 
+// Форматтеры — на модуль: new Intl.DateTimeFormat в десятки раз дороже
+// format(), а страница печатает одно и то же время во многих строках.
+// Ключ — пояс и опции; наборов опций в коде несколько, поясов — два
+// (UTC на сервере, пояс зрителя в браузере), поэтому Map не растёт.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(options: Intl.DateTimeFormatOptions, timeZone: string): Intl.DateTimeFormat {
+  const key = `${timeZone} ${JSON.stringify(options)}`;
+  let fmt = formatters.get(key);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("ru-RU", { ...options, timeZone });
+    formatters.set(key, fmt);
+  }
+  return fmt;
+}
+
 function format(value: string, end: string | undefined, options: Intl.DateTimeFormatOptions, timeZone: string): string {
-  const fmt = new Intl.DateTimeFormat("ru-RU", { ...options, timeZone });
+  const fmt = formatter(options, timeZone);
   return end ? fmt.formatRange(new Date(value), new Date(end)) : fmt.format(new Date(value));
 }
 
