@@ -1,0 +1,51 @@
+/* Список уроков и форма нового события (DESIGN §6.2, макет lessons.html).
+   Токены и общие классы (.card, .pill, .meta, .field…) — в globals.css. */
+
+.groups { display: grid; gap: var(--sp-8); }
+.group { display: grid; gap: var(--sp-3); }
+.groupTitle { font-size: var(--fs-sm); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
+
+/* Карточки — прямые дети .group: селектор сильнее общих .card и a.card
+   (display, рамка), так что порядок подключения CSS не важен.
+   Идущий урок: зелёная кромка + кнопка входа; цвет — не единственный
+   признак, рядом пилюля «Идёт сейчас». */
+.group > .live {
+  display: grid; grid-template-columns: 1fr auto; gap: var(--sp-4); align-items: center;
+  padding: var(--sp-5) var(--sp-6); border-left: 4px solid var(--c-live);
+}
+.liveInfo { display: grid; gap: var(--sp-2); min-width: 0; }
+.liveTitle { font-size: var(--fs-xl); }
+
+/* Строка урока — вся карточка ссылка, высота не меньше 64px */
+.group > .row {
+  display: grid; grid-template-columns: 64px 1fr auto; gap: var(--sp-4); align-items: center;
+  min-height: 64px; padding: var(--sp-4) var(--sp-5);
+}
+.rowBody { display: grid; gap: var(--sp-1); min-width: 0; }
+.rowTitle { font-size: var(--fs-lg); }
+.chev { color: var(--c-text-muted); }
+/* Интервал «21:00–22:00» без зазоров, которые .meta > span даёт детям */
+.rowBody .time, .liveInfo .time { gap: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.date {
+  display: grid; justify-items: center; align-content: center; gap: 2px; min-height: 64px; padding: var(--sp-1);
+  border-radius: var(--r-md); background: var(--c-surface-2); line-height: 1.1; text-align: center;
+}
+.day { font-size: var(--fs-2xl); font-weight: 700; }
+.month { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; }
+
+/* Форма нового события в раскрывающейся карточке под шапкой */
+.newEvent { margin-bottom: var(--sp-8); }
+.form { display: grid; gap: var(--sp-4); }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.minutes { max-width: 10rem; }
+
+@media (max-width: 767px) {
+  .group > .live { grid-template-columns: 1fr; padding: var(--sp-4); }
+  .group > .row { grid-template-columns: 52px 1fr; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); }
+  .chev { display: none; }
+  .date { min-height: 52px; }
+  .day { font-size: var(--fs-xl); }
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .minutes { max-width: none; }
+}

@@ -4,6 +4,12 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { FormEvent } from "react";
 
+import { Alert } from "../ui/alert";
+import { Button } from "../ui/button";
+import { Field } from "../ui/field";
+
+// Вход (DESIGN §6.1): карточка под логотипом, который рисует layout.
+// Ошибка — плашка над кнопкой с role="alert".
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -36,36 +42,41 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 360, margin: "6rem auto", padding: "0 1rem" }}>
-      <h1>Lingua Class</h1>
-      <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
-        <label>
-          Email
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-            style={{ width: "100%", padding: "0.5rem" }}
-          />
-        </label>
-        <label>
-          Пароль
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-            style={{ width: "100%", padding: "0.5rem" }}
-          />
-        </label>
-        <button type="submit" disabled={busy} style={{ padding: "0.6rem" }}>
-          {busy ? "Входим…" : "Войти"}
-        </button>
-        {error && <p style={{ color: "crimson" }}>{error}</p>}
-      </form>
+    <main className="auth-page">
+      <div className="card card-pad">
+        <h1>Вход</h1>
+        <form onSubmit={submit} className="stack">
+          <Field label="Email">
+            <input
+              className="input"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+            />
+          </Field>
+          <Field label="Пароль">
+            <input
+              className="input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+            />
+          </Field>
+          {error && (
+            <Alert tone="danger">
+              {/* Текст api начинается со строчной — заглавную даёт CSS FormStatus */}
+              <span className="form-status-text">{error}</span>
+            </Alert>
+          )}
+          <Button type="submit" variant="primary" size="lg" block disabled={busy} busy={busy}>
+            {busy ? "Входим…" : "Войти"}
+          </Button>
+        </form>
+      </div>
     </main>
   );
 }
