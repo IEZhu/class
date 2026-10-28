@@ -1,0 +1,60 @@
+/* Учётная запись (DESIGN §6.10): шапка профиля, карточки-формы. Общие
+   классы — в globals.css, здесь только раскладка этой страницы. */
+
+.profile {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.avatar {
+  width: 48px;
+  height: 48px;
+  color: var(--c-text-muted);
+}
+.who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.nameRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+}
+.name {
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  line-height: var(--lh-tight);
+}
+/* Длинный e-mail гостя (guest-…@…) переносится, а не раздвигает страницу */
+.email {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Два поля пароля рядом от 600px, на телефоне — друг под другом */
+.pair {
+  display: grid;
+  gap: var(--sp-4);
+}
+@media (min-width: 600px) {
+  .pair {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Итог формы слева, кнопка справа; на телефоне кнопка во всю ширину
+   (btn--block-sm) */
+.foot {
+  justify-content: flex-end;
+}
+.foot > :first-child:not(:last-child) {
+  margin-right: auto;
+}
+.submit {
+  flex: none;
+}
