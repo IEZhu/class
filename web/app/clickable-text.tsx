@@ -1,7 +1,7 @@
 "use client";
 
 import { cloneElement, createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { CSSProperties, MouseEvent, ReactElement, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement, ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { TermClick, TermExample, TermExplanation } from "../lib/api";
@@ -9,7 +9,7 @@ import { isTextSelection } from "../lib/selection";
 import type { TermStatus } from "../lib/term-status";
 import { sentenceAround, tokenize, uniqueKeys } from "../lib/tokenize";
 import type { Token } from "../lib/tokenize";
-import { isRussianPart } from "../lib/word-nav";
+import { isActivationKey, isRussianPart, moveWord, wordIndexes } from "../lib/word-nav";
 import styles from "./clickable-text.module.css";
 import { RequestError, requestJson } from "./forms";
 import TermStatusControl, { termStatuses } from "./term-status-control";
@@ -23,8 +23,13 @@ import { Skeleton } from "./ui/skeleton";
 // S3-1, ADR-026): материалы, домашка, транскрипт, субтитры, Tatoeba,
 // сгенерированные тексты. Режет текст на слова (lib/tokenize), красит
 // их по статусу в словаре зрителя и по клику открывает попап слова.
-// Корень — lang="en" (DESIGN §5.1). Признак слова в DOM — атрибут data-i
-// (номер токена).
+//
+// Клавиатура (DESIGN §5.2): слова — role="button", у текста одна
+// остановка Tab (слово с tabIndex 0, остальные -1), ←/→ и Home/End
+// переходят между словами, Enter и пробел открывают попап; Escape
+// закрывает его и возвращает фокус на слово. Признак слова в DOM —
+// атрибут data-i (номер токена): по нему обработчики клавиш карточек и
+// cloze узнают нажатие на слове. Корень — lang="en" (DESIGN §5.1).
 
 interface Scope {
   lessonId: number | null;
@@ -69,8 +74,10 @@ interface WordClick {
 interface OpenPopup extends WordClick {
   // Номер клика: новый клик в том же тексте пересоздаёт попап
   seq: number;
-  // Токен открытого слова: его подсветка
+  // Токен открытого слова: подсветка и возврат фокуса
   i: number;
+  // Открыт с клавиатуры: фокус в попапе прокручивает страницу к нему
+  keyboard: boolean;
   top: number;
   left: number;
 }
@@ -79,7 +86,7 @@ interface OpenPopup extends WordClick {
 interface WordCache {
   tokens: Token[];
   cls: string[];
-  els: ReactElement<{ className: string }>[];
+  els: ReactElement<{ tabIndex: number; className: string; "aria-expanded"?: boolean }>[];
 }
 
 // Попап на странице один: открывая свой, текст закрывает чужой
@@ -98,6 +105,7 @@ export default function ClickableText({
 }) {
   const scope = useContext(ScopeContext);
   const tokens = useMemo(() => tokenize(text), [text]);
+  const words = useMemo(() => wordIndexes(tokens), [tokens]);
   // Куски между словами — один раз на текст; с кириллицей — в lang="ru"
   const parts = useMemo(
     () =>
@@ -115,7 +123,17 @@ export default function ClickableText({
   const wordCache = useRef<WordCache | null>(null);
   useSyncExternalStore(termStatuses.subscribe, termStatuses.getVersion, serverVersion);
   const [popup, setPopup] = useState<OpenPopup | null>(null);
+  // Слово, на котором стоит остановка Tab текста; null — первое слово
+  const [current, setCurrent] = useState<number | null>(null);
+  const root = useRef<HTMLSpanElement>(null);
   const close = useRef(() => setPopup(null)).current;
+  // Закрытие из попапа: Escape и «Закрыть» возвращают фокус на слово,
+  // клик мимо попапа — нет (фокус уходит туда, куда кликнули)
+  const dismiss = useRef((restoreFocus: boolean) => {
+    const word = restoreFocus ? root.current?.querySelector<HTMLElement>(":scope > .is-open") : null;
+    setPopup(null);
+    word?.focus();
+  }).current;
 
   useEffect(() => {
     if (scope.studentId !== null) void termStatuses.request(scope.studentId, uniqueKeys(tokens));
@@ -138,7 +156,8 @@ export default function ClickableText({
     return t?.key ? { el, i, t } : null;
   }
 
-  function open(el: HTMLElement, i: number, t: Token) {
+  function open(el: HTMLElement, i: number, t: Token, keyboard: boolean) {
+    setCurrent(i);
     const word = { surface: t.text, key: t.key ?? "", context: sentenceAround(text, t.start, t.start + t.text.length) };
     if (onWord) {
       onWord(word);
@@ -151,6 +170,7 @@ export default function ClickableText({
       ...word,
       seq: (prev?.seq ?? 0) + 1,
       i,
+      keyboard,
       top: rect.bottom + window.scrollY + 4,
       left: rect.left + window.scrollX,
     }));
@@ -170,14 +190,36 @@ export default function ClickableText({
     // Клик по слову — этого текста: строка вокруг (перемотка реплики
     // транскрипта, S2-4) его не получает
     e.stopPropagation();
-    open(hit.el, hit.i, hit.t);
+    open(hit.el, hit.i, hit.t, false);
   }
 
+  // Клавиши слова — тоже один обработчик на текст. Обработанные клавиши
+  // дальше не всплывают: пробел на слове не листает страницу и не
+  // переворачивает карточку
+  function handleKeyDown(e: KeyboardEvent<HTMLSpanElement>) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const hit = wordAt(e.target, e.currentTarget);
+    if (!hit) return;
+    if (isActivationKey(e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) open(hit.el, hit.i, hit.t, true);
+      return;
+    }
+    const next = moveWord(words, hit.i, e.key);
+    if (next === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setCurrent(next);
+    e.currentTarget.querySelector<HTMLElement>(`:scope > [data-i="${next}"]`)?.focus();
+  }
+
+  const tabStop = current !== null && tokens[current]?.key ? current : words[0];
   const openIndex = popup?.i ?? -1;
   const studentId = scope.studentId;
   // Элементы слов живут между перерисовками, пока у слова тот же класс:
-  // React пропускает тот же элемент, не сравнивая свойства. Тогда открытие
-  // попапа и смена статуса трогают в DOM только свои слова —
+  // React пропускает тот же элемент, не сравнивая свойства. Тогда ←/→,
+  // открытие попапа и смена статуса трогают в DOM только свои слова —
   // в длинном тексте это сотни пропущенных span на каждое действие.
   // Кэш пишется в ref во время рендера намеренно: элемент — неизменяемое
   // описание, одно и то же для слова с тем же классом, и брошенный React
@@ -185,23 +227,28 @@ export default function ClickableText({
   const cache = wordCache.current?.tokens === tokens ? wordCache.current : (wordCache.current = { tokens, cls: [], els: [] });
 
   return (
-    <span lang="en" className={styles.text} onClick={handleClick}>
+    <span ref={root} lang="en" className={styles.text} onClick={handleClick} onKeyDown={handleKeyDown}>
       {tokens.map((t, i) => {
         if (!t.key) return parts[i];
         const cls = WORD_CLASS[(studentId !== null && termStatuses.statusOf(studentId, t.key)) || 0];
         let el = cache.cls[i] === cls ? cache.els[i] : undefined;
         if (!el) {
           el = (
-            <span key={i} data-i={i} className={cls}>
+            <span key={i} data-i={i} role="button" tabIndex={-1} className={cls}>
               {t.text}
             </span>
           );
           cache.cls[i] = cls;
           cache.els[i] = el;
         }
-        return i === openIndex ? cloneElement(el, { className: `${cls} is-open` }) : el;
+        if (i !== tabStop && i !== openIndex) return el;
+        return cloneElement(el, {
+          tabIndex: i === tabStop ? 0 : -1,
+          className: i === openIndex ? `${cls} is-open` : cls,
+          "aria-expanded": i === openIndex || undefined,
+        });
       })}
-      {popup && createPortal(<TermPopup key={popup.seq} start={popup} onClose={close} />, document.body)}
+      {popup && createPortal(<TermPopup key={popup.seq} start={popup} onClose={dismiss} />, document.body)}
     </span>
   );
 }
@@ -214,13 +261,19 @@ function hasTerm(d: TermClick): boolean {
   return d.term_id > 0;
 }
 
-function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }) {
+// Перебор Tab внутри попапа: пока он открыт, фокус не уходит в конец
+// страницы (попап — последний в body) — клик мимо попапа его закрывает,
+// и для клавиатуры он такой же модальный
+const FOCUSABLE = 'a[href], button:not(:disabled), [tabindex="0"]';
+
+function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocus: boolean) => void }) {
   const scope = useContext(ScopeContext);
   useSyncExternalStore(termStatuses.subscribe, termStatuses.getVersion, serverVersion);
   const [word, setWord] = useState<WordClick>(start);
   const [data, setData] = useState<TermClick | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -245,12 +298,19 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
     };
   }, [word, scope.lessonId, scope.studentId]);
 
+  // Фокус — на заголовок попапа (DESIGN §4.2): при открытии и при переходе
+  // к другому слову — слово, на котором был фокус, пропадает на время
+  // загрузки. Открытый мышью попап страницу не прокручивает, как и раньше.
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+    heading.current?.focus({ preventScroll: !start.keyboard });
+  }, [word, start.keyboard]);
+
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") onClose(true);
     }
     function onDown(e: PointerEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose(false);
     }
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onDown);
@@ -259,6 +319,22 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
       document.removeEventListener("pointerdown", onDown);
     };
   }, [onClose]);
+
+  function keepTab(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== "Tab") return;
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === heading.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   // Попап не вылезает за правый край окна; место — CSS-переменными, на
   // телефоне .popover их не читает и становится листом снизу
@@ -275,7 +351,9 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
       <div
         ref={ref}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={keepTab}
         role="dialog"
+        aria-modal="true"
         aria-label={`Слово ${word.surface}`}
         className="popover"
         style={place}
@@ -283,7 +361,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
         <div className="sheet-handle" aria-hidden="true" />
         <div className={styles.head}>
           <div className={styles.titles}>
-            <h2 lang="en" className={styles.lemma}>
+            <h2 ref={heading} tabIndex={-1} lang="en" className={styles.lemma}>
               {data?.lemma ?? word.surface}
             </h2>
             {data && data.lemma !== word.key && (
@@ -292,7 +370,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
               </p>
             )}
           </div>
-          <button type="button" className="icon-btn icon-btn--sm" onClick={onClose} aria-label="Закрыть">
+          <button type="button" className="icon-btn icon-btn--sm" onClick={() => onClose(true)} aria-label="Закрыть">
             <Icon name="x" />
           </button>
         </div>

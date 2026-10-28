@@ -13,6 +13,9 @@
 }
 .titles { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .lemma { font-size: var(--fs-2xl); font-weight: 700; line-height: var(--lh-tight); overflow-wrap: anywhere; }
+/* Заголовок получает фокус при открытии (tabindex -1), но не управляется
+   с клавиатуры: рамка фокуса у него не нужна */
+.lemma:focus { outline: none; }
 .form { font-size: var(--fs-sm); color: var(--c-text-muted); }
 .tr { padding: 0 var(--sp-5); font-size: var(--fs-lg); line-height: var(--lh-base); }
 
