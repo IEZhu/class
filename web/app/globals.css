@@ -473,6 +473,7 @@ body:has(.app-shell) .auth-top { display: none; }
 .input[aria-invalid="true"], .select[aria-invalid="true"], .textarea[aria-invalid="true"] { border-color: var(--c-danger); }
 .input:disabled, .select:disabled, .textarea:disabled { background-color: var(--c-surface-2); color: var(--c-text-disabled); border-color: var(--c-border); cursor: not-allowed; }
 .input[readonly], .textarea[readonly] { background-color: var(--c-surface-2); }
+.input[aria-disabled="true"] { cursor: progress; }
 .input--lg { min-height: var(--h-touch); font-size: var(--fs-lg); }
 /* Стрелка у select — из currentColor, видна в обеих темах */
 .select {

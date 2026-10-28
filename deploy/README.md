@@ -668,11 +668,12 @@ FSRS для слов без карточки: N» — N слов словаря 
 что и браузер.
 
 ```bash
-docker tag lingua-web:latest lingua-web:pre-ui
+docker image inspect lingua-web:pre-ui >/dev/null 2>&1 || docker tag "$(docker inspect -f '{{.Image}}' lingua-web-1)" lingua-web:pre-ui
 docker compose -f deploy/docker-compose.yml build web && docker compose -f deploy/docker-compose.yml up -d --no-deps --timeout 2 web
 ```
 
-Первая команда сохраняет работающий образ `web` под тегом для отката. Потом
+Первая команда сохраняет образ работающего контейнера `web` под тегом для
+отката — один раз: повтор блока после сборки не перезапишет тег выпуском. Потом
 собирается новый образ и пересоздаётся только контейнер `web`: `--no-deps`
 не трогает postgres и api, даже если их образы разошлись с запущенными
 (`up web` без него пересоздал бы и их, а без образа — и собрал). Пока новый
@@ -687,11 +688,13 @@ docker compose -f deploy/docker-compose.yml build web && docker compose -f deplo
 
 ```bash
 docker tag lingua-web:pre-ui lingua-web:latest && docker compose -f deploy/docker-compose.yml up -d --no-deps --timeout 2 web
-git checkout <коммит до выпуска> -- web
+git checkout --no-overlay <коммит до выпуска> -- web
 ```
 
 Вторая строка возвращает `web/` к работающему образу, чтобы следующая сборка
-не выкатила выпуск снова; перед следующим `git pull` — `git checkout HEAD -- web`.
+не выкатила выпуск снова; `--no-overlay` убирает и файлы, добавленные выпуском
+(без него они остаются, и сборка смешает два дерева). Перед следующим
+`git pull` — `git checkout HEAD -- web`.
 База и api от выпуска не зависят.
 
 Браузеры: раскладке каркаса нужен `:has()` — Chrome 105+, Safari 15.4+,

@@ -7,7 +7,7 @@ const OWN_CLICK_TARGETS = "a, button, input, select, textarea, label, summary, [
 
 // focusLost — фокус ни на чём: на <body> — нажатая кнопка исчезла или на
 // время запроса стала disabled, щелчок пришёлся на пустое место
-function focusLost(): boolean {
+export function focusLost(): boolean {
   return document.activeElement === null || document.activeElement === document.body;
 }
 

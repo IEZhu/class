@@ -33,7 +33,7 @@ import { Icon } from "../../ui/icons";
 import { Kbd } from "../../ui/kbd";
 import { Pill } from "../../ui/pill";
 import s from "../practice.module.css";
-import { useSessionFocus } from "../session-focus";
+import { focusLost, useSessionFocus } from "../session-focus";
 
 function newAttemptId(): string {
   return reviewId(crypto.getRandomValues(new Uint8Array(16)));
@@ -156,8 +156,12 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
       } else {
         setChosen(null);
         setError(e instanceof Error ? e.message : "не удалось сохранить ответ");
-        // Введённое слово — в поле, туда и фокус: повтор — тот же Enter
-        if (how === "typing") typingRef.current?.focus({ preventScroll: true });
+        // Введённое слово — в поле, туда и фокус: повтор — тот же Enter. Только
+        // если фокус потерян (нажатая мышью «Проверить» на время запроса
+        // disabled) или в сессии; куда его увёл сам человек — там и остаётся
+        if (how === "typing" && (focusLost() || document.activeElement === sessionRef.current)) {
+          typingRef.current?.focus({ preventScroll: true });
+        }
       }
     } finally {
       setBusy(false);

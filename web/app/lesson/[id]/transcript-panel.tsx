@@ -82,6 +82,13 @@ export default function TranscriptPanel({
   const [reload, setReload] = useState(0);
   const [editing, setEditing] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // more — строка дочитывания в конце списка, одна на загрузку и ошибку с
+  // «Повторить» (tabIndex=-1): фокус с нажатой «Повторить» остаётся в ней, а
+  // не падает на <body>. moreFocus — фокус был в ней, когда пришли остальные
+  // реплики: он переходит на первую из них
+  const moreRef = useRef<HTMLDivElement>(null);
+  const moreFocus = useRef(false);
+  const shownFromServer = fromServer ? initial.transcript.utterances.length : 0;
   const titleId = useId();
 
   useEffect(() => {
@@ -89,6 +96,7 @@ export default function TranscriptPanel({
     requestJson<Transcript>(`/api/lessons/${lessonId}/transcript`, "GET")
       .then((t) => {
         if (cancelled) return;
+        moreFocus.current = moreRef.current?.contains(document.activeElement) ?? false;
         setTranscript(withLocalChanges(t, local));
         setComplete(true);
         setMoreError(null);
@@ -117,6 +125,13 @@ export default function TranscriptPanel({
   const timeline = useMemo(() => [...utterances].sort((a, b) => a.start_ms - b.start_ms), [utterances]);
   const active = activeAt(timeline, timeMs);
   const groups = useMemo(() => groupBySpeaker(utterances), [utterances]);
+
+  useEffect(() => {
+    if (!complete || !moreFocus.current) return;
+    moreFocus.current = false;
+    const first = utterances[shownFromServer];
+    if (first) listRef.current?.querySelector<HTMLElement>(`[data-idx="${first.idx}"] button`)?.focus();
+  }, [complete, utterances, shownFromServer]);
 
   // Звучащая реплика остаётся в видимой части списка; прокручивается только
   // сам список, не страница. Пока преподаватель правит текст, список стоит.
@@ -224,28 +239,32 @@ export default function TranscriptPanel({
             ))}
           </div>
         ))}
-        {total !== null && !complete && !moreError && (
-          <p className={cx("muted small", styles.more)}>
-            <span className="spinner" aria-hidden="true" />
-            Загружаем {moreReplicas(total - utterances.length)}…
-          </p>
-        )}
-        {total !== null && !complete && moreError && (
-          <div className={cx("small", styles.more)}>
-            <p className="field-error" role="alert">
-              <Icon name="error" />
-              Не удалось загрузить {moreReplicas(total - utterances.length)}: {moreError}
-            </p>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                setMoreError(null);
-                setReload((n) => n + 1);
-              }}
-            >
-              Повторить
-            </Button>
+        {total !== null && !complete && (
+          <div ref={moreRef} tabIndex={-1} className={cx("small", styles.more, !moreError && "muted")}>
+            {moreError ? (
+              <>
+                <p className="field-error" role="alert">
+                  <Icon name="error" />
+                  Не удалось загрузить {moreReplicas(total - utterances.length)}: {moreError}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    moreRef.current?.focus({ preventScroll: true });
+                    setMoreError(null);
+                    setReload((n) => n + 1);
+                  }}
+                >
+                  Повторить
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="spinner" aria-hidden="true" />
+                Загружаем {moreReplicas(total - utterances.length)}…
+              </>
+            )}
           </div>
         )}
       </div>
