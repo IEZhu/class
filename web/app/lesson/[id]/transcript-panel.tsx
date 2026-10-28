@@ -1,10 +1,17 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import type { Transcript, Utterance } from "../../../lib/api";
 import { activeAt, clock } from "../../../lib/timeline";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { Icon } from "../../ui/icons";
+import { Skeleton } from "../../ui/skeleton";
+import styles from "./media.module.css";
 import UtteranceText from "./utterance-text";
 
 // Человек урока, с которым преподаватель сопоставляет метку спикера (S2-5):
@@ -19,8 +26,6 @@ const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = 
   fetching: "Транскрипт ещё готовится.",
   error: "Транскрипт не получился — запись доступна без него.",
 };
-
-const mutedStyle = { color: "#666", margin: 0 } as const;
 
 // Транскрипт по спикерам (S2-4) рядом с плеером: подряд идущие реплики
 // одного спикера — один блок, клик по реплике мотает запись к её началу,
@@ -45,6 +50,7 @@ export default function TranscriptPanel({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -98,26 +104,59 @@ export default function TranscriptPanel({
     );
   }, []);
 
-  if (missing) return <p style={mutedStyle}>Транскрипта у этого урока нет.</p>;
-  if (error) return <p style={{ color: "crimson", margin: 0 }}>Транскрипт недоступен: {error}</p>;
-  if (!transcript) return <p style={mutedStyle}>Загружаем транскрипт…</p>;
-  if (transcript.status !== "completed") return <p style={mutedStyle}>{statusTexts[transcript.status]}</p>;
-  if (utterances.length === 0) return <p style={mutedStyle}>В записи не распознано речи.</p>;
+  // Все состояния — в одной карточке «Транскрипт»: место рядом с плеером
+  // не прыгает, пока транскрипт грузится (DESIGN §4.3)
+  function card(body: ReactNode, count?: number) {
+    return (
+      <section className={cx("card", styles.transcript)} aria-labelledby={titleId}>
+        <div className="card-head">
+          <h2 id={titleId}>Транскрипт</h2>
+          {count !== undefined && <span className={cx("muted small", styles.count)}>{replicas(count)}</span>}
+        </div>
+        {body}
+      </section>
+    );
+  }
 
-  return (
-    <div>
-      <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.1rem" }}>Транскрипт</h2>
+  if (missing) return card(<p className={cx("muted", styles.note)}>Транскрипта у этого урока нет.</p>);
+  if (error) {
+    return card(
+      <div className={styles.note}>
+        <Alert tone="danger">Транскрипт недоступен: {error}</Alert>
+      </div>,
+    );
+  }
+  if (!transcript) {
+    return card(
+      <div className={styles.note}>
+        <Skeleton lines={6} label="Загружаем транскрипт…" />
+      </div>,
+    );
+  }
+  if (transcript.status !== "completed") {
+    return card(
+      <div className={styles.note}>
+        <Alert tone={transcript.status === "error" ? "warning" : "info"}>{statusTexts[transcript.status]}</Alert>
+      </div>,
+    );
+  }
+  if (utterances.length === 0) return card(<p className={cx("muted", styles.note)}>В записи не распознано речи.</p>);
+
+  return card(
+    <>
       {canEdit && (
         <SpeakerMapping lessonId={lessonId} utterances={utterances} people={people} onSeek={onSeek} onMapped={mapped} />
       )}
-      <div
-        ref={listRef}
-        // position: relative — offsetTop реплик отсчитывается от списка
-        style={{ position: "relative", maxHeight: "70vh", overflowY: "auto", paddingRight: "0.25rem" }}
-      >
+      {/* position: relative (в CSS) — offsetTop реплик отсчитывается от списка */}
+      <div ref={listRef} className={styles.list}>
         {groups.map((g) => (
-          <div key={g[0].idx} style={{ marginBottom: "0.75rem" }}>
-            <div style={{ fontWeight: 600, fontSize: "0.9rem", color: "#2a7" }}>{speakerTitle(g[0])}</div>
+          <div key={g[0].idx} className={styles.group}>
+            <div className={styles.speaker}>
+              <span className="avatar avatar--sm" aria-hidden="true">
+                {speakerBadge(g[0])}
+              </span>
+              {speakerTitle(g[0])}
+            </div>
             {g.map((u) => (
               <UtteranceRow
                 key={u.idx}
@@ -134,7 +173,8 @@ export default function TranscriptPanel({
           </div>
         ))}
       </div>
-    </div>
+    </>,
+    utterances.length,
   );
 }
 
@@ -159,15 +199,12 @@ const UtteranceRow = memo(function UtteranceRow({
   onEdit: (idx: number | null) => void;
   onSaved: (u: Utterance) => void;
 }) {
+  const at = clock(u.start_ms);
   return (
     <div
       data-idx={u.idx}
-      style={{
-        padding: "0.2rem 0.4rem",
-        borderLeft: `3px solid ${active ? "#2a7" : "transparent"}`,
-        background: active ? "#e8f6ef" : "transparent",
-        borderRadius: 4,
-      }}
+      className={cx(styles.utt, active && styles.active, editing && styles.editing)}
+      aria-current={active || undefined}
     >
       {editing ? (
         <UtteranceEditor lessonId={lessonId} utterance={u} onSaved={onSaved} onCancel={() => onEdit(null)} />
@@ -175,30 +212,38 @@ const UtteranceRow = memo(function UtteranceRow({
         <>
           <button
             type="button"
+            className="ts"
             onClick={() => onSeek(u.start_ms)}
             title="Перейти к этому месту записи"
-            style={{ border: "none", background: "none", padding: 0, color: "#888", cursor: "pointer", fontVariantNumeric: "tabular-nums" }}
+            aria-label={`Перейти к ${at}`}
           >
-            {clock(u.start_ms)}
-          </button>{" "}
-          <span onClick={() => onSeek(u.start_ms)} style={{ cursor: "pointer" }}>
-            <UtteranceText text={u.text} />
-          </span>
-          {u.edited_at && (
-            <span title={`исправлено ${new Date(u.edited_at).toLocaleString("ru-RU")}`} style={{ color: "#999", fontSize: "0.8rem" }}>
-              {" "}
-              (испр.)
+            {at}
+          </button>
+          <div className={styles.uttBody}>
+            <span className={styles.uttText} onClick={() => onSeek(u.start_ms)}>
+              <UtteranceText text={u.text} />
             </span>
-          )}
+            {u.edited_at && (
+              <>
+                {" "}
+                <span
+                  className={cx("pill pill--plain", styles.edited)}
+                  title={`исправлено ${new Date(u.edited_at).toLocaleString("ru-RU")}`}
+                >
+                  испр.
+                </span>
+              </>
+            )}
+          </div>
           {canEdit && (
             <button
               type="button"
+              className="icon-btn icon-btn--sm"
               onClick={() => onEdit(u.idx)}
               title="Исправить текст реплики"
               aria-label="Исправить текст реплики"
-              style={{ border: "none", background: "none", padding: "0 0.25rem", color: "#888", cursor: "pointer" }}
             >
-              ✎
+              <Icon name="edit" size="sm" />
             </button>
           )}
         </>
@@ -226,21 +271,22 @@ function UtteranceEditor({
   });
 
   return (
-    <form onSubmit={save.submit}>
+    <form onSubmit={save.submit} className={styles.editor}>
       <textarea
+        className="textarea"
+        aria-label="Текст реплики"
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={3}
         autoFocus
-        style={{ width: "100%", boxSizing: "border-box", padding: "0.4rem", font: "inherit" }}
       />
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-        <button type="submit" disabled={save.busy || text.trim() === ""}>
+      <div className="row">
+        <Button type="submit" variant="primary" size="sm" disabled={save.busy || text.trim() === ""} busy={save.busy}>
           {save.busy ? "Сохраняем…" : "Сохранить"}
-        </button>
-        <button type="button" onClick={onCancel} disabled={save.busy}>
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={save.busy}>
           Отмена
-        </button>
+        </Button>
         <FormStatus error={save.error} done={false} doneText="" />
       </div>
     </form>
@@ -264,11 +310,15 @@ function SpeakerMapping({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const baseId = useId();
   const firstByLabel = useMemo(() => {
     const first = new Map<string, Utterance>();
     for (const u of utterances) if (!first.has(u.speaker_label)) first.set(u.speaker_label, u);
     return [...first.values()];
   }, [utterances]);
+  // Раскрыто, пока есть несопоставленные метки; дальше открывает и
+  // закрывает сам преподаватель (open задаётся только при монтировании)
+  const [openAtStart] = useState(() => firstByLabel.some((u) => u.user_id === null));
 
   async function map(label: string, userID: number | null) {
     setBusy(label);
@@ -287,13 +337,20 @@ function SpeakerMapping({
   }
 
   return (
-    <fieldset style={{ border: "1px solid #eee", borderRadius: 6, margin: "0 0 0.75rem", padding: "0.5rem 0.75rem" }}>
-      <legend style={{ fontSize: "0.9rem", color: "#666" }}>Кто говорит</legend>
-      {firstByLabel.map((u) => (
-        <div key={u.speaker_label} style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.25rem" }}>
-          <label>
-            Спикер {u.speaker_label}:{" "}
+    <details className={cx("disclosure", styles.speakers)} open={openAtStart}>
+      <summary>
+        Кто говорит
+        <span className="muted small">· {firstByLabel.length}</span>
+      </summary>
+      <div className={styles.speakerRows}>
+        {firstByLabel.map((u) => (
+          <div key={u.speaker_label} className={styles.speakerRow}>
+            <label className="label" htmlFor={`${baseId}-${u.speaker_label}`}>
+              Спикер {u.speaker_label}
+            </label>
             <select
+              id={`${baseId}-${u.speaker_label}`}
+              className="select"
               value={u.user_id ?? ""}
               disabled={busy !== null}
               onChange={(e) => void map(u.speaker_label, e.target.value === "" ? null : Number(e.target.value))}
@@ -309,19 +366,20 @@ function SpeakerMapping({
                 </option>
               ))}
             </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => onSeek(u.start_ms)}
-            title="Послушать первую реплику"
-            style={{ border: "none", background: "none", padding: 0, color: "#888", cursor: "pointer", textAlign: "left" }}
-          >
-            ▶ «{preview(u.text)}»
-          </button>
-        </div>
-      ))}
-      <FormStatus error={error} done={false} doneText="" />
-    </fieldset>
+            <button
+              type="button"
+              className={cx("btn btn--ghost btn--sm", styles.preview)}
+              onClick={() => onSeek(u.start_ms)}
+              title="Послушать первую реплику"
+            >
+              <Icon name="play" size="sm" />
+              <span>«{preview(u.text)}»</span>
+            </button>
+          </div>
+        ))}
+        <FormStatus error={error} done={false} doneText="" />
+      </div>
+    </details>
   );
 }
 
@@ -340,6 +398,28 @@ function groupBySpeaker(utterances: Utterance[]): Utterance[][] {
 
 function speakerTitle(u: Utterance): string {
   return u.speaker_name ?? `Спикер ${u.speaker_label}`;
+}
+
+// Аватар спикера: инициалы человека или метка ASR («C»). Инициалы — то же
+// правило, что у аватара каркаса (app-shell.tsx)
+function speakerBadge(u: Utterance): string {
+  if (!u.speaker_name) return u.speaker_label;
+  const letters = u.speaker_name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => Array.from(w)[0] ?? "")
+    .join("");
+  return letters.toUpperCase() || u.speaker_label;
+}
+
+// «23 реплики»: число реплик в шапке транскрипта
+function replicas(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} реплика`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} реплики`;
+  return `${n} реплик`;
 }
 
 function preview(text: string): string {

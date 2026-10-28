@@ -6,6 +6,9 @@ import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 import { requestJson } from "../../forms";
+import { Alert } from "../../ui/alert";
+import { cx } from "../../ui/cx";
+import styles from "./media.module.css";
 
 type MediaURL = { url: string; expires_at: string };
 
@@ -92,21 +95,36 @@ export default function LessonPlayer({
     };
   }, [playable]);
 
-  if (error) return <p style={{ color: "crimson", margin: 0 }}>{error}</p>;
-  if (!src) return <p style={{ color: "#666", margin: 0 }}>Готовим запись…</p>;
+  if (error) {
+    return (
+      <Alert tone="danger">
+        <span className={styles.cap}>{error}</span>
+      </Alert>
+    );
+  }
+  // Место под плеер 16:9 держится заранее: страница не прыгает
+  if (!src) {
+    return (
+      <div className={cx("skeleton skeleton--player", styles.playerLoading)} aria-busy="true">
+        <span>Готовим запись…</span>
+      </div>
+    );
+  }
 
   return (
     <>
       {/* Plyr переносит <video> в свою разметку. Обёртка держит её внутри
           одного узла, который React снимает целиком: сам <video> на старом
-          месте он бы уже не нашёл. */}
-      <div>
+          месте он бы уже не нашёл. Свой CSS Plyr сохраняет; обёртка —
+          светлый остров (DESIGN §4.5): основной цвет Plyr — фирменный
+          светлой темы, на тёмном видео он виден в обеих темах */}
+      <div className={cx("light-island", styles.player)}>
         <video
           ref={videoRef}
           controls
           playsInline
           preload="metadata"
-          style={{ width: "100%" }}
+          className={styles.video}
           // Ссылка живёт 30 минут (storage.PresignTTL). Для длинной записи
           // она может истечь прямо во время просмотра — тогда браузер отдаст
           // ошибку загрузки, и мы берём свежую с той же позиции.
@@ -141,7 +159,7 @@ export default function LessonPlayer({
           src={src}
         />
       </div>
-      {notice && <p style={{ color: "#666", margin: "0.5rem 0 0" }}>{notice}</p>}
+      {notice && <p className={cx("small muted", styles.playerNotice)}>{notice}</p>}
     </>
   );
 }
