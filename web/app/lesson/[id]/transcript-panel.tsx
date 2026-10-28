@@ -14,7 +14,7 @@ import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import { cx } from "../../ui/cx";
 import { Icon } from "../../ui/icons";
-import { useViewerTimeZone } from "../../ui/local-time";
+import { useLocalTimeText } from "../../ui/local-time";
 import { Skeleton } from "../../ui/skeleton";
 import styles from "./media.module.css";
 import UtteranceText from "./utterance-text";
@@ -46,8 +46,9 @@ const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = 
 // сама: он мог дозреть, а правки идут уже от свежей копии. Правки,
 // сохранённые до ответа перечитывания, ложатся поверх него
 // (withLocalChanges). Пока показано только начало (total), шапка — «40 из N
-// реплик», в конце списка — строка загрузки, а метки спикеров ждут весь
-// транскрипт: по началу их список неполон.
+// реплик», в конце списка — строка загрузки (после сбоя — ошибка с
+// «Повторить», начало остаётся), а метки спикеров ждут весь транскрипт: по
+// началу их список неполон.
 export default function TranscriptPanel({
   lessonId,
   initial,
@@ -69,10 +70,16 @@ export default function TranscriptPanel({
   const [transcript, setTranscript] = useState<Transcript | null>(fromServer ? initial.transcript : null);
   // complete — показан весь транскрипт, а не только начало с сервера
   const [complete, setComplete] = useState(!partial);
-  const [local] = useState<LocalChanges>(() => ({ utterances: new Map(), speakers: new Map() }));
+  // local — правки, сохранённые с открытия страницы: их кладёт поверх
+  // перечитанного транскрипта withLocalChanges
+  const local = useRef<LocalChanges>({ utterances: new Map(), speakers: new Map() }).current;
   // missing — транскрипта у урока нет (ASR не настроен или записи не было)
   const [missing, setMissing] = useState(initial !== null && "missing" in initial);
   const [error, setError] = useState<string | null>(null);
+  // moreError — остальное к началу с сервера не дочиталось; reload —
+  // номер попытки дочитать («Повторить»)
+  const [moreError, setMoreError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [editing, setEditing] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -84,6 +91,7 @@ export default function TranscriptPanel({
         if (cancelled) return;
         setTranscript(withLocalChanges(t, local));
         setComplete(true);
+        setMoreError(null);
         setMissing(false);
       })
       .catch((e: unknown) => {
@@ -93,14 +101,17 @@ export default function TranscriptPanel({
           setMissing(true);
           return;
         }
-        // Сбой перечитывания не прячет полный транскрипт, показанный с сервера;
-        // от начала (partial) без остального толку нет — показываем ошибку
-        if (!fromServer || partial) setError(e instanceof Error ? e.message : "не удалось получить транскрипт");
+        // Сбой перечитывания не прячет транскрипт, показанный с сервера:
+        // полный остаётся как есть, у начала (partial) вместо строки загрузки —
+        // ошибка с «Повторить»; открытая правка и сохранённое не пропадают
+        const message = e instanceof Error ? e.message : "не удалось получить транскрипт";
+        if (!fromServer) setError(message);
+        else if (partial) setMoreError(message);
       });
     return () => {
       cancelled = true;
     };
-  }, [lessonId, fromServer, partial, local]);
+  }, [lessonId, fromServer, partial, local, reload]);
 
   const utterances = useMemo(() => transcript?.utterances ?? [], [transcript]);
   const timeline = useMemo(() => [...utterances].sort((a, b) => a.start_ms - b.start_ms), [utterances]);
@@ -133,15 +144,7 @@ export default function TranscriptPanel({
   const mapped = useCallback(
     (s: SpeakerLink) => {
       local.speakers.set(s.speaker_label, s);
-      setTranscript(
-        (t) =>
-          t && {
-            ...t,
-            utterances: t.utterances.map((it) =>
-              it.speaker_label === s.speaker_label ? { ...it, user_id: s.user_id, speaker_name: s.speaker_name } : it,
-            ),
-          },
-      );
+      setTranscript((t) => t && withLocalChanges(t, local));
     },
     [local],
   );
@@ -197,7 +200,7 @@ export default function TranscriptPanel({
         />
       )}
       {/* position: relative (в CSS) — offsetTop реплик отсчитывается от списка */}
-      <div ref={listRef} className={styles.list} aria-busy={!complete || undefined}>
+      <div ref={listRef} className={styles.list} aria-busy={(!complete && !moreError) || undefined}>
         {groups.map((g) => (
           <div key={g[0].idx} className={styles.group}>
             <div className={styles.speaker}>
@@ -221,11 +224,29 @@ export default function TranscriptPanel({
             ))}
           </div>
         ))}
-        {total !== null && !complete && (
+        {total !== null && !complete && !moreError && (
           <p className={cx("muted small", styles.more)}>
             <span className="spinner" aria-hidden="true" />
             Загружаем {moreReplicas(total - utterances.length)}…
           </p>
+        )}
+        {total !== null && !complete && moreError && (
+          <div className={cx("small", styles.more)}>
+            <p className="field-error" role="alert">
+              <Icon name="error" />
+              Не удалось загрузить {moreReplicas(total - utterances.length)}: {moreError}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setMoreError(null);
+                setReload((n) => n + 1);
+              }}
+            >
+              Повторить
+            </Button>
+          </div>
         )}
       </div>
     </>,
@@ -302,18 +323,16 @@ const UtteranceRow = memo(function UtteranceRow({
   );
 });
 
+// Время правки в подсказке «испр.»: «28.10.2026, 05:11:39»
+const editedFormat: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "medium" };
+
 // «испр.» у исправленной реплики: когда — в подсказке, в поясе зрителя
 // (DESIGN §5.4). Первые реплики рендерит сервер — по UTC, с подписью; после
 // гидратации подсказка перерисовывается в поясе браузера
 function EditedMark({ at }: { at: string }) {
-  const zone = useViewerTimeZone();
-  const time = new Date(at).toLocaleString("ru-RU", { timeZone: zone });
+  const time = useLocalTimeText(at, editedFormat);
   return (
-    <span
-      className={cx("pill pill--plain", styles.edited)}
-      title={`исправлено ${time}${zone === "UTC" ? " UTC" : ""}`}
-      suppressHydrationWarning
-    >
+    <span className={cx("pill pill--plain", styles.edited)} title={`исправлено ${time}`} suppressHydrationWarning>
       испр.
     </span>
   );

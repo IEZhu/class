@@ -75,6 +75,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const shownAt = useRef(0);
   const clock = useRef<ClozeClock | null>(null);
   const sessionRef = useRef<HTMLElement>(null);
+  const typingRef = useRef<HTMLInputElement>(null);
   const item: ClozeItem | undefined = page.items[index];
   const total = page.items.length;
   // null — варианты пункта ещё не пришли (pending)
@@ -155,6 +156,8 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
       } else {
         setChosen(null);
         setError(e instanceof Error ? e.message : "не удалось сохранить ответ");
+        // Введённое слово — в поле, туда и фокус: повтор — тот же Enter
+        if (how === "typing") typingRef.current?.focus({ preventScroll: true });
       }
     } finally {
       setBusy(false);
@@ -303,13 +306,18 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
             </div>
           ) : (
             <form onSubmit={submitTyped} className={s.typing}>
+              {/* На время запроса поле readOnly, а не disabled: фокус остаётся
+                  в нём, и после сбоя ответ повторяется тем же Enter */}
               <input
                 key={item.id}
+                ref={typingRef}
                 className="input input--lg"
                 autoFocus
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
-                disabled={busy || result !== null}
+                readOnly={busy}
+                aria-disabled={busy || undefined}
+                disabled={result !== null}
                 maxLength={64}
                 aria-label="Пропущенное слово"
                 autoComplete="off"

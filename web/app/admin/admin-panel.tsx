@@ -25,16 +25,22 @@ const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 const shortDate: Intl.DateTimeFormatOptions = { dateStyle: "short" };
 
 // Email — адрес с местами переноса после «@» и точек (lib/email-parts):
-// в таблице длинный адрес ломается по частям, а не посреди слова
+// в таблице длинный адрес ломается по частям, а не посреди слова. Куски с
+// <wbr> чтение с экрана получило бы раздельными словами («admin@ lingua.
+// local»), поэтому ему — адрес целиком скрытым текстом, а куски — только
+// на экране; скрытый текст не выделяется, копируется адрес один раз
 function Email({ value }: { value: string }) {
   return (
     <>
-      {emailParts(value).map((part, i) => (
-        <Fragment key={i}>
-          {i > 0 && <wbr />}
-          {part}
-        </Fragment>
-      ))}
+      <span className={cx("sr-only", styles.noSelect)}>{value}</span>
+      <span aria-hidden="true">
+        {emailParts(value).map((part, i) => (
+          <Fragment key={i}>
+            {i > 0 && <wbr />}
+            {part}
+          </Fragment>
+        ))}
+      </span>
     </>
   );
 }

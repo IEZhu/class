@@ -102,6 +102,12 @@
     min-width: 14rem;
   }
 }
+
+/* Скрытый текст для чтения с экрана (Email): не попадает в выделение и копирование */
+.noSelect {
+  user-select: none;
+}
+
 .nowrap {
   white-space: nowrap;
 }

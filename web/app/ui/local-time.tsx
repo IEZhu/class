@@ -56,6 +56,15 @@ function format(value: string, end: string | undefined, options: Intl.DateTimeFo
   return end ? fmt.formatRange(new Date(value), new Date(end)) : fmt.format(new Date(value));
 }
 
+// useLocalTimeText — момент value текстом в поясе зрителя, для подписей и
+// title, где <time> не поставить; пока пояс — UTC (сервер, гидратация), с
+// припиской «UTC». Узел с этим текстом — с suppressHydrationWarning
+export function useLocalTimeText(value: string, options: Intl.DateTimeFormatOptions): string {
+  const zone = useViewerTimeZone();
+  const text = format(value, undefined, options, zone);
+  return zone === UTC ? `${text} UTC` : text;
+}
+
 // LocalTime — момент value (ISO 8601) или промежуток value–end. options —
 // как у Intl.DateTimeFormat, без timeZone. utcLabel — дописывать «UTC», пока
 // время показано по UTC; в поясе зрителя подпись не нужна, UTC — в title.
