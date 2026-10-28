@@ -124,4 +124,10 @@
     margin: 0 calc(-1 * var(--sp-4)); padding: var(--sp-3) var(--sp-4);
     background: var(--c-bg); border-top: 1px solid var(--c-border);
   }
+  /* Элемент в фокусе не прячется под липкими оценками (WCAG 2.4.11):
+     прокрутка к нему оставляет снизу место на нижнюю навигацию и две
+     строки оценок (--shell-bottom задан на body, у html его нет) */
+  :global(html):has(.sticky) {
+    scroll-padding-bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom) + 2 * 56px + 3 * var(--sp-3) + 1px);
+  }
 }
