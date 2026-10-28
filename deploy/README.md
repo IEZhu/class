@@ -668,17 +668,18 @@ FSRS для слов без карточки: N» — N слов словаря 
 что и браузер.
 
 ```bash
-docker image inspect lingua-web:pre-ui >/dev/null 2>&1 || docker tag "$(docker inspect -f '{{.Image}}' lingua-web-1)" lingua-web:pre-ui
+docker image inspect lingua-web:pre-ui >/dev/null 2>&1 || docker tag "$(docker inspect -f '{{.Image}}' lingua-web-1)" lingua-web:pre-ui && \
 docker compose -f deploy/docker-compose.yml build web && docker compose -f deploy/docker-compose.yml up -d --no-deps --timeout 2 web
 ```
 
 Первая команда сохраняет образ работающего контейнера `web` под тегом для
-отката — один раз: повтор блока после сборки не перезапишет тег выпуском. Потом
+отката — один раз: повтор блока после сборки не перезапишет тег выпуском;
+если тега нет и контейнера `lingua-web-1` нет, блок останавливается до сборки. Потом
 собирается новый образ и пересоздаётся только контейнер `web`: `--no-deps`
 не трогает postgres и api, даже если их образы разошлись с запущенными
 (`up web` без него пересоздал бы и их, а без образа — и собрал). Пока новый
 `web` стартует, страницы отвечают 502, api не задет: без запросов — меньше
-секунды (на репетиции 0,33–0,45 с), под нагрузкой — до 2,4 с.
+секунды (на репетиции 0,33–0,45 с), под нагрузкой — до 2,6 с.
 `--timeout 2` нужен потому, что Next по SIGTERM ждёт занятые keep-alive
 соединения Caddy, и без него compose ждёт 10 с до SIGKILL — под нагрузкой это
 10 с 502 на всех страницах. Выкатывать лучше вне уроков. `make up` для этого

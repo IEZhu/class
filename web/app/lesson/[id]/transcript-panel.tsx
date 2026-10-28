@@ -84,19 +84,23 @@ export default function TranscriptPanel({
   const listRef = useRef<HTMLDivElement>(null);
   // more — строка дочитывания в конце списка, одна на загрузку и ошибку с
   // «Повторить» (tabIndex=-1): фокус с нажатой «Повторить» остаётся в ней, а
-  // не падает на <body>. moreFocus — фокус был в ней, когда пришли остальные
-  // реплики: он переходит на первую из них
+  // не падает на <body>. Если он ещё там, когда попытка кончилась, — он идёт
+  // дальше (moreFocus): на первую дочитанную реплику, а после нового сбоя —
+  // на новую «Повторить». Список прокручивается к реплике, только если
+  // строка была на экране: кто отлистал в сторону, остаётся на своём месте
   const moreRef = useRef<HTMLDivElement>(null);
-  const moreFocus = useRef(false);
+  const retried = useRef(false);
+  const moreFocus = useRef<{ to: "first" | "retry"; scroll: boolean } | null>(null);
   const shownFromServer = fromServer ? initial.transcript.utterances.length : 0;
   const titleId = useId();
+  const moreErrorId = useId();
 
   useEffect(() => {
     let cancelled = false;
     requestJson<Transcript>(`/api/lessons/${lessonId}/transcript`, "GET")
       .then((t) => {
         if (cancelled) return;
-        moreFocus.current = moreRef.current?.contains(document.activeElement) ?? false;
+        if (focusInMore()) moreFocus.current = { to: "first", scroll: onScreen(moreRef.current, listRef.current) };
         setTranscript(withLocalChanges(t, local));
         setComplete(true);
         setMoreError(null);
@@ -114,7 +118,10 @@ export default function TranscriptPanel({
         // ошибка с «Повторить»; открытая правка и сохранённое не пропадают
         const message = e instanceof Error ? e.message : "не удалось получить транскрипт";
         if (!fromServer) setError(message);
-        else if (partial) setMoreError(message);
+        else if (partial) {
+          if (focusInMore()) moreFocus.current = { to: "retry", scroll: false };
+          setMoreError(message);
+        }
       });
     return () => {
       cancelled = true;
@@ -127,11 +134,22 @@ export default function TranscriptPanel({
   const groups = useMemo(() => groupBySpeaker(utterances), [utterances]);
 
   useEffect(() => {
-    if (!complete || !moreFocus.current) return;
-    moreFocus.current = false;
-    const first = utterances[shownFromServer];
-    if (first) listRef.current?.querySelector<HTMLElement>(`[data-idx="${first.idx}"] button`)?.focus();
-  }, [complete, utterances, shownFromServer]);
+    const f = moreFocus.current;
+    if (f?.to === "first" && complete) {
+      moreFocus.current = null;
+      const first = utterances[shownFromServer];
+      const target = first && listRef.current?.querySelector<HTMLElement>(`[data-idx="${first.idx}"] button`);
+      target?.focus({ preventScroll: !f.scroll });
+    } else if (f?.to === "retry" && moreError) {
+      moreFocus.current = null;
+      moreRef.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    }
+  }, [complete, moreError, utterances, shownFromServer]);
+
+  // focusInMore — фокус в строке дочитывания, куда его поставила «Повторить»
+  function focusInMore(): boolean {
+    return retried.current && (moreRef.current?.contains(document.activeElement) ?? false);
+  }
 
   // Звучащая реплика остаётся в видимой части списка; прокручивается только
   // сам список, не страница. Пока преподаватель правит текст, список стоит.
@@ -243,14 +261,16 @@ export default function TranscriptPanel({
           <div ref={moreRef} tabIndex={-1} className={cx("small", styles.more, !moreError && "muted")}>
             {moreError ? (
               <>
-                <p className="field-error" role="alert">
+                <p id={moreErrorId} className="field-error" role="alert">
                   <Icon name="error" />
                   Не удалось загрузить {moreReplicas(total - utterances.length)}: {moreError}
                 </p>
                 <Button
                   type="button"
                   size="sm"
+                  aria-describedby={moreErrorId}
                   onClick={() => {
+                    retried.current = true;
                     moreRef.current?.focus({ preventScroll: true });
                     setMoreError(null);
                     setReload((n) => n + 1);
@@ -271,6 +291,14 @@ export default function TranscriptPanel({
     </>,
     total !== null && !complete ? replicasOf(utterances.length, total) : replicas(utterances.length),
   );
+}
+
+// onScreen — элемент el виден: в окне и в прокручиваемом списке box
+function onScreen(el: HTMLElement | null, box: HTMLElement | null): boolean {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  const b = box?.getBoundingClientRect();
+  return r.bottom > 0 && r.top < window.innerHeight && (!b || (r.bottom > b.top && r.top < b.bottom));
 }
 
 // Строка мемоизирована: время плеера меняется несколько раз в секунду,

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, RefObject } from "react";
 
 import type { ClozeAttemptResult, ClozeItem, ClozeOptions, ClozePage } from "../../../lib/api";
 import {
@@ -76,6 +76,10 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const clock = useRef<ClozeClock | null>(null);
   const sessionRef = useRef<HTMLElement>(null);
   const typingRef = useRef<HTMLInputElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
+  // modeSwitched — человек сам нажал «Варианты» / «Ввод слова»: поле ввода
+  // получает фокус, где бы он ни был
+  const modeSwitched = useRef(false);
   const item: ClozeItem | undefined = page.items[index];
   const total = page.items.length;
   // null — варианты пункта ещё не пришли (pending)
@@ -191,6 +195,16 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   // падает на <body>, и после сбоя клавиши иначе молчали бы
   useSessionFocus(sessionRef, `${index}:${result !== null}:${busy}`);
 
+  // Поле ввода нового пункта и «Дальше» после ответа берут фокус, только
+  // если он потерян или на самой сессии (или человек переключил способ
+  // ответа): куда его увёл сам человек — ссылка меню, слово, — там и остаётся
+  useEffect(() => {
+    const own = modeSwitched.current;
+    modeSwitched.current = false;
+    const target = result ? nextRef.current : mode === "typing" ? typingRef.current : null;
+    if (target && (own || focusLost() || document.activeElement === sessionRef.current)) target.focus({ preventScroll: true });
+  }, [index, result, mode]);
+
   function submitTyped(e: FormEvent) {
     e.preventDefault();
     void answer(typed, "typing");
@@ -237,7 +251,16 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
       </div>
       <div className={cx("segmented", s.modes)} role="group" aria-label="Как отвечать">
         {modes.map((m) => (
-          <button key={m.mode} type="button" aria-pressed={mode === m.mode} disabled={busy} onClick={() => setMode(m.mode)}>
+          <button
+            key={m.mode}
+            type="button"
+            aria-pressed={mode === m.mode}
+            disabled={busy}
+            onClick={() => {
+              modeSwitched.current = true;
+              setMode(m.mode);
+            }}
+          >
             {m.label}
           </button>
         ))}
@@ -316,7 +339,6 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
                 key={item.id}
                 ref={typingRef}
                 className="input input--lg"
-                autoFocus
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
                 readOnly={busy}
@@ -347,6 +369,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
               result={result}
               credit={clozeCredit(item.attribution, result.attribution)}
               onNext={() => next(null)}
+              nextRef={nextRef}
             />
           )}
         </article>
@@ -435,10 +458,12 @@ function Feedback({
   result,
   credit: c,
   onNext,
+  nextRef,
 }: {
   result: ClozeAttemptResult;
   credit: ClozeCredit | null;
   onNext: () => void;
+  nextRef: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <>
@@ -465,7 +490,7 @@ function Feedback({
         )}
       </div>
       <div className={s.next}>
-        <Button type="button" variant="primary" size="lg" blockOnPhone className={s.onPrimary} autoFocus onClick={onNext}>
+        <Button type="button" variant="primary" size="lg" blockOnPhone className={s.onPrimary} ref={nextRef} onClick={onNext}>
           Дальше <Kbd>{enterKey}</Kbd>
         </Button>
       </div>
