@@ -28,7 +28,7 @@
  *    .field/.label/.hint/.field-error/.input/.select/.textarea (--lg), .check,
  *    .fieldset, .file-field/.file-name, .card/.card-pad/.card-head/.card-foot,
  *    .table (--dense, --stack — карточками на телефоне)/.table-wrap,
- *    .list, .tabs, .segmented, .w/.w1–.w4/.legend, .pill (--live/
+ *    .tabs, .segmented, .w/.w1–.w4/.legend, .pill (--live/
  *    --scheduled/--processing/--done/--ended/--plain/--accent/--success/
  *    --danger), .chip/.chip-row, .alert (--info/--success/
  *    --warning/--danger/--neutral), .form-status, .empty, .spinner,
@@ -511,7 +511,6 @@ a.card:focus-visible { border-radius: var(--r-lg); }
 .table th { background: var(--c-surface-2); color: var(--c-text-muted); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .table tbody tr:hover { background: var(--c-surface-2); }
 .table--dense th, .table--dense td { padding: var(--sp-2) var(--sp-3); }
-.list { margin: 0; padding: 0; list-style: none; }
 .is-archived { color: var(--c-text-muted); }
 @media (max-width: 767px) {
   /* Таблица --stack на телефоне — карточки строк: подпись колонки из data-label */
