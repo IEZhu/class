@@ -264,7 +264,9 @@ a:hover { color: var(--c-primary-hover); }
 .stack--lg { gap: var(--sp-8); }
 .row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }
-.section { display: grid; gap: var(--sp-3); scroll-margin-top: calc(var(--shell-top) + var(--sp-6)); }
+/* Колонка minmax(0, 1fr): широкая таблица прокручивается в своей обёртке,
+   а не раздвигает секцию и страницу */
+.section { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); scroll-margin-top: calc(var(--shell-top) + var(--sp-6)); }
 .section-title { display: flex; align-items: center; gap: var(--sp-2); }
 .section-title h2 { font-size: var(--fs-xl); }
 /* Английский текст для чтения (материалы, тексты) */
@@ -329,7 +331,11 @@ body:has(.app-shell) .auth-top { display: none; }
 .sidebar-user { margin-top: auto; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-1) 0; border-top: 1px solid var(--c-border); }
 .user-meta { display: grid; min-width: 0; flex: 1; line-height: 1.25; color: var(--c-text); text-decoration: none; border-radius: var(--r-sm); padding: var(--sp-1); }
 .user-meta:hover { color: var(--c-text); background: var(--c-surface-2); }
-.user-meta b { font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Имя — до двух строк целиком, а не обрезанное многоточием */
+.user-meta b {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  font-weight: 600; font-size: var(--fs-sm); overflow-wrap: anywhere;
+}
 .user-meta span { font-size: var(--fs-xs); color: var(--c-text-muted); }
 .user-meta[aria-current="page"] b { color: var(--c-nav-active-text); }
 
@@ -341,8 +347,11 @@ body:has(.app-shell) .auth-top { display: none; }
 .shell-topbar .brand { font-size: var(--fs-md); flex: none; }
 .topbar-nav { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .topbar-nav .nav-list { display: flex; gap: var(--sp-1); }
-.topbar-nav .nav-item { min-height: var(--h-md); padding: 0 var(--sp-3); }
-.topbar-nav .nav-item .i { display: none; }
+.topbar-nav .nav-item { min-height: var(--h-md); padding: 0 10px; }
+/* Край строки, за которым есть ещё пункты, гаснет (data-fade — app-shell) */
+.topbar-nav[data-fade="start"] { mask-image: linear-gradient(to right, transparent, #000 var(--sp-8)); }
+.topbar-nav[data-fade="end"] { mask-image: linear-gradient(to left, transparent, #000 var(--sp-8)); }
+.topbar-nav[data-fade="both"] { mask-image: linear-gradient(to right, transparent, #000 var(--sp-8), #000 calc(100% - var(--sp-8)), transparent); }
 
 .account { position: relative; margin-left: auto; flex: none; }
 .account-btn { display: grid; place-items: center; width: var(--h-md); height: var(--h-md); padding: 0; border: 0; border-radius: var(--r-full); background: none; color: var(--c-text); }
@@ -368,17 +377,22 @@ body:has(.app-shell) .auth-top { display: none; }
 .shell-bottom {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-nav);
   grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-  height: calc(var(--bottomnav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+  min-height: calc(var(--bottomnav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
   background: var(--c-sidebar); border-top: 1px solid var(--c-border);
 }
 .bottom-item {
-  display: grid; justify-items: center; align-content: center; gap: 3px; min-width: 0; padding: 0 2px;
+  display: grid; justify-items: center; align-content: center; gap: 3px; min-width: 0; padding: var(--sp-1) 1px;
   border: 0; background: none; color: var(--c-text-muted); text-decoration: none; font: 500 var(--fs-xs)/1.1 var(--font-sans);
 }
-.bottom-item > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Подпись не обрезается: при крупном шрифте и интервалах (WCAG 1.4.12)
+   переносится, панель растёт по высоте */
+.bottom-item > span:last-child { max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .bottom-item:hover { color: var(--c-text); }
 .bottom-item:focus-visible { outline-offset: -4px; border-radius: var(--r-md); }
-.bottom-item[aria-current] { color: var(--c-primary); font-weight: 700; }
+.bottom-item[aria-current] { color: var(--c-primary); font-weight: 600; }
+/* На самых узких телефонах полужирное слово шире колонки (~62px) и
+   разорвалось бы; текущий пункт и так отмечен цветом и подложкой иконки */
+@media (max-width: 359px) { .bottom-item[aria-current] { font-weight: 500; } }
 .nav-ic { display: grid; place-items: center; width: 56px; max-width: 100%; height: 30px; border-radius: var(--r-full); }
 .nav-ic svg.i { width: 24px; height: 24px; }
 .bottom-item[aria-current] .nav-ic { background: var(--c-primary-soft); }
