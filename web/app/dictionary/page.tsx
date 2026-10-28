@@ -6,21 +6,23 @@ import { apiFetch, ApiError } from "../../lib/api";
 import type { User, UserTermPage } from "../../lib/api";
 import { lessonTitle } from "../../lib/lesson-title";
 import { STATUS_LABELS, TERM_STATUSES } from "../../lib/term-status";
+import { buttonClass } from "../ui/button";
+import { cx } from "../ui/cx";
+import { EmptyState } from "../ui/empty";
+import { PageHeader } from "../ui/page-header";
 import UserBar from "../user-bar";
 import DictionaryStatus from "./dictionary-status";
+import styles from "./page.module.css";
 
 export const metadata: Metadata = { title: "Мой словарь" };
 
 const dateFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
 
-const pageStyle = { fontFamily: "system-ui, sans-serif", maxWidth: 760, margin: "2rem auto", padding: "0 1rem" } as const;
-const cellStyle = { padding: "0.4rem 0.5rem", borderBottom: "1px solid #eee", verticalAlign: "top" } as const;
-
 // Фильтры по статусу (S3-5): «учу» — всё, кроме «знаю»
 const filters = [
   { label: "Все", status: "" },
-  { label: "Учу (1–4)", status: "1,2,3,4" },
-  ...TERM_STATUSES.map((s) => ({ label: `${s} · ${STATUS_LABELS[s]}`, status: String(s) })),
+  { label: "Учу 1–4", status: "1,2,3,4" },
+  ...TERM_STATUSES.map((s) => ({ label: `${s} ${STATUS_LABELS[s]}`, status: String(s) })),
 ];
 
 type Search = Promise<Record<string, string | string[] | undefined>>;
@@ -44,6 +46,7 @@ function dictionaryHref(status: string, cursor = ""): string {
 
 // Личный словарь студента (S3-5): слова со статусами, переводом из кэша
 // и уроком, на котором слово добавлено; новые сверху, по страницам.
+// Вид (DESIGN §6.5): таблица от 768px, на телефоне строки — карточки.
 export default async function DictionaryPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
   const status = first(params.status);
@@ -58,11 +61,15 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
   }
   if (me.role !== "student") {
     return (
-      <main style={pageStyle}>
+      <>
         <UserBar name={me.name} role={me.role} />
-        <h1>Словарь</h1>
-        <p>Личный словарь есть только у студентов.</p>
-      </main>
+        <main className="page">
+          <PageHeader title="Словарь" />
+          <div className="card">
+            <EmptyState icon="dict" title="Личный словарь есть только у студентов." titleAs="p" />
+          </div>
+        </main>
+      </>
     );
   }
 
@@ -76,64 +83,106 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
   }
 
   return (
-    <main style={pageStyle}>
+    <>
       <UserBar name={me.name} role={me.role} />
-      <h1>Мой словарь</h1>
-      <nav style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        {filters.map((f) =>
-          f.status === status ? (
-            <strong key={f.label}>{f.label}</strong>
-          ) : (
-            <Link key={f.label} href={dictionaryHref(f.status)}>
-              {f.label}
-            </Link>
-          ),
-        )}
-      </nav>
-      {page.items.length === 0 ? (
-        <p style={{ color: "#666" }}>
-          {status ? "С таким статусом слов нет." : "Пока пусто: нажмите на слово в тексте урока и выберите «в мой словарь»."}
-        </p>
-      ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}>
-              <th style={cellStyle}>Слово</th>
-              <th style={cellStyle}>Перевод</th>
-              <th style={cellStyle}>Статус</th>
-              <th style={cellStyle}>Урок</th>
-            </tr>
-          </thead>
-          <tbody>
-            {page.items.map((it) => (
-              <tr key={it.term_id}>
-                <td style={cellStyle}>
-                  <strong>{it.lemma}</strong>
-                  {it.surface.toLowerCase() !== it.lemma && <div style={{ color: "#666" }}>{it.surface}</div>}
-                </td>
-                <td style={cellStyle}>{it.translation ?? "—"}</td>
-                <td style={cellStyle}>
-                  <DictionaryStatus studentId={me.id} termId={it.term_id} lemma={it.lemma} status={it.status} />
-                </td>
-                <td style={cellStyle}>
-                  {it.source_lesson ? (
-                    <Link href={`/lesson/${it.source_lesson.id}`}>
-                      {lessonTitle(it.source_lesson)}, {dateFmt.format(new Date(it.source_lesson.starts_at))}
-                    </Link>
+      <main className="page">
+        <PageHeader title="Мой словарь" />
+        <div className="stack">
+          <nav aria-label="Статус слов" className={styles.filterNav}>
+            <ul className={cx("chip-row", styles.filters)}>
+              {filters.map((f) => (
+                <li key={f.label}>
+                  {f.status === status ? (
+                    <span className="chip" aria-current="true">
+                      {f.label}
+                    </span>
                   ) : (
-                    "—"
+                    <Link className="chip" href={dictionaryHref(f.status)}>
+                      {f.label}
+                    </Link>
                   )}
-                  <div style={{ color: "#666", fontSize: "0.85em" }}>добавлено {dateFmt.format(new Date(it.added_at))}</div>
-                </td>
-              </tr>
+                </li>
+              ))}
+            </ul>
+          </nav>
+          {/* Как статус выглядит в текстах: фон и узор подчёркивания */}
+          <p className="legend">
+            <span>В текстах:</span>
+            {TERM_STATUSES.slice(0, 4).map((s) => (
+              <span key={s} className={`w w${s}`}>
+                {s} {STATUS_LABELS[s]}
+              </span>
             ))}
-          </tbody>
-        </table>
-      )}
-      <p style={{ display: "flex", gap: "1rem" }}>
-        {cursor && <Link href={dictionaryHref(status)}>← к началу</Link>}
-        {page.next_cursor && <Link href={dictionaryHref(status, page.next_cursor)}>дальше →</Link>}
-      </p>
-    </main>
+            <span>5 {STATUS_LABELS[5]} — без выделения</span>
+          </p>
+          {page.items.length === 0 ? (
+            <div className="card">
+              {status ? (
+                <EmptyState icon="dict" title="С таким статусом слов нет." />
+              ) : (
+                <EmptyState icon="dict" title="Пока пусто">
+                  Нажмите на слово в тексте урока и выберите «В мой словарь».
+                </EmptyState>
+              )}
+            </div>
+          ) : (
+            <div className={cx("card", styles.card)}>
+              <table className={cx("table", styles.table)}>
+                <thead>
+                  <tr>
+                    <th scope="col">Слово</th>
+                    <th scope="col">Перевод</th>
+                    <th scope="col">Статус</th>
+                    <th scope="col">Урок</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {page.items.map((it) => (
+                    <tr key={it.term_id}>
+                      <td className={styles.word}>
+                        <strong lang="en">{it.lemma}</strong>
+                        {it.surface.toLowerCase() !== it.lemma && (
+                          <span lang="en" className="muted">
+                            {it.surface}
+                          </span>
+                        )}
+                      </td>
+                      <td className={styles.tr}>{it.translation ?? <span className="muted">—</span>}</td>
+                      <td className={styles.status}>
+                        <DictionaryStatus studentId={me.id} termId={it.term_id} lemma={it.lemma} status={it.status} />
+                      </td>
+                      <td className={styles.lesson}>
+                        {it.source_lesson ? (
+                          <Link href={`/lesson/${it.source_lesson.id}`}>
+                            {lessonTitle(it.source_lesson)}, {dateFmt.format(new Date(it.source_lesson.starts_at))}
+                          </Link>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                        <span className={styles.added}>добавлено {dateFmt.format(new Date(it.added_at))}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        {(cursor || page.next_cursor) && (
+          <nav className="pager" aria-label="Страницы словаря">
+            {cursor && (
+              <Link className={buttonClass({ variant: "secondary" })} href={dictionaryHref(status)}>
+                ← К началу
+              </Link>
+            )}
+            {page.next_cursor && (
+              <Link className={buttonClass({ variant: "secondary", className: styles.next })} href={dictionaryHref(status, page.next_cursor)}>
+                Дальше →
+              </Link>
+            )}
+          </nav>
+        )}
+      </main>
+    </>
   );
 }

@@ -1,0 +1,42 @@
+/* <ClickableText> и попап слова (DESIGN §4.2, §6.4; mockup popup.html).
+   Слова — общие классы .w/.w1–.w4 из globals.css, каркас попапа — общий
+   .popover (от 768px — у слова по --pop-top/--pop-left, уже — лист снизу
+   поверх .backdrop--phone); здесь — сам текст и содержимое попапа. */
+
+.text { white-space: pre-wrap; }
+
+.head {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; gap: var(--sp-2); align-items: flex-start;
+  padding: var(--sp-4) var(--sp-3) var(--sp-2) var(--sp-5);
+  background: var(--c-surface);
+}
+.titles { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.lemma { font-size: var(--fs-2xl); font-weight: 700; line-height: var(--lh-tight); overflow-wrap: anywhere; }
+/* Заголовок получает фокус при открытии (tabindex -1), но не управляется
+   с клавиатуры: рамка фокуса у него не нужна */
+.lemma:focus { outline: none; }
+.form { font-size: var(--fs-sm); color: var(--c-text-muted); }
+.tr { padding: 0 var(--sp-5); font-size: var(--fs-lg); line-height: var(--lh-base); }
+
+.body { display: grid; gap: var(--sp-4); padding: var(--sp-3) var(--sp-5) var(--sp-5); }
+.section { display: grid; gap: var(--sp-2); min-width: 0; }
+.sectionTitle { font-size: var(--fs-xs); font-weight: 600; line-height: var(--lh-base); text-transform: uppercase; letter-spacing: .06em; color: var(--c-text-muted); }
+
+.defs { display: grid; gap: 6px; margin: 0; padding-left: 1.25rem; }
+.pos { font-style: italic; color: var(--c-text-muted); }
+.examples { display: grid; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.example { display: grid; gap: 2px; }
+
+/* Ответ «объясни»: абзацы в мягкой рамке основного цвета */
+.explain { display: grid; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--c-primary-soft); color: var(--c-text); }
+.explain .sectionTitle { color: var(--c-primary-strong); }
+.explain .sectionTitle:focus { outline: none; }
+
+/* Рамка открытого слова: слой поверх слова по его прямоугольнику
+   (--ring-*), вид — как фокус у слова */
+.ring {
+  position: absolute; top: var(--ring-top); left: var(--ring-left); z-index: var(--z-popover);
+  width: var(--ring-w); height: var(--ring-h);
+  border-radius: 3px; outline: 2px solid var(--c-focus); outline-offset: 1px; pointer-events: none;
+}
