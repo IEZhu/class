@@ -19,6 +19,13 @@ export const termStatuses = new TermStatuses((words) =>
   requestJson<LookupResult>("/api/user-terms/lookup", "POST", { words }),
 );
 
+// removeTerm — убрать слово из словаря студента: DELETE /user-terms/{id}
+// (вместе со словом уходит его график повторений) и кэш раскраски
+export async function removeTerm(studentId: number, termId: number, lemma: string) {
+  await request(`/api/user-terms/${termId}`, "DELETE");
+  termStatuses.setStatus(studentId, lemma, null);
+}
+
 // TermStatusControl — «в мой словарь», статус 1..5 и «убрать» (S3-5):
 // в попапе слова и на странице словаря. studentId — зритель, чей это
 // словарь (ключ кэша termStatuses); lessonId — урок, с которого слово
@@ -26,8 +33,10 @@ export const termStatuses = new TermStatuses((words) =>
 //
 // Вид (DESIGN §4.2, §6.5): в попапе — сегменты с номером и словом статуса
 // и строка действий (actions — слева, «Убрать» — справа, отдельно от
-// основного действия); compact — строка словаря: номера 32px, слово
-// статуса рядом, у кнопок оно в доступном имени.
+// основного действия); compact — строка словаря: номера 32px и слово
+// статуса рядом, у кнопок оно в доступном имени. «Убрать» в строке
+// словаря — в конце строки, с подтверждением (dictionary-status.tsx),
+// а не рядом со статусами.
 export default function TermStatusControl({
   studentId,
   termId,
@@ -68,9 +77,12 @@ export default function TermStatusControl({
     setError(null);
     refocus.current = box.current?.contains(document.activeElement) ?? false;
     try {
-      if (next === null) await request(`/api/user-terms/${termId}`, "DELETE");
-      else await request("/api/user-terms", "POST", { term_id: termId, status: next, source_lesson_id: lessonId ?? undefined });
-      termStatuses.setStatus(studentId, lemma, next);
+      if (next === null) {
+        await removeTerm(studentId, termId, lemma);
+      } else {
+        await request("/api/user-terms", "POST", { term_id: termId, status: next, source_lesson_id: lessonId ?? undefined });
+        termStatuses.setStatus(studentId, lemma, next);
+      }
       onSaved?.();
     } catch (e) {
       refocus.current = false;
@@ -101,19 +113,6 @@ export default function TermStatusControl({
     );
   }
 
-  const remove = (
-    <Button
-      type="button"
-      variant="danger-ghost"
-      size="sm"
-      aria-label={`Убрать ${lemma} из словаря`}
-      aria-disabled={busy || undefined}
-      onClick={() => void save(null)}
-    >
-      Убрать
-    </Button>
-  );
-
   return (
     <div ref={box} className={cx(styles.control, compact && styles.compact)} aria-busy={busy || undefined}>
       <div className={compact ? styles.compactRow : undefined}>
@@ -132,14 +131,22 @@ export default function TermStatusControl({
             </button>
           ))}
         </div>
-        {compact && remove}
+        {compact && <span className={styles.current}>{STATUS_LABELS[status]}</span>}
       </div>
-      {compact && <span className={styles.current}>{STATUS_LABELS[status]}</span>}
       {!compact && (
         <div className="row">
           {actions}
           <span className="spacer" />
-          {remove}
+          <Button
+            type="button"
+            variant="danger-ghost"
+            size="sm"
+            aria-label={`Убрать ${lemma} из словаря`}
+            aria-disabled={busy || undefined}
+            onClick={() => void save(null)}
+          >
+            Убрать
+          </Button>
         </div>
       )}
       {errorText}

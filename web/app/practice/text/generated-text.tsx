@@ -38,7 +38,7 @@ export function GeneratedParagraphs({ body }: { body: string }) {
 }
 
 // Итог проверки покрытия и модель — в «Подробностях»: студенту они нужны
-// редко, текст важнее (DESIGN §6.8)
+// редко, текст важнее (DESIGN §6.8). Слова и модель — lang="en" (WCAG 3.1.2)
 export default function GeneratedTextView({ text }: { text: GeneratedText }) {
   return (
     <article className={cx("card card-pad", t.item)}>
@@ -50,8 +50,11 @@ export default function GeneratedTextView({ text }: { text: GeneratedText }) {
         <summary>Подробности</summary>
         <p className="small muted">
           Покрытие слов: {percent.format(text.coverage)} (
-          {text.target_lemmas.map((l) => `${l} ×${text.occurrences[l] ?? 0}`).join(", ")}) · вне словаря:{" "}
-          {percent.format(text.unknown_share)} · {text.provider}/{text.model}
+          <span lang="en">{text.target_lemmas.map((l) => `${l} ×${text.occurrences[l] ?? 0}`).join(", ")}</span>) · вне
+          словаря: {percent.format(text.unknown_share)} ·{" "}
+          <span lang="en">
+            {text.provider}/{text.model}
+          </span>
           {text.attempts > 1 && " · со второй попытки"}
         </p>
       </details>

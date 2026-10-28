@@ -1,8 +1,13 @@
 // Горячие клавиши практики — карточки (/practice/cards) и «вставь слово»
-// (/practice/cloze) слушают всё окно. ownsKey решает, чьё нажатие:
-// элемента в фокусе или страницы. Чистый TS без React и DOM — его
-// проверяют тесты lib/practice-keys.test.ts (npm test).
+// (/practice/cloze). isSessionKey решает, чьё нажатие: страницы или
+// элемента в фокусе. Чистый TS без React и DOM — его проверяют тесты
+// lib/practice-keys.test.ts (npm test).
 
+// Сессия практики — контейнер <section {...SESSION_PROPS} tabIndex={-1}>:
+// фокус стоит в нём с начала сессии и возвращается в него после
+// переворота, оценки и «Дальше»
+export const SESSION_PROPS = { "data-practice-session": "" } as const;
+const SESSION = "[data-practice-session]";
 // Поля ввода и диалоги (попап слова): все их клавиши — их собственные
 const TYPING_TARGETS = "input, textarea, select, [contenteditable], [role=dialog]";
 // Слово <ClickableText>: data-i у него всегда, с клавиатурным доступом
@@ -23,4 +28,13 @@ export function ownsKey(target: KeyTarget | null, key: string): boolean {
   if (!target) return false;
   if (target.closest(`${TYPING_TARGETS}, ${WORD_TARGETS}`)) return true;
   return (key === " " || key === "Enter") && target.closest(ACTIVATION_TARGETS) !== null;
+}
+
+// isSessionKey — нажатие key — горячая клавиша практики: фокус внутри
+// сессии, и цель нажатие себе не забирает (ownsKey). Односимвольные
+// клавиши (пробел, 1–4) действуют, только пока фокус в сессии (WCAG
+// 2.1.4): цифра на ссылке меню или без фокуса ничего не оценивает.
+export function isSessionKey(target: KeyTarget | null, key: string): boolean {
+  if (!target || !target.closest(SESSION)) return false;
+  return !ownsKey(target, key);
 }

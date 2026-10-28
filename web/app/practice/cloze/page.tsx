@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { ClozePage, User } from "../../../lib/api";
 import { ClickableTextScope } from "../../clickable-text";
-import { Alert } from "../../ui/alert";
+import RoleRestricted from "../../role-restricted";
 import { PageHeader } from "../../ui/page-header";
 import UserBar from "../../user-bar";
 import ClozeSession from "./cloze-session";
@@ -25,15 +25,9 @@ export default async function PracticeClozePage() {
   }
   if (me.role !== "student") {
     return (
-      <>
-        <UserBar name={me.name} role={me.role} />
-        <main className="page page--narrow">
-          <PageHeader title="Вставь слово" />
-          <Alert tone="info" live={false}>
-            Упражнение есть только у студентов: оно строится по словам личного словаря.
-          </Alert>
-        </main>
-      </>
+      <RoleRestricted me={me} title="Вставь слово" icon="cloze">
+        Упражнение есть только у студентов: оно строится по словам личного словаря.
+      </RoleRestricted>
     );
   }
   const page = await apiFetch<ClozePage>("/practice/cloze");

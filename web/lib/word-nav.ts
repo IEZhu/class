@@ -57,3 +57,32 @@ const CYRILLIC = /\p{Script=Cyrillic}/u;
 export function isRussianPart(text: string): boolean {
   return CYRILLIC.test(text);
 }
+
+// langOf — lang строки неизвестного языка вне <ClickableText>: названия
+// роликов и каналов, имена авторов Tatoeba (WCAG 3.1.2). Без кириллицы —
+// "en", с ней — undefined: остаётся язык страницы, русский.
+export function langOf(text: string): "en" | undefined {
+  return isRussianPart(text) ? undefined : "en";
+}
+
+// Минимум узла DOM, нужный closeFocusTarget
+export interface FocusNode {
+  readonly parentElement: FocusNode | null;
+  closest(selectors: string): FocusNode | null;
+}
+
+// Контейнер, которому можно отдать фокус: tabIndex у него задан явно
+// (сессия практики — tabIndex=-1)
+const FOCUS_SCOPE = "[tabindex]";
+
+// closeFocusTarget — куда вернуть фокус, когда попап слова закрыт изнутри
+// (Escape, «Закрыть»). Открытый с клавиатуры — на слово word: с него и
+// продолжают. Открытый мышью или касанием — не на слово: слово с фокусом
+// забрало бы пробел, Enter и 1–4 карточек и cloze (lib/practice-keys).
+// Тогда фокус — ближайшему контейнеру вокруг текста с tabIndex (сессия
+// практики), а без него null — фокус снимается, как до попапа.
+export function closeFocusTarget(word: FocusNode | null, keyboard: boolean): FocusNode | null {
+  if (!word) return null;
+  if (keyboard) return word;
+  return word.parentElement?.closest(FOCUS_SCOPE) ?? null;
+}

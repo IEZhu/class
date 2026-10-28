@@ -5,20 +5,22 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { PracticeText, PracticeTextsPage, User } from "../../../lib/api";
 import ClickableText, { ClickableTextScope, ExampleAuthors } from "../../clickable-text";
-import { Alert } from "../../ui/alert";
+import RoleRestricted from "../../role-restricted";
 import { buttonClass } from "../../ui/button";
 import { cx } from "../../ui/cx";
 import { EmptyState } from "../../ui/empty";
 import { Icon } from "../../ui/icons";
+import { LocalTime } from "../../ui/local-time";
 import { PageHeader } from "../../ui/page-header";
 import { Pill } from "../../ui/pill";
 import UserBar from "../../user-bar";
 import { GeneratedParagraphs, genreLabel } from "../text/generated-text";
 import t from "../text/text.module.css";
+import WordsSearch from "../words-search";
 
 export const metadata: Metadata = { title: "Тексты для практики" };
 
-const dateFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
+const dateOpts: Intl.DateTimeFormatOptions = { dateStyle: "short" };
 
 type Search = Promise<Record<string, string | string[] | undefined>>;
 
@@ -53,15 +55,9 @@ export default async function PracticeTextsPage({ searchParams }: { searchParams
   }
   if (me.role !== "student" && me.role !== "teacher") {
     return (
-      <>
-        <UserBar name={me.name} role={me.role} />
-        <main className="page">
-          <PageHeader title="Тексты для практики" />
-          <Alert tone="info" live={false}>
-            Подборка текстов доступна студентам и преподавателям.
-          </Alert>
-        </main>
-      </>
+      <RoleRestricted me={me} title="Тексты для практики" icon="text">
+        Подборка текстов доступна студентам и преподавателям.
+      </RoleRestricted>
     );
   }
 
@@ -90,45 +86,27 @@ export default async function PracticeTextsPage({ searchParams }: { searchParams
           }
         >
           <p className="muted">
-            Ваши сгенерированные тексты и предложения Tatoeba с переводом, где встречаются слова, которые вы учите;
-            сверху — где их больше.
+            Ваши сгенерированные тексты и предложения <span lang="en">Tatoeba</span> с переводом, где встречаются слова,
+            которые вы учите; сверху — где их больше.
           </p>
         </PageHeader>
-        <form method="get" action="/practice/texts" className={t.search}>
-          <label className="label" htmlFor="words">
-            Слова
-          </label>
-          <div className={t.searchRow}>
-            <input
-              id="words"
-              className="input"
-              name="words"
-              defaultValue={words}
-              aria-describedby={error ? "words-hint words-error" : "words-hint"}
-              aria-invalid={error ? true : undefined}
-            />
-            <button type="submit" className={buttonClass({ variant: "secondary" })}>
-              <Icon name="search" />
-              Найти
-            </button>
-          </div>
-          <p id="words-hint" className="hint">
-            Через пробел или запятую; пусто — из моего словаря
-          </p>
-          {error && (
-            <p id="words-error" className="field-error">
-              <Icon name="error" size="sm" />
-              <span>{error}</span>
-            </p>
-          )}
-        </form>
+        <WordsSearch
+          action="/practice/texts"
+          words={words}
+          hint="Через пробел или запятую; пусто — из моего словаря"
+          error={error}
+          variant="secondary"
+        >
+          <Icon name="search" />
+          Найти
+        </WordsSearch>
         {page && (
           <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
             <div className={t.results}>
               {page.words.length > 0 && (
                 <div className={t.words}>
                   <span className="small muted">Слова поиска:</span>
-                  <ul className={t.tags}>
+                  <ul className={t.tags} lang="en">
                     {page.words.map((w) => (
                       <li key={w}>
                         <Pill>{w}</Pill>
@@ -201,14 +179,18 @@ export default async function PracticeTextsPage({ searchParams }: { searchParams
 }
 
 function PracticeItem({ item }: { item: PracticeText }) {
-  const matched = <p className="small muted">Ваши слова: {item.matched.join(", ")}</p>;
+  const matched = (
+    <p className="small muted">
+      Ваши слова: <span lang="en">{item.matched.join(", ")}</span>
+    </p>
+  );
   if (item.source === "generated") {
     return (
       <article className={cx("card card-pad", t.item)}>
         <div className={t.itemHead}>
           <Pill tone="accent">Мой текст</Pill>
           <span className="small muted">
-            {item.level} · {genreLabel(item.genre)} · {dateFmt.format(new Date(item.created_at))}
+            {item.level} · {genreLabel(item.genre)} · <LocalTime value={item.created_at} options={dateOpts} utcLabel={false} />
           </span>
         </div>
         <GeneratedParagraphs body={item.text} />

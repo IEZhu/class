@@ -1,17 +1,18 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../lib/api";
 import type { Group, Invite, User, UserWithGroups } from "../../lib/api";
-import { buttonClass } from "../ui/button";
-import { EmptyState } from "../ui/empty";
+import RoleRestricted from "../role-restricted";
 import UserBar from "../user-bar";
 import AdminPanel from "./admin-panel";
 
 export const metadata: Metadata = { title: "Люди и группы" };
 
 export default async function AdminPage() {
+  // Кто зритель — отдельным запросом в том же Promise.all: при 403 списков
+  // (студент, гость) он нужен для каркаса страницы
+  const meRequest = apiFetch<User>("/auth/me");
   let me: User;
   let users: UserWithGroups[];
   let archived: UserWithGroups[];
@@ -19,7 +20,7 @@ export default async function AdminPage() {
   let invites: Invite[];
   try {
     [me, users, archived, groups, invites] = await Promise.all([
-      apiFetch<User>("/auth/me"),
+      meRequest,
       apiFetch<UserWithGroups[]>("/users"),
       // Архив — отдельным списком: в основном его нет (ADR-024)
       apiFetch<UserWithGroups[]>("/users?archived=1"),
@@ -28,26 +29,13 @@ export default async function AdminPage() {
     ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) redirect("/login");
-    // Роль без доступа (студент, гость): карточка как у 404 — каркаса нет,
-    // имени и роли из упавшего Promise.all не узнать
+    // Роль без доступа (студент, гость): каркас и карточка, как у других
+    // недоступных роли страниц
     if (e instanceof ApiError && e.status === 403) {
       return (
-        <main className="auth-page">
-          <div className="card card-pad">
-            <EmptyState
-              icon="people"
-              title="Нет доступа"
-              titleAs="h1"
-              action={
-                <Link href="/lessons" className={buttonClass({ variant: "primary" })}>
-                  К урокам
-                </Link>
-              }
-            >
-              Людьми и группами управляют админ и преподаватели.
-            </EmptyState>
-          </div>
-        </main>
+        <RoleRestricted me={await meRequest} title="Люди и группы" icon="people">
+          Людьми и группами управляют админ и преподаватели.
+        </RoleRestricted>
       );
     }
     throw e;

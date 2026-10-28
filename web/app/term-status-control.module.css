@@ -19,9 +19,11 @@
 .seg button[aria-pressed="true"] small { color: var(--c-on-primary); }
 .seg button[aria-disabled="true"] { cursor: progress; }
 
-/* Строка словаря */
+/* Строка словаря: сегменты и слово статуса вместе («Убрать» — в конце
+   строки таблицы, не здесь); слово не помещается рядом — встаёт под
+   сегментами */
 .compact { gap: var(--sp-1); }
-.compactRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+.compactRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
 .compact .seg { display: flex; gap: var(--sp-2); }
 .compact .seg button { width: var(--h-sm); min-height: var(--h-sm); height: var(--h-sm); padding: 0; border-radius: var(--r-sm); font-size: var(--fs-sm); }
-.current { font-size: var(--fs-xs); font-weight: 500; color: var(--c-text-muted); }
+.current { font-size: var(--fs-xs); font-weight: 500; color: var(--c-text-muted); white-space: nowrap; }

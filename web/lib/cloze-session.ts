@@ -61,11 +61,13 @@ export interface ClozeVerdict {
 
 const RATING_LABELS: Record<ClozeVerdict["rating"], string> = { again: "снова", good: "хорошо", easy: "легко" };
 
-// verdictText — строка итога: верно ли и какое слово стояло в предложении
-// (засчитывается любая форма слова, точная форма — подсказкой).
-export function verdictText(v: ClozeVerdict): string {
-  if (!v.correct) return `Неверно — в предложении «${v.answer}»`;
-  return v.exact ? "Верно!" : `Верно — в предложении «${v.answer}»`;
+// verdictParts — итог по частям: верно ли (label) и какое слово стояло в
+// предложении (word; засчитывается любая форма слова, точная форма —
+// подсказкой). Слово английское: страница помечает его lang="en" (WCAG
+// 3.1.2). У точного верного ответа слова нет.
+export function verdictParts(v: ClozeVerdict): { label: string; word: string | null } {
+  if (!v.correct) return { label: "Неверно — в предложении", word: v.answer };
+  return v.exact ? { label: "Верно!", word: null } : { label: "Верно — в предложении", word: v.answer };
 }
 
 // scheduleText — что ответ сделал с графиком повторений: оценка FSRS или

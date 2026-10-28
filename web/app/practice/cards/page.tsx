@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { PracticeQueue, User } from "../../../lib/api";
 import { ClickableTextScope } from "../../clickable-text";
-import { Alert } from "../../ui/alert";
+import RoleRestricted from "../../role-restricted";
 import { PageHeader } from "../../ui/page-header";
 import UserBar from "../../user-bar";
 import CardsSession from "./cards-session";
@@ -24,15 +24,9 @@ export default async function PracticeCardsPage() {
   }
   if (me.role !== "student") {
     return (
-      <>
-        <UserBar name={me.name} role={me.role} />
-        <main className="page page--narrow">
-          <PageHeader title="Карточки" />
-          <Alert tone="info" live={false}>
-            Карточки повторения есть только у студентов: они заводятся по словам личного словаря.
-          </Alert>
-        </main>
-      </>
+      <RoleRestricted me={me} title="Карточки" icon="cards">
+        Карточки повторения есть только у студентов: они заводятся по словам личного словаря.
+      </RoleRestricted>
     );
   }
   const queue = await apiFetch<PracticeQueue>("/practice/queue");

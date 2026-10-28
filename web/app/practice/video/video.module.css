@@ -1,11 +1,7 @@
 /* Видео по словам (DESIGN §6.9): плеер 16:9 со своей панелью субтитров,
-   подбор роликов карточками. Время — кнопки/ссылки .ts (приглушённый
+   подбор роликов карточками; поиск по словам — общий с текстами
+   (../words-search). Время — кнопки/ссылки .ts (приглушённый
    цвет, 6.31:1), целевые слова — метки primary-soft (7.7:1). */
-
-/* Поиск по словам: подпись над полем, кнопка — в строке поля */
-.search { display: grid; gap: 6px; margin-bottom: var(--sp-6); }
-.searchRow { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.searchRow > :global(.input) { flex: 1 1 240px; min-width: 0; }
 
 .content { display: grid; gap: var(--sp-6); }
 /* Сообщения плеера и api начинаются со строчной — в рамке с заглавной */
@@ -42,10 +38,3 @@
 .pickTitle { font-size: var(--fs-lg); }
 .segments { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
 .segment { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--sp-2); }
-
-@media (max-width: 767px) {
-  /* Поиск — основное действие страницы на телефоне: поле и кнопка 48px */
-  .searchRow > :global(.input), .searchRow > :global(.btn) { min-height: var(--h-lg); }
-  /* «Подобрать» не помещается рядом с полем — под ним во всю ширину */
-  .searchRow > :global(.btn) { flex: 1 1 auto; }
-}

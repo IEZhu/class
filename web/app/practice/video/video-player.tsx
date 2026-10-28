@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PracticeVideo, VideoSegment } from "../../../lib/api";
 import { activeAt, clock } from "../../../lib/timeline";
+import { langOf } from "../../../lib/word-nav";
 import ClickableText from "../../clickable-text";
 import { Alert } from "../../ui/alert";
 import { cx } from "../../ui/cx";
@@ -174,7 +175,14 @@ export default function VideoPlayer({ video, startMs }: { video: PracticeVideo; 
     <div className={v.player}>
       <div ref={hostRef} className={v.frame} />
       <p className="small muted">
-        «{video.title}»{video.channel && ` — ${video.channel}`}, видео и{" "}
+        «<span lang={langOf(video.title)}>{video.title}</span>»
+        {video.channel && (
+          <>
+            {" — "}
+            <span lang={langOf(video.channel)}>{video.channel}</span>
+          </>
+        )}
+        , видео и{" "}
         {video.subtitles === "manual" ? "субтитры автора" : "автоматические субтитры"} —{" "}
         <a href={video.url} target="_blank" rel="noopener noreferrer">
           YouTube
@@ -229,11 +237,14 @@ const SubtitleRow = memo(function SubtitleRow({
   );
 });
 
-// TargetTags — целевые слова строки метками; «слова:» — для чтения с экрана
+// TargetTags — целевые слова строки метками, английские (lang="en");
+// «слова:» — для чтения с экрана, по-русски
 export function TargetTags({ words }: { words: string[] }) {
   return (
-    <span className={v.tags}>
-      <span className="sr-only">слова:</span>
+    <span className={v.tags} lang="en">
+      <span className="sr-only" lang="ru">
+        слова:
+      </span>
       {words.map((w) => (
         <Pill key={w} tone="accent">
           {w}

@@ -6,12 +6,13 @@ import { apiFetch, ApiError } from "../../lib/api";
 import type { User, UserTermPage } from "../../lib/api";
 import { lessonTitle } from "../../lib/lesson-title";
 import { STATUS_LABELS, TERM_STATUSES } from "../../lib/term-status";
+import RoleRestricted from "../role-restricted";
 import { buttonClass } from "../ui/button";
 import { cx } from "../ui/cx";
 import { EmptyState } from "../ui/empty";
 import { PageHeader } from "../ui/page-header";
 import UserBar from "../user-bar";
-import DictionaryStatus from "./dictionary-status";
+import DictionaryStatus, { DictionaryRemove } from "./dictionary-status";
 import styles from "./page.module.css";
 
 export const metadata: Metadata = { title: "Мой словарь" };
@@ -61,15 +62,9 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
   }
   if (me.role !== "student") {
     return (
-      <>
-        <UserBar name={me.name} role={me.role} />
-        <main className="page">
-          <PageHeader title="Словарь" />
-          <div className="card">
-            <EmptyState icon="dict" title="Личный словарь есть только у студентов." titleAs="p" />
-          </div>
-        </main>
-      </>
+      <RoleRestricted me={me} title="Словарь" icon="dict">
+        Личный словарь есть только у студентов.
+      </RoleRestricted>
     );
   }
 
@@ -134,6 +129,9 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
                     <th scope="col">Перевод</th>
                     <th scope="col">Статус</th>
                     <th scope="col">Урок</th>
+                    <th scope="col">
+                      <span className="sr-only">Действия</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -160,6 +158,9 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
                           <span className="muted">—</span>
                         )}
                         <span className={styles.added}>добавлено {dateFmt.format(new Date(it.added_at))}</span>
+                      </td>
+                      <td className={styles.remove}>
+                        <DictionaryRemove studentId={me.id} termId={it.term_id} lemma={it.lemma} />
                       </td>
                     </tr>
                   ))}

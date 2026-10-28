@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ownsKey } from "./practice-keys.ts";
+import { isSessionKey, ownsKey } from "./practice-keys.ts";
 import type { KeyTarget } from "./practice-keys.ts";
 
 // el — элемент-заглушка: каким простым селекторам отвечает он сам и его
@@ -48,4 +48,28 @@ test("прочие цели и нажатие без цели — клавиши
     assert.equal(ownsKey(null, key), false);
   }
   assert.equal(ownsKey(el([".w"], ["main"]), " "), false, "класс .w без role=button — не кнопка-слово");
+});
+
+const session = ["[data-practice-session]"];
+
+test("клавиши практики действуют только с фокусом в сессии (WCAG 2.1.4)", () => {
+  // фокус на самой сессии (после старта, переворота, оценки, «Дальше»)
+  for (const key of keys) assert.equal(isSessionKey(el(session, ["main"]), key), true, `сессия ${JSON.stringify(key)}`);
+  // кнопка оценки и ссылка источника внутри сессии: цифра — клавиша практики, пробел и Enter — их
+  assert.equal(isSessionKey(el(["button"], ["article"], session), "3"), true);
+  assert.equal(isSessionKey(el(["button"], session), " "), false);
+  assert.equal(isSessionKey(el(["a"], ["p"], session), "Enter"), false);
+  // слово текста и поле ввода внутри сессии забирают всё
+  assert.equal(isSessionKey(el(["[data-i]"], ["article"], session), "2"), false);
+  assert.equal(isSessionKey(el(["input"], ["form"], session), "1"), false);
+});
+
+test("вне сессии клавиши практики не действуют: ссылка меню, тело страницы, попап слова", () => {
+  for (const key of keys) {
+    assert.equal(isSessionKey(el(["a"], ["nav"], ["body"]), key), false, `ссылка меню ${JSON.stringify(key)}`);
+    assert.equal(isSessionKey(el(["body"]), key), false, `без фокуса ${JSON.stringify(key)}`);
+    // попап слова — в портале в body, не внутри сессии
+    assert.equal(isSessionKey(el(["h2"], ["[role=dialog]"], ["body"]), key), false, `попап ${JSON.stringify(key)}`);
+    assert.equal(isSessionKey(null, key), false);
+  }
 });

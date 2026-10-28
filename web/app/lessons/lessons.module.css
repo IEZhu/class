@@ -27,12 +27,14 @@
 /* Интервал «21:00–22:00» без зазоров, которые .meta > span даёт детям */
 .rowBody .time, .liveInfo .time { gap: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+/* Блок даты: число, месяц, день недели (или год) — по строке, без
+   переносов: у всех строк одна высота и одна линия числа */
 .date {
-  display: grid; justify-items: center; align-content: center; gap: 2px; min-height: 64px; padding: var(--sp-1);
+  display: grid; justify-items: center; align-content: center; min-height: 64px; padding: var(--sp-1);
   border-radius: var(--r-md); background: var(--c-surface-2); line-height: 1.1; text-align: center;
 }
 .day { font-size: var(--fs-2xl); font-weight: 700; }
-.month { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; }
+.month { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; white-space: nowrap; }
 
 /* Форма нового события в раскрывающейся карточке под шапкой */
 .newEvent { margin-bottom: var(--sp-8); }
