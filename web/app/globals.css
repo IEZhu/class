@@ -1,8 +1,10 @@
 /*
- * Lingua Class — общий стиль интерфейса (ADR-040). Единственный глобальный CSS:
- * подключён в app/layout.tsx. Спецификация — DESIGN.md редизайна (токены §2,
- * компоненты §3); значения цветов — из tools/tokens.py (контраст WCAG 2.2 AA
- * проверен для каждой пары текст/фон, менять — только вместе с пересчётом).
+ * Lingua Class — общий стиль интерфейса (ADR-040). Единственная таблица стилей
+ * проекта: подключена в app/layout.tsx. Спецификация —
+ * docs/architecture/08-ui.md (токены §2, компоненты §3; в комментариях кода —
+ * «DESIGN §N»); значения цветов — из docs/architecture/ui/tokens.py (контраст
+ * WCAG 2.2 AA проверен для каждой пары текст/фон, менять — только вместе с
+ * пересчётом).
  *
  * Как пользоваться (группам страниц этот файл не править — своё в CSS Module):
  * 1. Токены: --c-* цвета (светлая и тёмная темы, тёмная — по
@@ -41,7 +43,7 @@
  *    page-header, icons, kbd, pill, skeleton, local-time).
  */
 
-/* ---------- 1. Цвета: светлая тема (mockup/tokens.css, tools/tokens.py) ---------- */
+/* ---------- 1. Цвета: светлая тема (docs/architecture/ui/tokens.py css) ---------- */
 :root,
 .light-island,
 .excalidraw {
@@ -197,7 +199,7 @@
   color: var(--c-text);
 }
 
-/* ---------- 2. Остальные токены (mockup/app.css :root) ---------- */
+/* ---------- 2. Остальные токены (08-ui.md §2.3–§2.5) ---------- */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;

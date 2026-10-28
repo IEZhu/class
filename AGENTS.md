@@ -41,11 +41,17 @@ are in Russian.
   word, ADR-037), public `app/join/[token]` for
   event guests); `lib/api.ts` calls the API server-side; `lib/roles.ts`, `lib/lesson-phase.ts`,
   `lib/lesson-title.ts`, `lib/review-session.ts`, `lib/cloze-session.ts`, `lib/timeline.ts` (player cue timing shared by
-  the transcript and video practice). Интерфейс (ADR-040): `app/globals.css` — единственный глобальный CSS
-  (дизайн-токены светлой и тёмной темы, база, классы общих компонентов; оглавление — в шапке файла);
-  `app/app-shell.tsx` — каркас с навигацией по роли, `app/user-bar.tsx` его реэкспортирует; `app/ui/` — общие
-  React-компоненты (кнопка, поле, сообщение, иконки `icons.tsx`, время в поясе зрителя `local-time.tsx`); стили одной
-  страницы — CSS Module рядом с ней, без inline-цветов и без новых npm-пакетов. Every text renders through
+  the transcript and video practice). UI (ADR-040, spec `docs/architecture/08-ui.md`, cited in code
+  comments as "DESIGN §N"): `app/globals.css` is the only project stylesheet (light/dark design tokens, base
+  styles and shared component classes; table of contents in its header; colour values change only after
+  re-running `docs/architecture/ui/tokens.py`); the vendor CSS of Plyr, Excalidraw and LiveKit is imported
+  by their own components (`lesson-player.tsx`, `whiteboard-canvas.tsx`, `lesson-room.tsx`);
+  `app/app-shell.tsx` is the role-based app shell, re-exported by `app/user-bar.tsx`; `app/ui/` holds the
+  shared React components (button, field, alert, empty state, page header, icons in `icons.tsx` — not
+  `icon.tsx`, which Next treats as the site icon —, `local-time.tsx` for times in the viewer's zone); page
+  styles live in a CSS Module next to the page, with no inline colours and no new npm packages;
+  `lib/word-nav.ts` (keyboard moves between words), `lib/practice-keys.ts` (keys the practice pages leave
+  to the focused element) and `lib/initials.ts` (avatar initials) are pure and tested. Every text renders through
   `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
   functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr
   sprite into the git-ignored `public/excalidraw/` and `public/plyr/` before dev and build.
@@ -57,8 +63,9 @@ are in Russian.
   `backup-pg.sh` / `restore-pg.sh` (+ `backup-lib.sh`, `systemd/` timer): nightly pg_dump to S3
   and restore (S1-7, ADR-014).
 - `Makefile`: operations for the compose stack.
-- `docs/architecture/`: topology, services, data model, API, S3, integrations, flows, ADR log
-  (`decisions.md`); `00-source-variant-c.md` is a frozen snapshot.
+- `docs/architecture/`: topology, services, data model, API, S3, UI spec (`08-ui.md`, colour
+  contrast tool `ui/tokens.py`), integrations, flows, ADR log (`decisions.md`);
+  `00-source-variant-c.md` is a frozen snapshot.
 - `docs/plans/`: stage plans 0–5 and the pipeline rules (`00-flow.md`).
 - `docs/tasks/README.md`: the single index of task statuses and debts.
 - `history.md`: machine-written agent session log; do not edit unless asked.
