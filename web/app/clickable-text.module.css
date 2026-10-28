@@ -3,6 +3,12 @@
    .popover (от 768px — у слова по --pop-top/--pop-left, уже — лист снизу
    поверх .backdrop--phone); здесь — сам текст и содержимое попапа. */
 
+/* Попап с рассчитанным местом (lib/popover-place): от 768px его высота —
+   не больше места у слова (--pop-max-h); на телефоне лист — как был */
+@media (min-width: 768px) {
+  .placed:global(.popover) { max-height: var(--pop-max-h); }
+}
+
 .text { white-space: pre-wrap; }
 
 .head {

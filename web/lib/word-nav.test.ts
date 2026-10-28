@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { tokenize } from "./tokenize.ts";
-import { isActivationKey, isRussianPart, moveWord, wordIndexes } from "./word-nav.ts";
+import { closeFocusTarget, isActivationKey, isRussianPart, langOf, moveWord, wordIndexes } from "./word-nav.ts";
+import type { FocusNode } from "./word-nav.ts";
 
 test("слова текста — только токены со словом, по порядку", () => {
   // токены: I · " " · was · " " · reluctant · ", 42 " · times · "."
@@ -56,4 +57,33 @@ test("кусок с кириллицей — русский, латиница и
   assert.equal(isRussianPart(", 42 — "), false);
   assert.equal(isRussianPart("reluctant"), false);
   assert.equal(isRussianPart(""), false);
+});
+
+test("язык строки вне ClickableText: без кириллицы — en, с ней — язык страницы", () => {
+  assert.equal(langOf("Airport English: checking in and boarding"), "en");
+  assert.equal(langOf("BBC Learning English"), "en");
+  assert.equal(langOf("Airport English: в аэропорту"), undefined);
+  assert.equal(langOf("Урок 3"), undefined);
+});
+
+// node — узел-заглушка: селекторы, которым он отвечает сам, и родитель;
+// closest — как у DOM: сам узел или ближайший предок
+function node(own: string[], parentElement: FocusNode | null = null): FocusNode {
+  const self: FocusNode = {
+    parentElement,
+    closest(selectors: string) {
+      return own.includes(selectors) ? self : (parentElement?.closest(selectors) ?? null);
+    },
+  };
+  return self;
+}
+
+test("попап закрыт изнутри: с клавиатуры фокус — слову, мышью — сессии вокруг текста или никому", () => {
+  const session = node(["[tabindex]"], node(["main"]));
+  const word = node(["[tabindex]", "[data-i]"], node(["span"], node(["article"], session)));
+  assert.equal(closeFocusTarget(word, true), word, "открыт с клавиатуры");
+  assert.equal(closeFocusTarget(word, false), session, "открыт мышью: не слово, а сессия практики");
+  const lessonWord = node(["[tabindex]", "[data-i]"], node(["span"], node(["main"])));
+  assert.equal(closeFocusTarget(lessonWord, false), null, "вокруг текста фокусируемого контейнера нет — фокус снимается");
+  assert.equal(closeFocusTarget(null, true), null, "открытого слова нет");
 });

@@ -1,21 +1,24 @@
 "use client";
 
-import { cloneElement, createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { cloneElement, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement, ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { TermClick, TermExample, TermExplanation } from "../lib/api";
+import { placePopover, POPUP_GAP } from "../lib/popover-place";
+import type { PopoverPlace } from "../lib/popover-place";
 import { isTextSelection } from "../lib/selection";
 import type { TermStatus } from "../lib/term-status";
 import { sentenceAround, tokenize, uniqueKeys } from "../lib/tokenize";
 import type { Token } from "../lib/tokenize";
-import { isActivationKey, isRussianPart, moveWord, wordIndexes } from "../lib/word-nav";
+import { closeFocusTarget, isActivationKey, isRussianPart, langOf, moveWord, wordIndexes } from "../lib/word-nav";
 import styles from "./clickable-text.module.css";
 import { RequestError, requestJson } from "./forms";
 import TermStatusControl, { termStatuses } from "./term-status-control";
 import { Alert } from "./ui/alert";
 import type { AlertTone } from "./ui/alert";
 import { Button } from "./ui/button";
+import { cx } from "./ui/cx";
 import { Icon } from "./ui/icons";
 import { Skeleton } from "./ui/skeleton";
 
@@ -27,9 +30,11 @@ import { Skeleton } from "./ui/skeleton";
 // Клавиатура (DESIGN §5.2): слова — role="button", у текста одна
 // остановка Tab (слово с tabIndex 0, остальные -1), ←/→ и Home/End
 // переходят между словами, Enter и пробел открывают попап; Escape
-// закрывает его и возвращает фокус на слово. Признак слова в DOM —
-// атрибут data-i (номер токена): по нему обработчики клавиш карточек и
-// cloze узнают нажатие на слове. Корень — lang="en" (DESIGN §5.1).
+// закрывает его, и открытый с клавиатуры попап возвращает фокус на
+// слово (открытый мышью — нет: lib/word-nav closeFocusTarget). Признак
+// слова в DOM — атрибут data-i (номер токена): по нему обработчики
+// клавиш карточек и cloze узнают нажатие на слове. Корень — lang="en"
+// (DESIGN §5.1).
 
 interface Scope {
   lessonId: number | null;
@@ -76,12 +81,15 @@ interface OpenPopup extends WordClick {
   seq: number;
   // Токен открытого слова: подсветка и возврат фокуса
   i: number;
-  // Открыт с клавиатуры: фокус в попапе прокручивает страницу к нему
+  // Открыт с клавиатуры: фокус в попапе прокручивает страницу к нему, а
+  // закрытие возвращает фокус на слово
   keyboard: boolean;
-  top: number;
   left: number;
-  // Рамка открытого слова — его прямоугольник в координатах документа
+  // Рамка открытого слова — его прямоугольник в координатах документа;
+  // scrollY — прокрутка страницы в момент открытия (слово в окне — ring
+  // минус scrollY)
   ring: { top: number; left: number; width: number; height: number };
+  scrollY: number;
 }
 
 // Готовые элементы слов текста и их классы по номеру токена
@@ -129,12 +137,21 @@ export default function ClickableText({
   const [current, setCurrent] = useState<number | null>(null);
   const root = useRef<HTMLSpanElement>(null);
   const close = useRef(() => setPopup(null)).current;
-  // Закрытие из попапа: Escape и «Закрыть» возвращают фокус на слово,
-  // клик мимо попапа — нет (фокус уходит туда, куда кликнули)
-  const dismiss = useRef((restoreFocus: boolean) => {
-    const word = restoreFocus ? root.current?.querySelector<HTMLElement>(':scope > [aria-expanded="true"]') : null;
+  // Закрытие из попапа (inside — Escape и «Закрыть»): фокус — по
+  // closeFocusTarget (lib/word-nav): открытый с клавиатуры попап
+  // возвращает его на слово, открытый мышью или касанием — на сессию
+  // практики вокруг текста или никуда, как до попапа. Клик мимо попапа
+  // фокус не трогает: он уходит туда, куда кликнули
+  const dismiss = useRef((inside: boolean, keyboard: boolean) => {
+    if (!inside) {
+      setPopup(null);
+      return;
+    }
+    const word = root.current?.querySelector<HTMLElement>(':scope > [aria-expanded="true"]') ?? null;
+    const target = closeFocusTarget(word, keyboard) as HTMLElement | null;
     setPopup(null);
-    word?.focus();
+    if (target) target.focus({ preventScroll: !keyboard });
+    else if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   }).current;
 
   useEffect(() => {
@@ -173,9 +190,9 @@ export default function ClickableText({
       seq: (prev?.seq ?? 0) + 1,
       i,
       keyboard,
-      top: rect.bottom + window.scrollY + 4,
       left: rect.left + window.scrollX,
       ring: { top: rect.top + window.scrollY, left: rect.left + window.scrollX, width: rect.width, height: rect.height },
+      scrollY: window.scrollY,
     }));
   }
 
@@ -268,7 +285,7 @@ function hasTerm(d: TermClick): boolean {
 // и для клавиатуры он такой же модальный
 const FOCUSABLE = 'a[href], button:not(:disabled), [tabindex="0"]';
 
-function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocus: boolean) => void }) {
+function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (inside: boolean, keyboard: boolean) => void }) {
   const scope = useContext(ScopeContext);
   useSyncExternalStore(termStatuses.subscribe, termStatuses.getVersion, serverVersion);
   const [word, setWord] = useState<WordClick>(start);
@@ -276,6 +293,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const [place, setPlace] = useState<PopoverPlace | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -311,12 +329,32 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
     return () => cancelAnimationFrame(frame);
   }, [word, start.keyboard]);
 
+  // Место у слова (lib/popover-place): после раскладки, до отрисовки, и
+  // заново при каждом изменении высоты попапа (пришли данные слова,
+  // объяснение). Наибольшая высота — из CSS .popover: её читаем до того,
+  // как место её ограничит
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || window.innerHeight;
+    const word = { top: start.ring.top - start.scrollY, bottom: start.ring.top + start.ring.height - start.scrollY };
+    function update() {
+      if (!el) return;
+      const next = placePopover(word, el.offsetHeight, cap, window.innerHeight);
+      setPlace((prev) => (prev && prev.top === next.top && prev.maxHeight === next.maxHeight ? prev : next));
+    }
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [start]);
+
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
-      if (e.key === "Escape") onClose(true);
+      if (e.key === "Escape") onClose(true, start.keyboard);
     }
     function onDown(e: PointerEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose(false, start.keyboard);
     }
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onDown);
@@ -324,7 +362,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("pointerdown", onDown);
     };
-  }, [onClose]);
+  }, [onClose, start.keyboard]);
 
   function keepTab(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key !== "Tab") return;
@@ -343,9 +381,15 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
   }
 
   // Попап не вылезает за правый край окна; место — CSS-переменными, на
-  // телефоне .popover их не читает и становится листом снизу
+  // телефоне .popover их не читает и становится листом снизу. До расчёта
+  // места — под словом
   const left = Math.max(window.scrollX + 8, Math.min(start.left, window.scrollX + window.innerWidth - POPUP_WIDTH - 8));
-  const place = { "--pop-top": `${start.top}px`, "--pop-left": `${left}px` } as CSSProperties;
+  const top = place ? place.top + start.scrollY : start.ring.top + start.ring.height + POPUP_GAP;
+  const position = {
+    "--pop-top": `${top}px`,
+    "--pop-left": `${left}px`,
+    "--pop-max-h": place && `${place.maxHeight}px`,
+  } as CSSProperties;
   const r = start.ring;
   const ring = { "--ring-top": `${r.top}px`, "--ring-left": `${r.left}px`, "--ring-w": `${r.width}px`, "--ring-h": `${r.height}px` } as CSSProperties;
   const status = data && scope.studentId !== null ? (termStatuses.statusOf(scope.studentId, word.key) ?? null) : null;
@@ -367,8 +411,8 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
         role="dialog"
         aria-modal="true"
         aria-label={`Слово ${word.surface}`}
-        className="popover"
-        style={place}
+        className={cx("popover", place && styles.placed)}
+        style={position}
       >
         <div className="sheet-handle" aria-hidden="true" />
         <div className={styles.head}>
@@ -382,7 +426,7 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
               </p>
             )}
           </div>
-          <button type="button" className="icon-btn icon-btn--sm" onClick={() => onClose(true)} aria-label="Закрыть">
+          <button type="button" className="icon-btn icon-btn--sm" onClick={() => onClose(true, start.keyboard)} aria-label="Закрыть">
             <Icon name="x" />
           </button>
         </div>
@@ -575,16 +619,19 @@ function useExplain(termId: number, word: WordClick, lessonId: number | null) {
 
 // ExampleAuthors — подпись примера Tatoeba: авторы предложения и перевода
 // со ссылками на их страницы (условие CC BY 2.0 FR, ADR-028); та же
-// подпись — у оборота карточек (S4-3) и предложений тексто-практики (S5-7)
+// подпись — у оборота карточек (S4-3) и предложений тексто-практики (S5-7).
+// Имена авторов без кириллицы — lang="en" (WCAG 3.1.2)
 export function ExampleAuthors({ example: { attribution: a } }: { example: TermExample }) {
+  const author = a.author || "автор не указан";
+  const translator = a.translation_author || "автор не указан";
   return (
     <div className="attr">
-      <a href={a.url} target="_blank" rel="noreferrer">
-        {a.author || "автор не указан"}
+      <a href={a.url} target="_blank" rel="noreferrer" lang={langOf(author)}>
+        {author}
       </a>
       {" · перевод: "}
-      <a href={a.translation_url} target="_blank" rel="noreferrer">
-        {a.translation_author || "автор не указан"}
+      <a href={a.translation_url} target="_blank" rel="noreferrer" lang={langOf(translator)}>
+        {translator}
       </a>
     </div>
   );
