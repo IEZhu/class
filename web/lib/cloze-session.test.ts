@@ -9,6 +9,7 @@ import {
   itemOptions,
   llmErrorNote,
   MAX_RESPONSE_MS,
+  optionState,
   responseMs,
   restartClock,
   scheduleText,
@@ -71,6 +72,18 @@ test("ответ среди вариантов: форма у вариантов
   assert.ok(isAnswerOption("ran", result));
   assert.ok(isAnswerOption("run", result));
   assert.ok(!isAnswerOption("walk", result));
+});
+
+test("вид варианта: выбранный до ответа, после — верный и выбранный неверный", () => {
+  const result = { answer: "Ran", lemma: "run" };
+  assert.equal(optionState("walk", "walk", null), "chosen");
+  assert.equal(optionState("run", "walk", null), null);
+  assert.equal(optionState("run", null, null), null);
+  assert.equal(optionState("run", "walk", result), "correct", "верный виден и когда выбран другой");
+  assert.equal(optionState("ran", "ran", result), "correct");
+  assert.equal(optionState("walk", "walk", result), "wrong");
+  assert.equal(optionState("jump", "walk", result), null);
+  assert.equal(optionState("walk", null, result), null, "ответ вводом: выбранного варианта нет");
 });
 
 const list = (id: number, options: string[]) => ({ id, options, distractor_source: "list" as const });

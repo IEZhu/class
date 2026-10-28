@@ -10,9 +10,9 @@ import {
   clozeCredit,
   clozeKeyAction,
   distractorRequestIds,
-  isAnswerOption,
   itemOptions,
   llmErrorNote,
+  optionState,
   responseMs,
   restartClock,
   scheduleText,
@@ -20,21 +20,30 @@ import {
   verdictText,
 } from "../../../lib/cloze-session";
 import type { ClozeClock, ClozeCredit, ClozeMode } from "../../../lib/cloze-session";
+import { ownsKey } from "../../../lib/practice-keys";
 import { reviewId } from "../../../lib/review-session";
 import ClickableText from "../../clickable-text";
 import { RequestError, requestJson } from "../../forms";
 import { termStatuses } from "../../term-status-control";
-
-const mutedStyle = { color: "#666" } as const;
-const cardStyle: CSSProperties = { border: "1px solid #ddd", borderRadius: 8, padding: "1.25rem", lineHeight: 1.6 };
-const buttonStyle: CSSProperties = { padding: "0.4rem 0.8rem", border: "1px solid #ccc", borderRadius: 4, background: "#fff" };
-const blankStyle: CSSProperties = { display: "inline-block", minWidth: "4em", borderBottom: "2px solid #4c6ef5" };
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { EmptyState } from "../../ui/empty";
+import { Icon } from "../../ui/icons";
+import { Kbd } from "../../ui/kbd";
+import { Pill } from "../../ui/pill";
+import s from "../practice.module.css";
 
 function newAttemptId(): string {
   return reviewId(crypto.getRandomValues(new Uint8Array(16)));
 }
 
 type Options = ClozeOptions["items"][number];
+
+const modes: { mode: ClozeMode; label: string }[] = [
+  { mode: "choice", label: "Варианты" },
+  { mode: "typing", label: "Ввод слова" },
+];
 
 // ClozeSession — проход выдачи: предложение с пропуском, ответ кнопкой
 // (клавиши 1–4) или вводом, итог и следующий пункт по Enter. attempt_id
@@ -147,15 +156,14 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
     }
   }
 
-  // Клавиши — на всё окно. Поля ввода и попап слова не перехватываются;
-  // Enter и пробел на кнопке или ссылке — их собственное нажатие.
-  // Обработчик переподписывается на каждый рендер: видит текущий пункт
+  // Клавиши — на всё окно. Поля ввода, попап и слова текста не
+  // перехватываются; Enter и пробел на кнопке или ссылке — их собственное
+  // нажатие (lib/practice-keys). Обработчик переподписывается на каждый
+  // рендер: видит текущий пункт
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!item || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target instanceof Element ? e.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
-      if ((e.key === " " || e.key === "Enter") && target?.closest("button, a")) return;
+      if (ownsKey(e.target instanceof Element ? e.target : null, e.key)) return;
       const action = clozeKeyAction(e.key, result !== null, mode, options?.length ?? 0);
       if (!action) return;
       e.preventDefault();
@@ -174,98 +182,120 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const done = Math.min(index, total);
   if (total === 0) {
     return (
-      <div style={cardStyle}>
-        <p style={{ marginTop: 0 }}>Пока не из чего составить упражнение.</p>
-        <p style={mutedStyle}>
+      <div className="card">
+        <EmptyState icon="cloze" title="Пока не из чего составить упражнение">
           Нужны слова в <Link href="/dictionary">словаре</Link> и предложения с ними: из уроков, ваших текстов или корпуса
           Tatoeba.
-        </p>
+        </EmptyState>
       </div>
     );
   }
+  const progress = { "--progress": `${(100 * done) / total}%` } as CSSProperties;
   return (
-    <section>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
-        <span>
-          {done} из {total}
-          {page.due_total > 0 && <span style={mutedStyle}> · к повторению {page.due_total}</span>}
-        </span>
-        <span style={mutedStyle}>
-          верно {tally.correct} · неверно {tally.wrong}
-        </span>
+    <section className={s.session}>
+      <div className={s.bar}>
+        <div className={s.barRow}>
+          <span>
+            <span className={s.count}>
+              {done} из {total}
+            </span>
+            {page.due_total > 0 && <span className="small muted"> · к повторению {page.due_total}</span>}
+          </span>
+          <span className={s.score}>
+            <Pill tone="success">верно {tally.correct}</Pill>
+            <Pill tone="danger">неверно {tally.wrong}</Pill>
+          </span>
+        </div>
+        <div
+          className="progress"
+          role="progressbar"
+          aria-label="Пройдено предложений"
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={done}
+          style={progress}
+        >
+          <span />
+        </div>
       </div>
-      <div
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={total}
-        aria-valuenow={done}
-        style={{ height: 6, background: "#eee", borderRadius: 3, margin: "0.5rem 0 1rem" }}
-      >
-        <div style={{ width: `${(100 * done) / total}%`, height: "100%", background: "#4c6ef5", borderRadius: 3 }} />
-      </div>
-      <div role="group" aria-label="Как отвечать" style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
-        {(["choice", "typing"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            aria-pressed={mode === m}
-            disabled={busy}
-            onClick={() => setMode(m)}
-            style={{ ...buttonStyle, fontWeight: mode === m ? 600 : 400, borderColor: mode === m ? "#4c6ef5" : "#ccc" }}
-          >
-            {m === "choice" ? "Варианты" : "Ввод слова"}
+      <div className={cx("segmented", s.modes)} role="group" aria-label="Как отвечать">
+        {modes.map((m) => (
+          <button key={m.mode} type="button" aria-pressed={mode === m.mode} disabled={busy} onClick={() => setMode(m.mode)}>
+            {m.label}
           </button>
         ))}
       </div>
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
+      {error && (
+        <Alert tone="danger" className={s.alert}>
+          {error}
+        </Alert>
+      )}
       {item ? (
-        <div style={cardStyle} key={item.id}>
+        <article className={cx("card", s.practiceCard)} key={item.id}>
           <ItemSource item={item} credit={clozeCredit(item.attribution, result?.attribution ?? null)} />
-          <p style={{ fontSize: "1.25rem", margin: "0.5rem 0 1rem" }}>
+          <p className={s.sentence}>
             {result ? (
               <ClickableText text={result.sentence} />
             ) : (
               <>
                 <ClickableText text={item.before} />
-                <span style={blankStyle} aria-label="пропуск">
-                  &nbsp;
-                </span>
+                <span className={s.blank} role="img" aria-label="пропуск" />
                 <ClickableText text={item.after} />
               </>
             )}
           </p>
           {mode === "choice" && options === null ? (
-            <p style={mutedStyle}>
-              {fetchFailed ? (
-                <>
-                  Варианты не загрузились.{" "}
-                  <button type="button" onClick={retryOptions} style={buttonStyle}>
+            fetchFailed ? (
+              <Alert
+                tone="warning"
+                action={
+                  <Button type="button" variant="secondary" size="sm" className={s.touch} onClick={retryOptions}>
                     Повторить
-                  </button>{" "}
-                  Или впишите слово (режим «Ввод слова»).
-                </>
-              ) : (
-                "Подбираем варианты…"
-              )}
-            </p>
+                  </Button>
+                }
+              >
+                Варианты не загрузились. Или впишите слово (режим «Ввод слова»).
+              </Alert>
+            ) : (
+              <div className={s.pending}>
+                <p className="small muted" role="status">
+                  Подбираем варианты…
+                </p>
+                <div className={s.options} aria-hidden="true">
+                  {[0, 1, 2, 3].map((i) => (
+                    <span key={i} className={cx("skeleton", s.optionSkeleton)} />
+                  ))}
+                </div>
+              </div>
+            )
           ) : mode === "choice" && options !== null ? (
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {options.map((o, i) => (
-                <button
-                  key={o}
-                  type="button"
-                  disabled={busy || result !== null}
-                  onClick={() => void answer(o, "choice")}
-                  style={{ ...buttonStyle, ...optionColor(o, chosen, result) }}
-                >
-                  {o} <kbd style={mutedStyle}>{i + 1}</kbd>
-                </button>
-              ))}
+            <div className={s.options} role="group" aria-label="Варианты ответа">
+              {options.map((o, i) => {
+                const state = optionState(o, chosen, result);
+                return (
+                  <button
+                    key={o}
+                    type="button"
+                    className={cx(s.option, state && s[state])}
+                    lang="en"
+                    disabled={busy || result !== null}
+                    onClick={() => void answer(o, "choice")}
+                  >
+                    <span className={s.optionLabel}>
+                      {state === "correct" && <Icon name="check" />}
+                      {state === "wrong" && <Icon name="x" />}
+                      {o}
+                    </span>
+                    <Kbd>{i + 1}</Kbd>
+                  </button>
+                );
+              })}
             </div>
           ) : (
-            <form onSubmit={submitTyped} style={{ display: "flex", gap: "0.5rem" }}>
+            <form onSubmit={submitTyped} className={s.typing}>
               <input
                 key={item.id}
+                className="input input--lg"
                 autoFocus
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
@@ -275,13 +305,17 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
                 autoComplete="off"
                 autoCapitalize="off"
                 spellCheck={false}
-                style={{ flex: 1, padding: "0.4rem", fontSize: "1rem" }}
               />
-              <button type="submit" disabled={busy || result !== null || !typed.trim()} style={buttonStyle}>
+              <Button type="submit" variant="primary" size="lg" blockOnPhone disabled={busy || result !== null || !typed.trim()}>
                 Проверить
-              </button>
+              </Button>
             </form>
           )}
+          {/* Итог для чтения с экрана: регион есть с показа пункта, поэтому
+              появившийся ответ объявляется */}
+          <p className="sr-only" role="status">
+            {result && `${verdictText(result)} — ${scheduleText(result)}`}
+          </p>
           {result && (
             <Feedback
               result={result}
@@ -289,56 +323,71 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
               onNext={() => next(null)}
             />
           )}
-        </div>
+        </article>
       ) : (
-        <div style={cardStyle}>
-          <p style={{ marginTop: 0 }}>
-            Выдача пройдена: верно {tally.correct} из {tally.correct + tally.wrong}.
-          </p>
-          <button type="button" onClick={() => router.refresh()} style={buttonStyle}>
-            Ещё предложения
-          </button>
+        <div className="card">
+          <EmptyState
+            icon="check"
+            title="Выдача пройдена"
+            action={
+              <Button type="button" variant="primary" blockOnPhone onClick={() => router.refresh()}>
+                Ещё предложения
+              </Button>
+            }
+          >
+            Верно {tally.correct} из {tally.correct + tally.wrong}.
+          </EmptyState>
         </div>
       )}
-      {llmNote && <p style={{ ...mutedStyle, fontSize: "0.85em" }}>{llmNote}</p>}
+      {llmNote && <p className={cx("xs muted", s.note)}>{llmNote}</p>}
+      {item && (
+        <p className={s.shortcuts}>
+          {mode === "choice" ? (
+            <span>
+              <Kbd>1</Kbd>–<Kbd>4</Kbd> выбрать вариант
+            </span>
+          ) : (
+            <span>
+              <Kbd>Enter</Kbd> проверить
+            </span>
+          )}
+          <span>
+            <Kbd>Enter</Kbd> дальше
+          </span>
+        </p>
+      )}
     </section>
   );
-}
-
-// optionColor — после ответа: верный вариант зелёный, выбранный неверный —
-// красный
-function optionColor(option: string, chosen: string | null, result: ClozeAttemptResult | null): CSSProperties {
-  if (!result) return option === chosen ? { borderColor: "#4c6ef5" } : {};
-  if (isAnswerOption(option, result)) return { background: "#d3f9d8", borderColor: "#2f9e44" };
-  return option === chosen ? { background: "#ffe3e3", borderColor: "#e03131" } : {};
 }
 
 // ItemSource — откуда предложение; у Tatoeba — подпись автора и лицензия
 // (CC BY), ссылка на страницу предложения — только после ответа
 function ItemSource({ item, credit: c }: { item: ClozeItem; credit: ClozeCredit | null }) {
-  const small = { ...mutedStyle, fontSize: "0.85em" };
   const author = c ? c.author || "автор не указан" : "";
   return (
-    <div style={small}>
-      {item.lesson_id !== null ? <Link href={`/lesson/${item.lesson_id}`}>{sourceLabel(item.source)}</Link> : sourceLabel(item.source)}
-      {c && (
-        <>
-          {" · "}
-          {c.url ? (
-            <a href={c.url} target="_blank" rel="noreferrer">
-              {author}
+    <p className={s.source}>
+      <Icon name={item.lesson_id !== null ? "lessons" : "text"} size="sm" />
+      <span>
+        {item.lesson_id !== null ? <Link href={`/lesson/${item.lesson_id}`}>{sourceLabel(item.source)}</Link> : sourceLabel(item.source)}
+        {c && (
+          <>
+            {" · "}
+            {c.url ? (
+              <a href={c.url} target="_blank" rel="noreferrer">
+                {author}
+              </a>
+            ) : (
+              author
+            )}
+            {", "}
+            <a href={c.licenseUrl} target="_blank" rel="noreferrer">
+              {c.license}
             </a>
-          ) : (
-            author
-          )}
-          {", "}
-          <a href={c.licenseUrl} target="_blank" rel="noreferrer">
-            {c.license}
-          </a>
-        </>
-      )}
-      {!item.due && " · повторять слово ещё рано: засчитается только ошибка"}
-    </div>
+          </>
+        )}
+        {!item.due && " · повторять слово ещё рано: засчитается только ошибка"}
+      </span>
+    </p>
   );
 }
 
@@ -354,27 +403,32 @@ function Feedback({
   onNext: () => void;
 }) {
   return (
-    <div style={{ borderTop: "1px solid #eee", marginTop: "1rem", paddingTop: "0.75rem" }}>
-      <p style={{ margin: "0 0 0.25rem", fontWeight: 600, color: result.correct ? "#2f9e44" : "#e03131" }}>
-        {verdictText(result)}
-      </p>
-      <p style={{ ...mutedStyle, margin: "0 0 0.5rem" }}>{scheduleText(result)}</p>
-      {result.translation && (
-        <p style={{ margin: "0 0 0.5rem" }}>
-          <ClickableText text={result.translation} />
-          {c?.translation && (
-            <span style={{ ...mutedStyle, fontSize: "0.8em" }}>
-              {" · перевод: "}
-              <a href={c.translation.url} target="_blank" rel="noreferrer">
-                {c.translation.author || "автор не указан"}
-              </a>
-            </span>
-          )}
+    <>
+      <div className={cx(s.feedback, result.correct ? s.ok : s.bad)}>
+        <p className={s.verdict}>
+          <Icon name={result.correct ? "check" : "x"} />
+          {verdictText(result)}
         </p>
-      )}
-      <button type="button" autoFocus onClick={onNext} style={buttonStyle}>
-        Дальше <kbd style={mutedStyle}>Enter</kbd>
-      </button>
-    </div>
+        <p className={s.schedule}>{scheduleText(result)}</p>
+        {result.translation && (
+          <p>
+            <ClickableText text={result.translation} />
+            {c?.translation && (
+              <span className={s.credit}>
+                {" · перевод: "}
+                <a href={c.translation.url} target="_blank" rel="noreferrer">
+                  {c.translation.author || "автор не указан"}
+                </a>
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+      <div className={s.next}>
+        <Button type="button" variant="primary" size="lg" blockOnPhone className={s.onPrimary} autoFocus onClick={onNext}>
+          Дальше <Kbd>Enter</Kbd>
+        </Button>
+      </div>
+    </>
   );
 }
