@@ -26,6 +26,13 @@ export async function removeTerm(studentId: number, termId: number, lemma: strin
   termStatuses.setStatus(studentId, lemma, null);
 }
 
+// confirmRemove — подтверждение «Убрать» (DESIGN §4.4), одно для попапа
+// слова и строки словаря: вместе со словом уходит его график повторений,
+// вернуть его нечем
+export function confirmRemove(lemma: string): boolean {
+  return window.confirm(`Убрать «${lemma}» из словаря? Статус и график повторений слова удалятся.`);
+}
+
 // TermStatusControl — «в мой словарь», статус 1..5 и «убрать» (S3-5):
 // в попапе слова и на странице словаря. studentId — зритель, чей это
 // словарь (ключ кэша termStatuses); lessonId — урок, с которого слово
@@ -34,9 +41,9 @@ export async function removeTerm(studentId: number, termId: number, lemma: strin
 // Вид (DESIGN §4.2, §6.5): в попапе — сегменты с номером и словом статуса
 // и строка действий (actions — слева, «Убрать» — справа, отдельно от
 // основного действия); compact — строка словаря: номера 32px и слово
-// статуса рядом, у кнопок оно в доступном имени. «Убрать» в строке
-// словаря — в конце строки, с подтверждением (dictionary-status.tsx),
-// а не рядом со статусами.
+// статуса рядом, у кнопок оно в доступном имени. «Убрать» — с
+// подтверждением (confirmRemove); в строке словаря — в конце строки
+// (dictionary-status.tsx), а не рядом со статусами.
 export default function TermStatusControl({
   studentId,
   termId,
@@ -92,6 +99,10 @@ export default function TermStatusControl({
     }
   }
 
+  function remove() {
+    if (!busy && confirmRemove(lemma)) void save(null);
+  }
+
   const errorText = error && (
     <p className="field-error" role="alert">
       <Icon name="error" />
@@ -143,7 +154,7 @@ export default function TermStatusControl({
             size="sm"
             aria-label={`Убрать ${lemma} из словаря`}
             aria-disabled={busy || undefined}
-            onClick={() => void save(null)}
+            onClick={remove}
           >
             Убрать
           </Button>

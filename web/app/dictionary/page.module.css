@@ -17,6 +17,10 @@
 .added { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
 /* «Убрать» — последняя колонка, у правого края строки, вдали от статусов */
 .remove { width: 1%; text-align: right; }
+/* Сбой «Убрать» — строкой под словом во всю ширину (dictionary-status.tsx):
+   строка слова и сообщение — одним блоком, без линии между ними */
+.table .failed > td { border-bottom-color: transparent; }
+.table .removeError > td { padding-top: 0; }
 
 .next { margin-left: auto; }
 
@@ -33,6 +37,8 @@
   .status { grid-area: status; }
   .lesson { grid-area: lesson; min-width: 0; }
   .remove { grid-area: remove; width: auto; }
+  .table tr.failed { border-bottom: 0; }
+  .table tr.removeError { display: block; padding-top: 0; }
 }
 /* Планшет и узкий ноутбук: слово над переводом, статус (слово статуса —
    под сегментами), урок, «Убрать»; очень длинное слово переносится, а не

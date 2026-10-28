@@ -12,7 +12,7 @@ import { cx } from "../ui/cx";
 import { EmptyState } from "../ui/empty";
 import { PageHeader } from "../ui/page-header";
 import UserBar from "../user-bar";
-import DictionaryStatus, { DictionaryRemove } from "./dictionary-status";
+import DictionaryStatus, { DictionaryRow } from "./dictionary-status";
 import styles from "./page.module.css";
 
 export const metadata: Metadata = { title: "Мой словарь" };
@@ -136,7 +136,7 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
                 </thead>
                 <tbody>
                   {page.items.map((it) => (
-                    <tr key={it.term_id}>
+                    <DictionaryRow key={it.term_id} studentId={me.id} termId={it.term_id} lemma={it.lemma}>
                       <td className={styles.word}>
                         <strong lang="en">{it.lemma}</strong>
                         {it.surface.toLowerCase() !== it.lemma && (
@@ -159,10 +159,7 @@ export default async function DictionaryPage({ searchParams }: { searchParams: S
                         )}
                         <span className={styles.added}>добавлено {dateFmt.format(new Date(it.added_at))}</span>
                       </td>
-                      <td className={styles.remove}>
-                        <DictionaryRemove studentId={me.id} termId={it.term_id} lemma={it.lemma} />
-                      </td>
-                    </tr>
+                    </DictionaryRow>
                   ))}
                 </tbody>
               </table>

@@ -2,6 +2,7 @@
 // функции без DOM и React: их проверяют тесты lib/word-nav.test.ts
 // (npm test).
 
+import { SESSION } from "./practice-keys.ts";
 import type { Token } from "./tokenize";
 
 // wordIndexes — номера токенов-слов текста по порядку: по ним ходит
@@ -71,18 +72,14 @@ export interface FocusNode {
   closest(selectors: string): FocusNode | null;
 }
 
-// Контейнер, которому можно отдать фокус: tabIndex у него задан явно
-// (сессия практики — tabIndex=-1)
-const FOCUS_SCOPE = "[tabindex]";
-
 // closeFocusTarget — куда вернуть фокус, когда попап слова закрыт изнутри
-// (Escape, «Закрыть»). Открытый с клавиатуры — на слово word: с него и
-// продолжают. Открытый мышью или касанием — не на слово: слово с фокусом
-// забрало бы пробел, Enter и 1–4 карточек и cloze (lib/practice-keys).
-// Тогда фокус — ближайшему контейнеру вокруг текста с tabIndex (сессия
-// практики), а без него null — фокус снимается, как до попапа.
+// (Escape, «Закрыть»): на слово word — с него и продолжают, следующий Tab
+// идёт от него, а не с начала страницы (WCAG 2.4.3). Исключение — попап,
+// открытый мышью или касанием в сессии практики: тогда фокус — сессии
+// (SESSION), иначе слово забрало бы пробел, Enter и 1–4 карточек и cloze
+// (lib/practice-keys). null — открытого слова нет.
 export function closeFocusTarget(word: FocusNode | null, keyboard: boolean): FocusNode | null {
   if (!word) return null;
   if (keyboard) return word;
-  return word.parentElement?.closest(FOCUS_SCOPE) ?? null;
+  return word.parentElement?.closest(SESSION) ?? word;
 }

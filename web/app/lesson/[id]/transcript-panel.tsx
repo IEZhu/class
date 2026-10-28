@@ -6,11 +6,15 @@ import type { ReactNode } from "react";
 import type { Transcript, Utterance } from "../../../lib/api";
 import { initials } from "../../../lib/initials";
 import { activeAt, clock } from "../../../lib/timeline";
+import { moreReplicas, replicas, replicasOf, withLocalChanges } from "../../../lib/transcript";
+import type { LocalChanges, SpeakerLink } from "../../../lib/transcript";
+import { langOf } from "../../../lib/word-nav";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
 import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import { cx } from "../../ui/cx";
 import { Icon } from "../../ui/icons";
+import { useViewerTimeZone } from "../../ui/local-time";
 import { Skeleton } from "../../ui/skeleton";
 import styles from "./media.module.css";
 import UtteranceText from "./utterance-text";
@@ -19,14 +23,13 @@ import UtteranceText from "./utterance-text";
 // сам teacher урока или участник снапшота — других api не примет.
 export type Person = { user_id: number; name: string };
 
-type Speaker = { speaker_label: string; user_id: number | null; speaker_name: string | null };
-
 // Транскрипт, который сервер получил вместе со страницей (page.tsx):
 // missing — у урока его нет (404). null вместо него — сервер не получил,
 // панель начинает с заглушки
-// partial — сервер прислал только начало транскрипта (page.tsx, SSR_UTTERANCES):
-// остальное панель дочитывает сама, и сбой этого запроса уже не скрыть
-export type InitialTranscript = { transcript: Transcript; partial?: boolean } | { missing: true };
+// total — сервер прислал только начало транскрипта (page.tsx, SSR_UTTERANCES),
+// а всего реплик total: остальное панель дочитывает сама, и сбой этого
+// запроса уже не скрыть
+export type InitialTranscript = { transcript: Transcript; total?: number } | { missing: true };
 
 const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = {
   queued: "Транскрипт ещё готовится.",
@@ -40,7 +43,11 @@ const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = 
 // звучащая реплика подсвечена и держится в видимой части списка.
 // Преподаватель урока правит текст реплик и сопоставляет метки с людьми.
 // Первый показ — из initial (сервер), затем панель перечитывает транскрипт
-// сама: он мог дозреть, а правки идут уже от свежей копии.
+// сама: он мог дозреть, а правки идут уже от свежей копии. Правки,
+// сохранённые до ответа перечитывания, ложатся поверх него
+// (withLocalChanges). Пока показано только начало (total), шапка — «40 из N
+// реплик», в конце списка — строка загрузки, а метки спикеров ждут весь
+// транскрипт: по началу их список неполон.
 export default function TranscriptPanel({
   lessonId,
   initial,
@@ -57,8 +64,12 @@ export default function TranscriptPanel({
   people: Person[];
 }) {
   const fromServer = initial !== null && "transcript" in initial;
-  const partial = fromServer && initial.partial === true;
+  const total = fromServer ? (initial.total ?? null) : null;
+  const partial = total !== null;
   const [transcript, setTranscript] = useState<Transcript | null>(fromServer ? initial.transcript : null);
+  // complete — показан весь транскрипт, а не только начало с сервера
+  const [complete, setComplete] = useState(!partial);
+  const [local] = useState<LocalChanges>(() => ({ utterances: new Map(), speakers: new Map() }));
   // missing — транскрипта у урока нет (ASR не настроен или записи не было)
   const [missing, setMissing] = useState(initial !== null && "missing" in initial);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +82,8 @@ export default function TranscriptPanel({
     requestJson<Transcript>(`/api/lessons/${lessonId}/transcript`, "GET")
       .then((t) => {
         if (cancelled) return;
-        setTranscript(t);
+        setTranscript(withLocalChanges(t, local));
+        setComplete(true);
         setMissing(false);
       })
       .catch((e: unknown) => {
@@ -88,7 +100,7 @@ export default function TranscriptPanel({
     return () => {
       cancelled = true;
     };
-  }, [lessonId, fromServer, partial]);
+  }, [lessonId, fromServer, partial, local]);
 
   const utterances = useMemo(() => transcript?.utterances ?? [], [transcript]);
   const timeline = useMemo(() => [...utterances].sort((a, b) => a.start_ms - b.start_ms), [utterances]);
@@ -109,13 +121,19 @@ export default function TranscriptPanel({
     }
   }, [active, editing]);
 
-  const saved = useCallback((u: Utterance) => {
-    setTranscript((t) => t && { ...t, utterances: t.utterances.map((it) => (it.idx === u.idx ? u : it)) });
-    setEditing(null);
-  }, []);
+  const saved = useCallback(
+    (u: Utterance) => {
+      local.utterances.set(u.idx, u);
+      setTranscript((t) => t && { ...t, utterances: t.utterances.map((it) => (it.idx === u.idx ? u : it)) });
+      setEditing(null);
+    },
+    [local],
+  );
 
-  const mapped = useCallback((s: Speaker) => {
-    setTranscript(
+  const mapped = useCallback(
+    (s: SpeakerLink) => {
+      local.speakers.set(s.speaker_label, s);
+      setTranscript(
       (t) =>
         t && {
           ...t,
@@ -123,17 +141,19 @@ export default function TranscriptPanel({
             it.speaker_label === s.speaker_label ? { ...it, user_id: s.user_id, speaker_name: s.speaker_name } : it,
           ),
         },
-    );
-  }, []);
+      );
+    },
+    [local],
+  );
 
   // Все состояния — в одной карточке «Транскрипт»: место рядом с плеером
   // не прыгает, пока транскрипт грузится (DESIGN §4.3)
-  function card(body: ReactNode, count?: number) {
+  function card(body: ReactNode, count?: string) {
     return (
       <section className={cx("card", styles.transcript)} aria-labelledby={titleId}>
         <div className="card-head">
           <h2 id={titleId}>Транскрипт</h2>
-          {count !== undefined && <span className={cx("muted small", styles.count)}>{replicas(count)}</span>}
+          {count !== undefined && <span className={cx("muted small", styles.count)}>{count}</span>}
         </div>
         {body}
       </section>
@@ -167,10 +187,17 @@ export default function TranscriptPanel({
   return card(
     <>
       {canEdit && (
-        <SpeakerMapping lessonId={lessonId} utterances={utterances} people={people} onSeek={onSeek} onMapped={mapped} />
+        <SpeakerMapping
+          lessonId={lessonId}
+          utterances={utterances}
+          complete={complete}
+          people={people}
+          onSeek={onSeek}
+          onMapped={mapped}
+        />
       )}
       {/* position: relative (в CSS) — offsetTop реплик отсчитывается от списка */}
-      <div ref={listRef} className={styles.list}>
+      <div ref={listRef} className={styles.list} aria-busy={!complete || undefined}>
         {groups.map((g) => (
           <div key={g[0].idx} className={styles.group}>
             <div className={styles.speaker}>
@@ -194,9 +221,15 @@ export default function TranscriptPanel({
             ))}
           </div>
         ))}
+        {total !== null && !complete && (
+          <p className={cx("muted small", styles.more)}>
+            <span className="spinner" aria-hidden="true" />
+            Загружаем {moreReplicas(total - utterances.length)}…
+          </p>
+        )}
       </div>
     </>,
-    utterances.length,
+    total !== null && !complete ? replicasOf(utterances.length, total) : replicas(utterances.length),
   );
 }
 
@@ -248,12 +281,7 @@ const UtteranceRow = memo(function UtteranceRow({
             {u.edited_at && (
               <>
                 {" "}
-                <span
-                  className={cx("pill pill--plain", styles.edited)}
-                  title={`исправлено ${new Date(u.edited_at).toLocaleString("ru-RU")}`}
-                >
-                  испр.
-                </span>
+                <EditedMark at={u.edited_at} />
               </>
             )}
           </div>
@@ -273,6 +301,23 @@ const UtteranceRow = memo(function UtteranceRow({
     </div>
   );
 });
+
+// «испр.» у исправленной реплики: когда — в подсказке, в поясе зрителя
+// (DESIGN §5.4). Первые реплики рендерит сервер — по UTC, с подписью; после
+// гидратации подсказка перерисовывается в поясе браузера
+function EditedMark({ at }: { at: string }) {
+  const zone = useViewerTimeZone();
+  const time = new Date(at).toLocaleString("ru-RU", { timeZone: zone });
+  return (
+    <span
+      className={cx("pill pill--plain", styles.edited)}
+      title={`исправлено ${time}${zone === "UTC" ? " UTC" : ""}`}
+      suppressHydrationWarning
+    >
+      испр.
+    </span>
+  );
+}
 
 // Правка текста реплики (S2-4): компенсация ошибок ASR. Пробелы и переводы
 // строк api схлопывает сам — реплика остаётся одной строкой речи.
@@ -317,18 +362,22 @@ function UtteranceEditor({
 
 // Маппинг спикеров (S2-5): метка ASR → человек урока. Возле метки — её первая
 // реплика: по голосу и словам легче узнать, кто это. Выбор сохраняется сразу.
+// Пока показано только начало транскрипта (complete=false), меток и их
+// счёта нет: в начале встречаются не все метки.
 function SpeakerMapping({
   lessonId,
   utterances,
+  complete,
   people,
   onSeek,
   onMapped,
 }: {
   lessonId: number;
   utterances: Utterance[];
+  complete: boolean;
   people: Person[];
   onSeek: (ms: number) => void;
-  onMapped: (s: Speaker) => void;
+  onMapped: (s: SpeakerLink) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -347,7 +396,7 @@ function SpeakerMapping({
     setError(null);
     try {
       onMapped(
-        await requestJson<Speaker>(`/api/lessons/${lessonId}/transcript/speakers/${encodeURIComponent(label)}`, "PUT", {
+        await requestJson<SpeakerLink>(`/api/lessons/${lessonId}/transcript/speakers/${encodeURIComponent(label)}`, "PUT", {
           user_id: userID,
         }),
       );
@@ -362,13 +411,16 @@ function SpeakerMapping({
     <details className={cx("disclosure", styles.speakers)}>
       <summary>
         Кто говорит
-        <span className="muted small">
-          · {firstByLabel.length}
-          {unmapped > 0 && ` · не указан: ${unmapped}`}
-        </span>
+        {complete && (
+          <span className="muted small">
+            · {firstByLabel.length}
+            {unmapped > 0 && ` · не указан: ${unmapped}`}
+          </span>
+        )}
       </summary>
       <div className={styles.speakerRows}>
-        {firstByLabel.map((u) => (
+        {!complete && <p className="muted small">Метки спикеров появятся, когда загрузится весь транскрипт.</p>}
+        {complete && firstByLabel.map((u) => (
           <div key={u.speaker_label} className={styles.speakerRow}>
             <label className="label" htmlFor={`${baseId}-${u.speaker_label}`}>
               Спикер {u.speaker_label}
@@ -398,7 +450,7 @@ function SpeakerMapping({
               title="Послушать первую реплику"
             >
               <Icon name="play" size="sm" />
-              <span>«{preview(u.text)}»</span>
+              <span lang={langOf(u.text)}>«{preview(u.text)}»</span>
             </button>
           </div>
         ))}
@@ -428,15 +480,6 @@ function speakerTitle(u: Utterance): string {
 // Аватар спикера: инициалы человека или метка ASR («C»)
 function speakerBadge(u: Utterance): string {
   return u.speaker_name ? initials(u.speaker_name, u.speaker_label) : u.speaker_label;
-}
-
-// «23 реплики»: число реплик в шапке транскрипта
-function replicas(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${n} реплика`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} реплики`;
-  return `${n} реплик`;
 }
 
 function preview(text: string): string {
