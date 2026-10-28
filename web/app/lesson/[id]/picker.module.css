@@ -35,8 +35,34 @@
   font-size: var(--fs-md);
 }
 
+/* Сетка колонок общая для всех групп (colgroup): чекбокс, слово, перевод,
+   ×N. Ширины — от колонок, а не от содержимого каждой таблицы */
+.table {
+  table-layout: fixed;
+}
+
+.colCheck {
+  width: 44px;
+}
+
+.colLemma {
+  width: 40%;
+}
+
+.colCount {
+  width: 56px;
+}
+
 .table td {
   vertical-align: middle;
+}
+
+.translation {
+  overflow-wrap: anywhere;
+}
+
+.countBelow {
+  display: none;
 }
 
 .table tr:last-child td {
@@ -51,7 +77,6 @@
 
 /* Ячейка-подпись чекбокса: щелчок по ней переключает отметку */
 .table .checkCell {
-  width: 44px;
   padding: 0;
 }
 
@@ -73,7 +98,6 @@
 }
 
 .table .countCell {
-  width: 1%;
   text-align: right;
   white-space: nowrap;
 }
@@ -149,8 +173,25 @@
     border-top: 1px solid var(--c-border);
   }
 
-  /* Таблица на телефоне — с узкими полями ячеек, чтобы влезть в 390px */
+  /* Таблица на телефоне — с узкими полями ячеек, чтобы влезть в 390px;
+     ×N — под словом, колонки для него нет */
   .table td:not(.checkCell) {
     padding-inline: var(--sp-2);
+  }
+
+  .colLemma {
+    width: 45%;
+  }
+
+  .colCount {
+    width: 0;
+  }
+
+  .table .countCell {
+    display: none;
+  }
+
+  .countBelow {
+    display: block;
   }
 }

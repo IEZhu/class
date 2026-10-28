@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { initials } from "../lib/initials";
 import { roleLabels } from "../lib/roles";
 import type { Role } from "../lib/roles";
 import { Icon } from "./ui/icons";
@@ -11,14 +12,14 @@ import type { IconName } from "./ui/icons";
 
 // Каркас авторизованных страниц (ADR-040, DESIGN §1): боковая панель от
 // 1024px, верхняя панель на планшете, нижняя навигация с листом «Ещё» на
-// телефоне. Все элементы fixed — каркас работает и там, где страница
-// рендерит его внутри своего <main>. Ссылки — те же, что были в шапке
+// телефоне; элементы каркаса — fixed. Ссылки — те же, что были в шапке
 // (user-bar.tsx), только сгруппированы; текущий раздел — aria-current.
 
 type NavItem = {
   href: string;
   label: string;
-  // short — подпись в нижней навигации телефона, где на пункт ~78px
+  // short — подпись там, где места мало: нижняя навигация телефона (~78px
+  // на пункт) и строка разделов планшета
   short?: string;
   icon: IconName;
   // match — адреса, на которых пункт текущий (по умолчанию href), с подпутями
@@ -64,16 +65,6 @@ function isCurrent(pathname: string, item: NavItem): boolean {
   return (item.match ?? [item.href]).some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
-function initials(name: string): string {
-  const letters = name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => Array.from(w)[0] ?? "")
-    .join("");
-  return letters.toUpperCase() || "?";
-}
-
 function Brand() {
   return (
     <Link href="/lessons" className="brand">
@@ -85,15 +76,50 @@ function Brand() {
   );
 }
 
-function NavLinks({ items, pathname }: { items: NavItem[]; pathname: string }) {
+// compact — строка разделов планшета: короткие подписи и без иконок
+function NavLinks({ items, pathname, compact = false }: { items: NavItem[]; pathname: string; compact?: boolean }) {
   return items.map((item) => (
     <li key={item.href}>
       <Link href={item.href} className="nav-item" aria-current={isCurrent(pathname, item) ? "page" : undefined}>
-        <Icon name={item.icon} />
-        <span>{item.label}</span>
+        {!compact && <Icon name={item.icon} />}
+        <span>{compact ? (item.short ?? item.label) : item.label}</span>
       </Link>
     </li>
   ));
+}
+
+// Строка разделов планшета прокручивается, если пункты не влезли (крупный
+// шрифт, интервалы текста): текущий пункт после перехода прокручен в вид,
+// а край, за которым есть ещё пункты, гаснет (data-fade в globals.css).
+function useScrollNav(pathname: string) {
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const nav = ref.current;
+    if (!nav) return;
+    function fade() {
+      if (!nav) return;
+      const start = nav.scrollLeft > 1;
+      const end = nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 1;
+      nav.dataset.fade = start && end ? "both" : start ? "start" : end ? "end" : "";
+    }
+    fade();
+    nav.addEventListener("scroll", fade, { passive: true });
+    window.addEventListener("resize", fade);
+    return () => {
+      nav.removeEventListener("scroll", fade);
+      window.removeEventListener("resize", fade);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Скрытая строка (не планшет) не прокручивается: clientWidth 0
+    const nav = ref.current;
+    if (!nav || nav.clientWidth === 0) return;
+    nav.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [pathname]);
+
+  return ref;
 }
 
 export default function AppShell({ name, role }: { name: string; role: Role }) {
@@ -102,6 +128,7 @@ export default function AppShell({ name, role }: { name: string; role: Role }) {
   const nav = navByRole[role];
   const avatar = initials(name);
   const practiceId = useId();
+  const topNavRef = useScrollNav(pathname);
 
   async function logout() {
     // редирект в finally: даже при сетевой ошибке уводим на /login
@@ -149,9 +176,9 @@ export default function AppShell({ name, role }: { name: string; role: Role }) {
 
       <header className="shell-topbar">
         <Brand />
-        <nav className="topbar-nav" aria-label="Разделы">
+        <nav ref={topNavRef} className="topbar-nav" aria-label="Разделы">
           <ul className="nav-list">
-            <NavLinks items={[...nav.main, ...nav.practice]} pathname={pathname} />
+            <NavLinks items={[...nav.main, ...nav.practice]} pathname={pathname} compact />
           </ul>
         </nav>
         <AccountMenu name={name} role={role} avatar={avatar} pathname={pathname} onLogout={logout} />
@@ -168,7 +195,9 @@ export default function AppShell({ name, role }: { name: string; role: Role }) {
 type MenuProps = { name: string; role: Role; avatar: string; pathname: string; onLogout: () => void };
 
 // Меню учётной записи в верхней панели (планшет и телефон): раскрывашка
-// с кнопкой-аватаром; Escape и клик мимо закрывают, фокус — на кнопку.
+// с кнопкой-аватаром. Escape закрывает и возвращает фокус на кнопку; клик
+// мимо и уход фокуса из меню (Tab дальше) просто закрывают — иначе
+// открытое меню заслоняло бы следующий фокус (WCAG 2.4.11).
 function AccountMenu({ name, role, avatar, pathname, onLogout }: MenuProps) {
   const [open, setOpen] = useState(false);
   const menuId = useId();
@@ -196,7 +225,15 @@ function AccountMenu({ name, role, avatar, pathname, onLogout }: MenuProps) {
   }, [open]);
 
   return (
-    <div className="account" ref={rootRef}>
+    <div
+      className="account"
+      ref={rootRef}
+      onBlur={(e) => {
+        // relatedTarget null — фокус ушёл из документа (другое окно): меню остаётся
+        const next = e.relatedTarget;
+        if (open && next instanceof Node && !e.currentTarget.contains(next)) setOpen(false);
+      }}
+    >
       <button
         ref={buttonRef}
         type="button"

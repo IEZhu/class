@@ -1,8 +1,10 @@
 /*
- * Lingua Class — общий стиль интерфейса (ADR-040). Единственный глобальный CSS:
- * подключён в app/layout.tsx. Спецификация — DESIGN.md редизайна (токены §2,
- * компоненты §3); значения цветов — из tools/tokens.py (контраст WCAG 2.2 AA
- * проверен для каждой пары текст/фон, менять — только вместе с пересчётом).
+ * Lingua Class — общий стиль интерфейса (ADR-040). Единственная таблица стилей
+ * проекта: подключена в app/layout.tsx. Спецификация —
+ * docs/architecture/08-ui.md (токены §2, компоненты §3; в комментариях кода —
+ * «DESIGN §N»); значения цветов — из docs/architecture/ui/tokens.py (контраст
+ * WCAG 2.2 AA проверен для каждой пары текст/фон, менять — только вместе с
+ * пересчётом).
  *
  * Как пользоваться (группам страниц этот файл не править — своё в CSS Module):
  * 1. Токены: --c-* цвета (светлая и тёмная темы, тёмная — по
@@ -14,8 +16,7 @@
  *    --shell-bottom (высота нижней навигации — для липких кнопок снизу).
  * 2. Каркас (app/app-shell.tsx) рисует <UserBar name role />: боковая панель
  *    от 1024px, верхняя панель на планшете, нижняя навигация и лист «Ещё» на
- *    телефоне. Элементы каркаса fixed, поэтому он работает и внутри <main>
- *    старых страниц. Целевая разметка страницы:
+ *    телефоне. Разметка страницы:
  *      <><UserBar name={me.name} role={me.role} />
  *        <main className="page page--narrow">…</main></>
  *    (.page — колонка 960px, --narrow 720, --wide 1240). Ссылка «К
@@ -23,13 +24,13 @@
  *    Страницы без сессии: <main className="auth-page"><div className="card
  *    card-pad">…</div></main>, логотип над карточкой рисует layout.
  * 3. Компоненты (DESIGN §3): .btn (--primary/--secondary/--ghost/--danger/
- *    --danger-ghost, --sm/--lg/--block/--block-sm), .icon-btn (--sm/--danger),
+ *    --danger-ghost, --sm/--lg/--block/--block-sm), .icon-btn (--sm),
  *    .field/.label/.hint/.field-error/.input/.select/.textarea (--lg), .check,
  *    .fieldset, .file-field/.file-name, .card/.card-pad/.card-head/.card-foot,
  *    .table (--dense, --stack — карточками на телефоне)/.table-wrap,
- *    .list/.list-row, .tabs, .segmented, .w/.w1–.w4/.legend, .pill (--live/
+ *    .list, .tabs, .segmented, .w/.w1–.w4/.legend, .pill (--live/
  *    --scheduled/--processing/--done/--ended/--plain/--accent/--success/
- *    --danger), .nav-count, .chip/.chip-row, .alert (--info/--success/
+ *    --danger), .chip/.chip-row, .alert (--info/--success/
  *    --warning/--danger/--neutral), .form-status, .empty, .spinner,
  *    .skeleton, .progress (ширина — style={{"--progress": "40%"}}), .popover
  *    (место — --pop-top/--pop-left, на телефоне — лист)/.backdrop
@@ -40,21 +41,12 @@
  *    который не красится под тему, как доска Excalidraw).
  *    React-обёртки с разметкой и a11y — в app/ui/ (button, field, alert, empty,
  *    page-header, icons, kbd, pill, skeleton, local-time).
- * 4. Раздел 10 «Переходный мост» в конце — для старых inline-стилей: держит
- *    тёмную тему, контраст и отсутствие горизонтальной прокрутки, пока
- *    страницы не переведены на классы. Удаляется, когда в web/app не
- *    останется style={{…}} с цветами, рамками и min-width.
  */
 
-/* ---------- 1. Цвета: светлая тема (mockup/tokens.css, tools/tokens.py) ---------- */
+/* ---------- 1. Цвета: светлая тема (docs/architecture/ui/tokens.py css) ---------- */
 :root,
 .light-island,
-.excalidraw,
-/* переходный мост (раздел 10): старые inline-фоны светлых тонов */
-[style*="background:#f"],
-[style*="background:#e"],
-[style*="background:#d"],
-[style*="background: rgb(2"] {
+.excalidraw {
   color-scheme: light;
   --c-bg: #f5f6fa;
   --c-surface: #ffffff;
@@ -203,15 +195,11 @@
 
 /* Светлый остров пересчитывает цвет текста от своих токенов */
 .light-island,
-.excalidraw,
-[style*="background:#f"],
-[style*="background:#e"],
-[style*="background:#d"],
-[style*="background: rgb(2"] {
+.excalidraw {
   color: var(--c-text);
 }
 
-/* ---------- 2. Остальные токены (mockup/app.css :root) ---------- */
+/* ---------- 2. Остальные токены (08-ui.md §2.3–§2.5) ---------- */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -267,32 +255,6 @@ a:hover { color: var(--c-primary-hover); }
   border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
   background: var(--c-surface); color: var(--c-text); font: 600 var(--fs-sm)/1 var(--font-sans); cursor: pointer;
 }
-:where(kbd) {
-  display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px;
-  border: 1px solid var(--c-kbd-border); border-bottom-width: 2px; border-radius: var(--r-sm);
-  background: var(--c-kbd-bg); color: var(--c-kbd-text); font: 600 var(--fs-xs)/1 var(--font-mono);
-}
-
-/* Контролы без класса (старые страницы) выглядят как .btn--secondary и
-   .input; сторонние виджеты (доска, плеер, LiveKit) не задеваются */
-:where(button:not([class]):not(.excalidraw *, .plyr *, [data-lk-theme] *)) {
-  padding: 7px var(--sp-4); border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
-  background: var(--c-surface); color: var(--c-text); font-size: var(--fs-sm); font-weight: 600; line-height: 1.25;
-}
-:where(button:not([class]):not(:disabled):not(.excalidraw *, .plyr *, [data-lk-theme] *)):hover { background: var(--c-surface-2); }
-:where(button:not([class]):disabled:not(.excalidraw *, .plyr *, [data-lk-theme] *)) {
-  background: var(--c-surface-2); color: var(--c-text-disabled); border-color: var(--c-border); cursor: not-allowed;
-}
-:where(
-  input:not([class]):not([type="checkbox"], [type="radio"], [type="file"], [type="range"], [type="color"], [type="hidden"], [type="submit"], [type="button"], [type="reset"], [type="image"]),
-  select:not([class]),
-  textarea:not([class])
-):where(:not(.excalidraw *, .plyr *, [data-lk-theme] *)) {
-  min-height: var(--h-md); max-width: 100%; padding: 0 var(--sp-3);
-  border: 1px solid var(--c-border-input); border-radius: var(--r-md);
-  background-color: var(--c-surface); color: var(--c-text);
-}
-:where(textarea:not([class]):not(.excalidraw *, .plyr *, [data-lk-theme] *)) { padding: var(--sp-2) var(--sp-3); }
 
 /* ---------- 4. Помощники ---------- */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -304,7 +266,9 @@ a:hover { color: var(--c-primary-hover); }
 .stack--lg { gap: var(--sp-8); }
 .row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }
-.section { display: grid; gap: var(--sp-3); scroll-margin-top: calc(var(--shell-top) + var(--sp-6)); }
+/* Колонка minmax(0, 1fr): широкая таблица прокручивается в своей обёртке,
+   а не раздвигает секцию и страницу */
+.section { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); scroll-margin-top: calc(var(--shell-top) + var(--sp-6)); }
 .section-title { display: flex; align-items: center; gap: var(--sp-2); }
 .section-title h2 { font-size: var(--fs-xl); }
 /* Английский текст для чтения (материалы, тексты) */
@@ -322,7 +286,6 @@ a:hover { color: var(--c-primary-hover); }
 svg.i { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 svg.i--sm { width: 16px; height: 16px; }
 svg.i--lg { width: 24px; height: 24px; }
-svg.i--fill { fill: currentColor; stroke: none; }
 
 /* ---------- 5. Колонки страниц ---------- */
 .page { width: 100%; margin: 0 auto; padding: var(--sp-8) var(--sp-8) var(--sp-12); max-width: calc(var(--w-content) + 2 * var(--sp-8)); }
@@ -359,7 +322,6 @@ body:has(.app-shell) .auth-top { display: none; }
 .nav-item:hover { background: var(--c-surface-2); color: var(--c-text); }
 .nav-item:focus-visible { outline-offset: -2px; }
 .nav-item[aria-current="page"] { background: var(--c-nav-active); color: var(--c-nav-active-text); font-weight: 600; }
-.nav-count { margin-left: auto; font-size: var(--fs-xs); font-weight: 600; background: var(--c-primary-soft); color: var(--c-primary-strong); border-radius: var(--r-full); padding: 1px 8px; }
 
 .shell-sidebar, .shell-topbar, .shell-bottom, .topbar-nav { display: none; }
 .shell-sidebar {
@@ -371,7 +333,11 @@ body:has(.app-shell) .auth-top { display: none; }
 .sidebar-user { margin-top: auto; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-1) 0; border-top: 1px solid var(--c-border); }
 .user-meta { display: grid; min-width: 0; flex: 1; line-height: 1.25; color: var(--c-text); text-decoration: none; border-radius: var(--r-sm); padding: var(--sp-1); }
 .user-meta:hover { color: var(--c-text); background: var(--c-surface-2); }
-.user-meta b { font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Имя — до двух строк целиком, а не обрезанное многоточием */
+.user-meta b {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  font-weight: 600; font-size: var(--fs-sm); overflow-wrap: anywhere;
+}
 .user-meta span { font-size: var(--fs-xs); color: var(--c-text-muted); }
 .user-meta[aria-current="page"] b { color: var(--c-nav-active-text); }
 
@@ -383,8 +349,11 @@ body:has(.app-shell) .auth-top { display: none; }
 .shell-topbar .brand { font-size: var(--fs-md); flex: none; }
 .topbar-nav { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .topbar-nav .nav-list { display: flex; gap: var(--sp-1); }
-.topbar-nav .nav-item { min-height: var(--h-md); padding: 0 var(--sp-3); }
-.topbar-nav .nav-item .i { display: none; }
+.topbar-nav .nav-item { min-height: var(--h-md); padding: 0 10px; }
+/* Край строки, за которым есть ещё пункты, гаснет (data-fade — app-shell) */
+.topbar-nav[data-fade="start"] { mask-image: linear-gradient(to right, transparent, #000 var(--sp-8)); }
+.topbar-nav[data-fade="end"] { mask-image: linear-gradient(to left, transparent, #000 var(--sp-8)); }
+.topbar-nav[data-fade="both"] { mask-image: linear-gradient(to right, transparent, #000 var(--sp-8), #000 calc(100% - var(--sp-8)), transparent); }
 
 .account { position: relative; margin-left: auto; flex: none; }
 .account-btn { display: grid; place-items: center; width: var(--h-md); height: var(--h-md); padding: 0; border: 0; border-radius: var(--r-full); background: none; color: var(--c-text); }
@@ -410,17 +379,22 @@ body:has(.app-shell) .auth-top { display: none; }
 .shell-bottom {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-nav);
   grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-  height: calc(var(--bottomnav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+  min-height: calc(var(--bottomnav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
   background: var(--c-sidebar); border-top: 1px solid var(--c-border);
 }
 .bottom-item {
-  display: grid; justify-items: center; align-content: center; gap: 3px; min-width: 0; padding: 0 2px;
+  display: grid; justify-items: center; align-content: center; gap: 3px; min-width: 0; padding: var(--sp-1) 1px;
   border: 0; background: none; color: var(--c-text-muted); text-decoration: none; font: 500 var(--fs-xs)/1.1 var(--font-sans);
 }
-.bottom-item > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Подпись не обрезается: при крупном шрифте и интервалах (WCAG 1.4.12)
+   переносится, панель растёт по высоте */
+.bottom-item > span:last-child { max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .bottom-item:hover { color: var(--c-text); }
 .bottom-item:focus-visible { outline-offset: -4px; border-radius: var(--r-md); }
-.bottom-item[aria-current] { color: var(--c-primary); font-weight: 700; }
+.bottom-item[aria-current] { color: var(--c-primary); font-weight: 600; }
+/* На самых узких телефонах полужирное слово шире колонки (~62px) и
+   разорвалось бы; текущий пункт и так отмечен цветом и подложкой иконки */
+@media (max-width: 359px) { .bottom-item[aria-current] { font-weight: 500; } }
 .nav-ic { display: grid; place-items: center; width: 56px; max-width: 100%; height: 30px; border-radius: var(--r-full); }
 .nav-ic svg.i { width: 24px; height: 24px; }
 .bottom-item[aria-current] .nav-ic { background: var(--c-primary-soft); }
@@ -482,7 +456,6 @@ body:has(.app-shell) .auth-top { display: none; }
 .icon-btn:hover { background: var(--c-surface-2); color: var(--c-text); }
 .icon-btn:disabled { color: var(--c-text-disabled); background: transparent; cursor: not-allowed; }
 .icon-btn--sm { width: var(--h-sm); height: var(--h-sm); }
-.icon-btn--danger:hover { background: var(--c-danger-soft); color: var(--c-danger-text); }
 
 /* 3.3 Поле: подпись, контрол, подсказка, ошибка */
 .field { display: grid; gap: 6px; align-content: start; min-width: 0; }
@@ -531,7 +504,7 @@ a.card { display: block; color: var(--c-text); text-decoration: none; transition
 a.card:hover { border-color: var(--c-border-strong); box-shadow: var(--shadow-md); color: var(--c-text); }
 a.card:focus-visible { border-radius: var(--r-lg); }
 
-/* 3.7 Таблица и строки списка */
+/* 3.7 Таблица и список */
 .table-wrap { max-width: 100%; overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .table th, .table td { padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--c-border); text-align: left; vertical-align: top; }
@@ -539,10 +512,6 @@ a.card:focus-visible { border-radius: var(--r-lg); }
 .table tbody tr:hover { background: var(--c-surface-2); }
 .table--dense th, .table--dense td { padding: var(--sp-2) var(--sp-3); }
 .list { margin: 0; padding: 0; list-style: none; }
-.list-row { display: flex; align-items: center; gap: var(--sp-3); min-height: 48px; padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--c-border); }
-.list-row:first-child { border-top: 0; }
-.list-row:hover { background: var(--c-surface-2); }
-.list-row.is-selected { background: var(--c-primary-soft); }
 .is-archived { color: var(--c-text-muted); }
 @media (max-width: 767px) {
   /* Таблица --stack на телефоне — карточки строк: подпись колонки из data-label */
@@ -557,11 +526,11 @@ a.card:focus-visible { border-radius: var(--r-lg); }
 .tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--c-border); overflow-x: auto; scrollbar-width: none; }
 .tabs [role="tab"] {
   flex: none; min-height: var(--h-md); padding: 0 var(--sp-4); margin-bottom: -1px;
-  border: 0; border-bottom: 2px solid transparent; background: none; color: var(--c-text-muted);
+  border: 0; border-bottom: 2px solid transparent; border-radius: var(--r-sm) var(--r-sm) 0 0; background: none; color: var(--c-text-muted);
   font: 600 var(--fs-sm)/1 var(--font-sans); cursor: pointer;
 }
 .tabs [role="tab"]:hover { color: var(--c-text); }
-.tabs [role="tab"]:focus-visible { outline-offset: -2px; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.tabs [role="tab"]:focus-visible { outline-offset: -2px; }
 .tabs [role="tab"][aria-selected="true"] { color: var(--c-primary); border-bottom-color: var(--c-primary); }
 
 /* 3.9 Сегменты: кнопки с aria-pressed */
@@ -578,7 +547,7 @@ a.card:focus-visible { border-radius: var(--r-lg); }
 .w2 { background: var(--c-hl-2); color: var(--c-hl-text); text-decoration: underline dashed 2px; text-underline-offset: 3px; }
 .w3 { background: var(--c-hl-3); color: var(--c-hl-text); text-decoration: underline dotted 2px; text-underline-offset: 3px; }
 .w4 { background: var(--c-hl-4); color: var(--c-hl-text); text-decoration: underline dotted 1px; text-underline-offset: 3px; }
-.w.is-open, .w:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 1px; }
+.w:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 1px; }
 .legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); color: var(--c-text-muted); }
 .legend .w { padding: 0 4px; cursor: default; }
 
@@ -731,7 +700,6 @@ a.card:focus-visible { border-radius: var(--r-lg); }
   .page-header .titles { flex-basis: 100%; }
   .card-pad { padding: var(--sp-4); }
   .card-head, .card-foot { padding: var(--sp-3) var(--sp-4); }
-  .list-row { padding: var(--sp-3) var(--sp-4); }
   .btn--block-sm { width: 100%; min-height: var(--h-touch); }
   .auth-top { padding-top: var(--sp-8); }
   .popover {
@@ -750,42 +718,4 @@ a.card:focus-visible { border-radius: var(--r-lg); }
   *, *::before, *::after { transition: none !important; }
   .pill--live::before, .skeleton { animation: none; }
   .spinner { animation-duration: 2.4s; }
-}
-
-/* ---------- 10. Переходный мост для старых inline-стилей ----------
-   Страницы до перевода на классы задают цвета, рамки и ширины атрибутом
-   style. Inline-стиль перебивается только !important, поэтому правила
-   ниже узкие: по точной подстроке style в двух записях — как её печатает
-   SSR React («color:#666») и как браузер сериализует style, заданный из
-   JS («color: rgb(102, 102, 102)»). Светлые фоны (R ≥ 200) становятся
-   светлыми островами — в списке селекторов раздела 1. Удалить раздел и
-   эти селекторы, когда в web/app не останется таких style. */
-
-/* Вертикальный ритм старых страниц (у новых <main> без style — отступы классами) */
-:where(main[style]) :where(h1, h2, h3, h4, p):not([class]) { margin-block: revert; }
-
-/* Серый и цветной текст — на токены с проверенным контрастом */
-[style*="color:#666"], [style*="color: rgb(102, 102, 102)"],
-[style*="color:#888"], [style*="color: rgb(136, 136, 136)"],
-[style*="color:#999"], [style*="color: rgb(153, 153, 153)"] { color: var(--c-text-muted) !important; }
-[style*="color:crimson"], [style*="color: crimson"],
-[style*="color:#c92a2a"], [style*="color: rgb(201, 42, 42)"] { color: var(--c-danger-text) !important; }
-[style*="color:#a60"], [style*="color: rgb(170, 102, 0)"],
-[style*="color:#b07d00"], [style*="color: rgb(176, 125, 0)"] { color: var(--c-warning-text) !important; }
-[style*="color:#2a7"], [style*="color: rgb(34, 170, 119)"],
-[style*="color:#2f9e44"], [style*="color: rgb(47, 158, 68)"] { color: var(--c-success-text) !important; }
-[style*="color:#e03131"], [style*="color: rgb(224, 49, 49)"] { color: var(--c-danger-text) !important; }
-/* Выбранная вкладка живого урока: белый на #2a7 — 2.96:1 */
-[style*="background:#2a7"], [style*="background: rgb(34, 170, 119)"] { background: var(--c-live-soft) !important; color: var(--c-success-text) !important; }
-
-/* Рамки #ddd/#eee/#ccc — на токены (явный border-color состояния не трогаем) */
-:is([style*="solid #ddd"], [style*="solid rgb(221, 221, 221)"], [style*="solid #eee"], [style*="solid rgb(238, 238, 238)"]):not([style*="border-color"]) { border-color: var(--c-border) !important; }
-:is([style*="solid #ccc"], [style*="solid rgb(204, 204, 204)"]):not([style*="border-color"]) { border-color: var(--c-border-strong) !important; }
-
-/* Телефон: без горизонтальной прокрутки страницы (WCAG 1.4.10) — широкая
-   таблица прокручивается сама, жёсткие min-width полей снимаются */
-@media (max-width: 767px) {
-  :where(main[style]) table { display: block; max-width: 100%; overflow-x: auto; }
-  [style*="min-width:16rem"], [style*="min-width: 16rem"],
-  [style*="min-width:22rem"], [style*="min-width: 22rem"] { min-width: 0 !important; max-width: 100%; }
 }

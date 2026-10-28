@@ -3,9 +3,9 @@ import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../lib/api";
 import type { GoogleCalendarStatus, User } from "../../lib/api";
+import { initials } from "../../lib/initials";
 import { roleLabels } from "../../lib/roles";
 import { cx } from "../ui/cx";
-import { Icon } from "../ui/icons";
 import { PageHeader } from "../ui/page-header";
 import { Pill } from "../ui/pill";
 import UserBar from "../user-bar";
@@ -40,7 +40,7 @@ export default async function AccountPage({
           {/* email и роль себе не меняют: email — логин, роль выдаёт админ (ADR-007) */}
           <div className={styles.profile}>
             <span className={cx("avatar", styles.avatar)} aria-hidden="true">
-              <Icon name="user" />
+              {initials(me.name)}
             </span>
             <div className={styles.who}>
               <p className={styles.nameRow}>

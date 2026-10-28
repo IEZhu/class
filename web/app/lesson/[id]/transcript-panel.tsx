@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "
 import type { ReactNode } from "react";
 
 import type { Transcript, Utterance } from "../../../lib/api";
+import { initials } from "../../../lib/initials";
 import { activeAt, clock } from "../../../lib/timeline";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
 import { Alert } from "../../ui/alert";
@@ -20,6 +21,11 @@ export type Person = { user_id: number; name: string };
 
 type Speaker = { speaker_label: string; user_id: number | null; speaker_name: string | null };
 
+// Транскрипт, который сервер получил вместе со страницей (page.tsx):
+// missing — у урока его нет (404). null вместо него — сервер не получил,
+// панель начинает с заглушки
+export type InitialTranscript = { transcript: Transcript } | { missing: true };
+
 const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = {
   queued: "Транскрипт ещё готовится.",
   submitted: "Транскрипт ещё готовится.",
@@ -31,22 +37,27 @@ const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = 
 // одного спикера — один блок, клик по реплике мотает запись к её началу,
 // звучащая реплика подсвечена и держится в видимой части списка.
 // Преподаватель урока правит текст реплик и сопоставляет метки с людьми.
+// Первый показ — из initial (сервер), затем панель перечитывает транскрипт
+// сама: он мог дозреть, а правки идут уже от свежей копии.
 export default function TranscriptPanel({
   lessonId,
+  initial,
   timeMs,
   onSeek,
   canEdit,
   people,
 }: {
   lessonId: number;
+  initial: InitialTranscript | null;
   timeMs: number;
   onSeek: (ms: number) => void;
   canEdit: boolean;
   people: Person[];
 }) {
-  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const fromServer = initial !== null && "transcript" in initial;
+  const [transcript, setTranscript] = useState<Transcript | null>(fromServer ? initial.transcript : null);
   // missing — транскрипта у урока нет (ASR не настроен или записи не было)
-  const [missing, setMissing] = useState(false);
+  const [missing, setMissing] = useState(initial !== null && "missing" in initial);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -56,17 +67,24 @@ export default function TranscriptPanel({
     let cancelled = false;
     requestJson<Transcript>(`/api/lessons/${lessonId}/transcript`, "GET")
       .then((t) => {
-        if (!cancelled) setTranscript(t);
+        if (cancelled) return;
+        setTranscript(t);
+        setMissing(false);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        if (e instanceof RequestError && e.status === 404) setMissing(true);
-        else setError(e instanceof Error ? e.message : "не удалось получить транскрипт");
+        if (e instanceof RequestError && e.status === 404) {
+          setTranscript(null);
+          setMissing(true);
+          return;
+        }
+        // Сбой перечитывания не прячет транскрипт, показанный с сервера
+        if (!fromServer) setError(e instanceof Error ? e.message : "не удалось получить транскрипт");
       });
     return () => {
       cancelled = true;
     };
-  }, [lessonId]);
+  }, [lessonId, fromServer]);
 
   const utterances = useMemo(() => transcript?.utterances ?? [], [transcript]);
   const timeline = useMemo(() => [...utterances].sort((a, b) => a.start_ms - b.start_ms), [utterances]);
@@ -316,9 +334,9 @@ function SpeakerMapping({
     for (const u of utterances) if (!first.has(u.speaker_label)) first.set(u.speaker_label, u);
     return [...first.values()];
   }, [utterances]);
-  // Раскрыто, пока есть несопоставленные метки; дальше открывает и
-  // закрывает сам преподаватель (open задаётся только при монтировании)
-  const [openAtStart] = useState(() => firstByLabel.some((u) => u.user_id === null));
+  // Свёрнуто: раскрытое съело бы место реплик на первом экране. Сколько
+  // меток ещё не сопоставлено — видно в заголовке
+  const unmapped = firstByLabel.filter((u) => u.user_id === null).length;
 
   async function map(label: string, userID: number | null) {
     setBusy(label);
@@ -337,10 +355,13 @@ function SpeakerMapping({
   }
 
   return (
-    <details className={cx("disclosure", styles.speakers)} open={openAtStart}>
+    <details className={cx("disclosure", styles.speakers)}>
       <summary>
         Кто говорит
-        <span className="muted small">· {firstByLabel.length}</span>
+        <span className="muted small">
+          · {firstByLabel.length}
+          {unmapped > 0 && ` · не указан: ${unmapped}`}
+        </span>
       </summary>
       <div className={styles.speakerRows}>
         {firstByLabel.map((u) => (
@@ -400,17 +421,9 @@ function speakerTitle(u: Utterance): string {
   return u.speaker_name ?? `Спикер ${u.speaker_label}`;
 }
 
-// Аватар спикера: инициалы человека или метка ASR («C»). Инициалы — то же
-// правило, что у аватара каркаса (app-shell.tsx)
+// Аватар спикера: инициалы человека или метка ASR («C»)
 function speakerBadge(u: Utterance): string {
-  if (!u.speaker_name) return u.speaker_label;
-  const letters = u.speaker_name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => Array.from(w)[0] ?? "")
-    .join("");
-  return letters.toUpperCase() || u.speaker_label;
+  return u.speaker_name ? initials(u.speaker_name, u.speaker_label) : u.speaker_label;
 }
 
 // «23 реплики»: число реплик в шапке транскрипта

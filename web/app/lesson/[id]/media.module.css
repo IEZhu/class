@@ -53,6 +53,9 @@
 .video {
   display: block;
   width: 100%;
+  /* Место 16:9 и до метаданных записи — как у заглушки: страница не прыгает,
+     когда браузер узнаёт размер кадра (CLS). Запись Egress — 16:9 */
+  aspect-ratio: 16 / 9;
 }
 
 .playerLoading {
@@ -323,6 +326,12 @@
 }
 
 @media (max-width: 767px) {
+  /* Plyr на телефоне: без ползунка громкости (кнопка «Без звука» остаётся) —
+     ширина уходит полосе перемотки */
+  .player :global(.plyr__volume input[type="range"]) {
+    display: none;
+  }
+
   .speakers {
     padding-inline: var(--sp-4);
   }
