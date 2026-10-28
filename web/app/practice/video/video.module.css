@@ -46,4 +46,6 @@
 @media (max-width: 767px) {
   /* Поиск — основное действие страницы на телефоне: поле и кнопка 48px */
   .searchRow > :global(.input), .searchRow > :global(.btn) { min-height: var(--h-lg); }
+  /* «Подобрать» не помещается рядом с полем — под ним во всю ширину */
+  .searchRow > :global(.btn) { flex: 1 1 auto; }
 }
