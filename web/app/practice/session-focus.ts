@@ -6,9 +6,12 @@ import type { RefObject } from "react";
 const OWN_CLICK_TARGETS = "a, button, input, select, textarea, label, summary, [contenteditable], [tabindex], [role=dialog]";
 
 // focusLost — фокус ни на чём: на <body> — нажатая кнопка исчезла или на
-// время запроса стала disabled, щелчок пришёлся на пустое место
+// время запроса стала disabled, щелчок пришёлся на пустое место. Элемент,
+// который только что стал disabled, тоже не в счёт: браузер снимает с него
+// фокус уже после эффектов (поле ответа cloze после результата)
 export function focusLost(): boolean {
-  return document.activeElement === null || document.activeElement === document.body;
+  const a = document.activeElement;
+  return a === null || a === document.body || (a instanceof HTMLElement && a.matches(":disabled"));
 }
 
 // useSessionFocus — фокус в сессии практики: горячие клавиши карточек и

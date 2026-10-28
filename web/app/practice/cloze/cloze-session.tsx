@@ -80,6 +80,10 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   // modeSwitched — человек сам нажал «Варианты» / «Ввод слова»: поле ввода
   // получает фокус, где бы он ни был
   const modeSwitched = useRef(false);
+  // focusFree — фокус можно взять: он потерян или на самой сессии
+  function focusFree(): boolean {
+    return focusLost() || document.activeElement === sessionRef.current;
+  }
   const item: ClozeItem | undefined = page.items[index];
   const total = page.items.length;
   // null — варианты пункта ещё не пришли (pending)
@@ -163,9 +167,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
         // Введённое слово — в поле, туда и фокус: повтор — тот же Enter. Только
         // если фокус потерян (нажатая мышью «Проверить» на время запроса
         // disabled) или в сессии; куда его увёл сам человек — там и остаётся
-        if (how === "typing" && (focusLost() || document.activeElement === sessionRef.current)) {
-          typingRef.current?.focus({ preventScroll: true });
-        }
+        if (how === "typing" && focusFree()) typingRef.current?.focus({ preventScroll: true });
       }
     } finally {
       setBusy(false);
@@ -196,13 +198,14 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   useSessionFocus(sessionRef, `${index}:${result !== null}:${busy}`);
 
   // Поле ввода нового пункта и «Дальше» после ответа берут фокус, только
-  // если он потерян или на самой сессии (или человек переключил способ
-  // ответа): куда его увёл сам человек — ссылка меню, слово, — там и остаётся
+  // если он свободен (или человек переключил способ ответа до ответа): куда
+  // его увёл сам человек — ссылка меню, слово, — там и остаётся. Без
+  // preventScroll: на телефоне «Дальше» иначе остаётся под нижней панелью
   useEffect(() => {
-    const own = modeSwitched.current;
+    const own = modeSwitched.current && !result;
     modeSwitched.current = false;
     const target = result ? nextRef.current : mode === "typing" ? typingRef.current : null;
-    if (target && (own || focusLost() || document.activeElement === sessionRef.current)) target.focus({ preventScroll: true });
+    if (target && (own || focusFree())) target.focus();
   }, [index, result, mode]);
 
   function submitTyped(e: FormEvent) {
@@ -257,6 +260,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
             aria-pressed={mode === m.mode}
             disabled={busy}
             onClick={() => {
+              if (m.mode === mode) return;
               modeSwitched.current = true;
               setMode(m.mode);
             }}
