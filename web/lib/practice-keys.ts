@@ -4,10 +4,11 @@
 // lib/practice-keys.test.ts (npm test).
 
 // Сессия практики — контейнер <section {...SESSION_PROPS} tabIndex={-1}>:
-// фокус стоит в нём с начала сессии и возвращается в него после
-// переворота, оценки и «Дальше»
+// фокус стоит в нём с начала сессии и возвращается в него, когда потерян
+// (app/practice/session-focus.ts). SESSION — его селектор: по нему же
+// попап слова отдаёт фокус сессии (lib/word-nav closeFocusTarget)
 export const SESSION_PROPS = { "data-practice-session": "" } as const;
-const SESSION = "[data-practice-session]";
+export const SESSION = "[data-practice-session]";
 // Поля ввода и диалоги (попап слова): все их клавиши — их собственные
 const TYPING_TARGETS = "input, textarea, select, [contenteditable], [role=dialog]";
 // Слово <ClickableText>: data-i у него всегда, с клавиатурным доступом

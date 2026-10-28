@@ -30,8 +30,8 @@ import { Skeleton } from "./ui/skeleton";
 // Клавиатура (DESIGN §5.2): слова — role="button", у текста одна
 // остановка Tab (слово с tabIndex 0, остальные -1), ←/→ и Home/End
 // переходят между словами, Enter и пробел открывают попап; Escape
-// закрывает его, и открытый с клавиатуры попап возвращает фокус на
-// слово (открытый мышью — нет: lib/word-nav closeFocusTarget). Признак
+// закрывает его и возвращает фокус на слово, а открытый мышью в сессии
+// практики — на сессию (lib/word-nav closeFocusTarget). Признак
 // слова в DOM — атрибут data-i (номер токена): по нему обработчики
 // клавиш карточек и cloze узнают нажатие на слове. Корень — lang="en"
 // (DESIGN §5.1).
@@ -138,10 +138,10 @@ export default function ClickableText({
   const root = useRef<HTMLSpanElement>(null);
   const close = useRef(() => setPopup(null)).current;
   // Закрытие из попапа (inside — Escape и «Закрыть»): фокус — по
-  // closeFocusTarget (lib/word-nav): открытый с клавиатуры попап
-  // возвращает его на слово, открытый мышью или касанием — на сессию
-  // практики вокруг текста или никуда, как до попапа. Клик мимо попапа
-  // фокус не трогает: он уходит туда, куда кликнули
+  // closeFocusTarget (lib/word-nav): на слово, а у попапа, открытого
+  // мышью или касанием в сессии практики, — на сессию. Клик мимо попапа
+  // фокус не трогает: он уходит туда, куда кликнули (на странице практики
+  // щелчок по пустому месту отдаёт его сессии — practice/session-focus.ts)
   const dismiss = useRef((inside: boolean, keyboard: boolean) => {
     if (!inside) {
       setPopup(null);

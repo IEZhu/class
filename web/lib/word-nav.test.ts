@@ -78,12 +78,14 @@ function node(own: string[], parentElement: FocusNode | null = null): FocusNode 
   return self;
 }
 
-test("попап закрыт изнутри: с клавиатуры фокус — слову, мышью — сессии вокруг текста или никому", () => {
-  const session = node(["[tabindex]"], node(["main"]));
+test("попап закрыт изнутри: на слово, а открытый мышью в сессии практики — на сессию", () => {
+  const session = node(["[tabindex]", "[data-practice-session]"], node(["main"]));
   const word = node(["[tabindex]", "[data-i]"], node(["span"], node(["article"], session)));
   assert.equal(closeFocusTarget(word, true), word, "открыт с клавиатуры");
   assert.equal(closeFocusTarget(word, false), session, "открыт мышью: не слово, а сессия практики");
   const lessonWord = node(["[tabindex]", "[data-i]"], node(["span"], node(["main"])));
-  assert.equal(closeFocusTarget(lessonWord, false), null, "вокруг текста фокусируемого контейнера нет — фокус снимается");
+  assert.equal(closeFocusTarget(lessonWord, false), lessonWord, "вне практики открытый мышью — тоже на слово");
+  const scoped = node(["[tabindex]", "[data-i]"], node(["span"], node(["[tabindex]"], node(["main"]))));
+  assert.equal(closeFocusTarget(scoped, false), scoped, "контейнер с tabindex — не сессия: фокус слову");
   assert.equal(closeFocusTarget(null, true), null, "открытого слова нет");
 });
