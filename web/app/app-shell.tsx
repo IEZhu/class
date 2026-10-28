@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { initials } from "../lib/initials";
 import { roleLabels } from "../lib/roles";
 import type { Role } from "../lib/roles";
 import { Icon } from "./ui/icons";
@@ -61,16 +62,6 @@ const navByRole: Record<Role, RoleNav> = {
 
 function isCurrent(pathname: string, item: NavItem): boolean {
   return (item.match ?? [item.href]).some((p) => pathname === p || pathname.startsWith(`${p}/`));
-}
-
-function initials(name: string): string {
-  const letters = name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => Array.from(w)[0] ?? "")
-    .join("");
-  return letters.toUpperCase() || "?";
 }
 
 function Brand() {

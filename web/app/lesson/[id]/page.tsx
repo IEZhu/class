@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { LessonDetail, LessonTerm, Material, User } from "../../../lib/api";
+import { initials } from "../../../lib/initials";
 import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
@@ -309,15 +310,4 @@ function Participants({ people }: { people: LessonDetail["participants"] }) {
       )}
     </section>
   );
-}
-
-// Инициалы для аватара — то же правило, что у аватара каркаса (app-shell.tsx)
-function initials(name: string): string {
-  const letters = name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => Array.from(w)[0] ?? "")
-    .join("");
-  return letters.toUpperCase() || "?";
 }

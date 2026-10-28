@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "
 import type { ReactNode } from "react";
 
 import type { Transcript, Utterance } from "../../../lib/api";
+import { initials } from "../../../lib/initials";
 import { activeAt, clock } from "../../../lib/timeline";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
 import { Alert } from "../../ui/alert";
@@ -400,17 +401,9 @@ function speakerTitle(u: Utterance): string {
   return u.speaker_name ?? `Спикер ${u.speaker_label}`;
 }
 
-// Аватар спикера: инициалы человека или метка ASR («C»). Инициалы — то же
-// правило, что у аватара каркаса (app-shell.tsx)
+// Аватар спикера: инициалы человека или метка ASR («C»)
 function speakerBadge(u: Utterance): string {
-  if (!u.speaker_name) return u.speaker_label;
-  const letters = u.speaker_name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => Array.from(w)[0] ?? "")
-    .join("");
-  return letters.toUpperCase() || u.speaker_label;
+  return u.speaker_name ? initials(u.speaker_name, u.speaker_label) : u.speaker_label;
 }
 
 // «23 реплики»: число реплик в шапке транскрипта

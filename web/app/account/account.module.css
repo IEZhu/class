@@ -7,10 +7,11 @@
   gap: var(--sp-3);
   margin-top: var(--sp-2);
 }
+/* Аватар профиля — те же инициалы, что у каркаса, крупнее */
 .avatar {
   width: 48px;
   height: 48px;
-  color: var(--c-text-muted);
+  font-size: var(--fs-lg);
 }
 .who {
   display: grid;
