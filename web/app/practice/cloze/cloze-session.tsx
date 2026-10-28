@@ -179,8 +179,10 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // Фокус — в сессии с начала, после ответа и «Дальше»
-  useSessionFocus(sessionRef, `${index}:${result !== null}`);
+  // Фокус — в сессии с начала, после ответа, «Дальше» и после запроса
+  // ответа: нажатый мышью вариант на время запроса disabled, фокус с него
+  // падает на <body>, и после сбоя клавиши иначе молчали бы
+  useSessionFocus(sessionRef, `${index}:${result !== null}:${busy}`);
 
   function submitTyped(e: FormEvent) {
     e.preventDefault();
@@ -200,7 +202,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   }
   const progress = { "--progress": `${(100 * done) / total}%` } as CSSProperties;
   return (
-    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} className={s.session}>
+    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} aria-label="Вставь слово" className={s.session}>
       <div className={s.bar}>
         <div className={s.barRow}>
           <span>

@@ -105,8 +105,10 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // Фокус — в сессии с начала и после переворота и оценки
-  useSessionFocus(sessionRef, `${index}:${flipped}`);
+  // Фокус — в сессии с начала, после переворота и после запроса оценки:
+  // нажатая мышью кнопка оценки на время запроса disabled, фокус с неё
+  // падает на <body>, и после сбоя клавиши иначе молчали бы
+  useSessionFocus(sessionRef, `${index}:${flipped}:${busy}`);
 
   // Пустая выдача — только итог, без счёта «0 из 0»
   if (total === 0) {
@@ -116,7 +118,7 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
   const done = Math.min(index, total);
   const progress = { "--progress": `${(100 * done) / total}%` } as CSSProperties;
   return (
-    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} className={s.session}>
+    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} aria-label="Карточки" className={s.session}>
       <div className={s.bar}>
         <div className={s.barRow}>
           <span>
