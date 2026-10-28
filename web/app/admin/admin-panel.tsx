@@ -13,16 +13,15 @@ import { cx } from "../ui/cx";
 import { EmptyState } from "../ui/empty";
 import { Field } from "../ui/field";
 import { Icon } from "../ui/icons";
+import { LocalTime } from "../ui/local-time";
 import { PageHeader } from "../ui/page-header";
 import { Pill } from "../ui/pill";
 import styles from "./admin.module.css";
 
 const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 
-// Фиксированная зона: на сервере и в браузере она разная, и toLocaleDateString
-// по локальной зоне даёт разный текст — React ругается на несовпадение
-// разметки при гидрации.
-const shortDateFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
+// Дата приглашения и архива — в поясе зрителя (DESIGN §5.4)
+const shortDate: Intl.DateTimeFormatOptions = { dateStyle: "short" };
 
 // Раскладка «Люди и группы» (DESIGN §6.11): шапка с «Пригласить», чипы
 // разделов, люди таблицей (на телефоне — карточками) с раскрываемыми
@@ -311,7 +310,7 @@ function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => 
                 </td>
                 <td data-label="Группа">{inv.group_name || <span className="muted">без группы</span>}</td>
                 <td data-label="Действует до" className={styles.nowrap}>
-                  {shortDateFmt.format(new Date(inv.expires_at))} (UTC)
+                  <LocalTime value={inv.expires_at} options={shortDate} />
                 </td>
                 <td className={styles.actionCell}>
                   <RevokeInviteButton invite={inv} onDone={onDone} />
@@ -620,7 +619,7 @@ function ArchiveSection({ users, onDone }: { users: UserWithGroups[]; onDone: ()
                   <Pill>{roleLabels[u.role]}</Pill>
                 </td>
                 <td data-label="В архиве с" className={styles.nowrap}>
-                  {u.deactivated_at ? `${shortDateFmt.format(new Date(u.deactivated_at))} (UTC)` : "—"}
+                  {u.deactivated_at ? <LocalTime value={u.deactivated_at} options={shortDate} /> : "—"}
                 </td>
                 <td className={styles.actionCell}>
                   <ArchiveButton user={u} archive={false} onDone={onDone} />
