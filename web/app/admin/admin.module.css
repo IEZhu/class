@@ -65,7 +65,7 @@
 .tableCard {
   overflow: hidden;
 }
-.tableCard > :global(.table) tr:last-child > td {
+.tableCard :global(.table) tr:last-child > td {
   border-bottom: 0;
 }
 .tableCard :global(.table) td {
@@ -88,8 +88,10 @@
   font-weight: 600;
   color: var(--c-text);
 }
+/* Email на компьютере не рвётся посреди адреса: колонка растёт, а
+   слишком широкая таблица прокручивается в .table-wrap */
 .email {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .nowrap {
   white-space: nowrap;
@@ -173,6 +175,9 @@
 /* Телефон: люди — карточками (имя и роль, email, группы и кнопка
    раскрытия), остальные таблицы — table--stack из globals.css */
 @media (max-width: 767px) {
+  .email {
+    overflow-wrap: anywhere;
+  }
   .people thead {
     position: absolute;
     width: 1px;

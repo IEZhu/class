@@ -285,40 +285,42 @@ function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => 
       <SectionHead headingId={titleId} title="Приглашения" count={invites.length} />
       <p className="small muted">Ждут перехода по ссылке.</p>
       <div className={cx("card", styles.tableCard)}>
-        <table className="table table--stack">
-          <thead>
-            <tr>
-              <th scope="col">Имя</th>
-              <th scope="col">Email</th>
-              <th scope="col">Роль</th>
-              <th scope="col">Группа</th>
-              <th scope="col">Действует до</th>
-              <th scope="col">
-                <span className="sr-only">Действия</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {invites.map((inv) => (
-              <tr key={inv.id}>
-                <td className={styles.strong}>{inv.name}</td>
-                <td data-label="Email" className={styles.email}>
-                  {inv.email}
-                </td>
-                <td data-label="Роль">
-                  <Pill tone="accent">{roleLabels[inv.role]}</Pill>
-                </td>
-                <td data-label="Группа">{inv.group_name || <span className="muted">без группы</span>}</td>
-                <td data-label="Действует до" className={styles.nowrap}>
-                  <LocalTime value={inv.expires_at} options={shortDate} />
-                </td>
-                <td className={styles.actionCell}>
-                  <RevokeInviteButton invite={inv} onDone={onDone} />
-                </td>
+        <div className="table-wrap">
+          <table className="table table--stack">
+            <thead>
+              <tr>
+                <th scope="col">Имя</th>
+                <th scope="col">Email</th>
+                <th scope="col">Роль</th>
+                <th scope="col">Группа</th>
+                <th scope="col">Действует до</th>
+                <th scope="col">
+                  <span className="sr-only">Действия</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {invites.map((inv) => (
+                <tr key={inv.id}>
+                  <td className={styles.strong}>{inv.name}</td>
+                  <td data-label="Email" className={styles.email}>
+                    {inv.email}
+                  </td>
+                  <td data-label="Роль">
+                    <Pill tone="accent">{roleLabels[inv.role]}</Pill>
+                  </td>
+                  <td data-label="Группа">{inv.group_name || <span className="muted">без группы</span>}</td>
+                  <td data-label="Действует до" className={styles.nowrap}>
+                    <LocalTime value={inv.expires_at} options={shortDate} />
+                  </td>
+                  <td className={styles.actionCell}>
+                    <RevokeInviteButton invite={inv} onDone={onDone} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   );
@@ -493,24 +495,26 @@ function PeopleSection({
                 Проверьте написание или очистите поиск.
               </EmptyState>
             ) : (
-              <table className={cx("table", styles.people)}>
-                <thead>
-                  <tr>
-                    <th scope="col">Имя</th>
-                    <th scope="col">Email</th>
-                    <th scope="col">Роль</th>
-                    <th scope="col">Группы</th>
-                    <th scope="col">
-                      <span className="sr-only">Действия</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((u) => (
-                    <PersonRows key={u.id} me={me} user={u} roles={roles} onDone={onDone} />
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-wrap">
+                <table className={cx("table", styles.people)}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Имя</th>
+                      <th scope="col">Email</th>
+                      <th scope="col">Роль</th>
+                      <th scope="col">Группы</th>
+                      <th scope="col">
+                        <span className="sr-only">Действия</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map((u) => (
+                      <PersonRows key={u.id} me={me} user={u} roles={roles} onDone={onDone} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </>
         )}
@@ -596,38 +600,40 @@ function ArchiveSection({ users, onDone }: { users: UserWithGroups[]; onDone: ()
       <SectionHead headingId={titleId} title="Архив" count={users.length} />
       <p className="small muted">Вход закрыт, история сохранена; вернуть можно в любой момент.</p>
       <div className={cx("card", styles.tableCard)}>
-        <table className="table table--stack">
-          <thead>
-            <tr>
-              <th scope="col">Имя</th>
-              <th scope="col">Email</th>
-              <th scope="col">Роль</th>
-              <th scope="col">В архиве с</th>
-              <th scope="col">
-                <span className="sr-only">Действия</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id} className="is-archived">
-                <td className={styles.strong}>{u.name}</td>
-                <td data-label="Email" className={styles.email}>
-                  {u.email}
-                </td>
-                <td data-label="Роль">
-                  <Pill>{roleLabels[u.role]}</Pill>
-                </td>
-                <td data-label="В архиве с" className={styles.nowrap}>
-                  {u.deactivated_at ? <LocalTime value={u.deactivated_at} options={shortDate} /> : "—"}
-                </td>
-                <td className={styles.actionCell}>
-                  <ArchiveButton user={u} archive={false} onDone={onDone} />
-                </td>
+        <div className="table-wrap">
+          <table className="table table--stack">
+            <thead>
+              <tr>
+                <th scope="col">Имя</th>
+                <th scope="col">Email</th>
+                <th scope="col">Роль</th>
+                <th scope="col">В архиве с</th>
+                <th scope="col">
+                  <span className="sr-only">Действия</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id} className="is-archived">
+                  <td className={styles.strong}>{u.name}</td>
+                  <td data-label="Email" className={styles.email}>
+                    {u.email}
+                  </td>
+                  <td data-label="Роль">
+                    <Pill>{roleLabels[u.role]}</Pill>
+                  </td>
+                  <td data-label="В архиве с" className={styles.nowrap}>
+                    {u.deactivated_at ? <LocalTime value={u.deactivated_at} options={shortDate} /> : "—"}
+                  </td>
+                  <td className={styles.actionCell}>
+                    <ArchiveButton user={u} archive={false} onDone={onDone} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   );
@@ -815,39 +821,41 @@ function GroupCard({ group: g, isAdmin, onDone }: { group: Group; isAdmin: boole
       {g.members.length === 0 ? (
         <p className="card-pad muted">В группе пока никого.</p>
       ) : (
-        <table className="table table--dense table--stack">
-          <thead>
-            <tr>
-              <th scope="col">Имя</th>
-              <th scope="col">Email</th>
-              {isAdmin && (
-                <th scope="col">
-                  <span className="sr-only">Действия</span>
-                </th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {g.members.map((m) => (
-              <tr key={m.user_id} className={m.archived ? "is-archived" : undefined}>
-                <td className={styles.strong}>
-                  <span className={styles.nameLine}>
-                    {m.name}
-                    {m.archived && <Pill>в архиве</Pill>}
-                  </span>
-                </td>
-                <td data-label="Email" className={styles.email}>
-                  {m.email}
-                </td>
+        <div className="table-wrap">
+          <table className="table table--dense table--stack">
+            <thead>
+              <tr>
+                <th scope="col">Имя</th>
+                <th scope="col">Email</th>
                 {isAdmin && (
-                  <td className={styles.actionCell}>
-                    <RemoveMemberButton groupId={g.id} userId={m.user_id} name={m.name} onDone={onDone} />
-                  </td>
+                  <th scope="col">
+                    <span className="sr-only">Действия</span>
+                  </th>
                 )}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {g.members.map((m) => (
+                <tr key={m.user_id} className={m.archived ? "is-archived" : undefined}>
+                  <td className={styles.strong}>
+                    <span className={styles.nameLine}>
+                      {m.name}
+                      {m.archived && <Pill>в архиве</Pill>}
+                    </span>
+                  </td>
+                  <td data-label="Email" className={styles.email}>
+                    {m.email}
+                  </td>
+                  {isAdmin && (
+                    <td className={styles.actionCell}>
+                      <RemoveMemberButton groupId={g.id} userId={m.user_id} name={m.name} onDone={onDone} />
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {isAdmin && (
         <div className="card-foot">
