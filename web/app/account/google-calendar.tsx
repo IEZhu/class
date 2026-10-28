@@ -1,35 +1,34 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useId } from "react";
 
 import type { GoogleCalendarStatus, GoogleDisconnectResult } from "../../lib/api";
 import { FormStatus, requestJson, useSubmit } from "../forms";
-
-const sectionStyle = {
-  border: "1px solid #ddd",
-  borderRadius: 8,
-  padding: "1rem",
-  margin: "1rem 0",
-  display: "grid",
-  gap: "0.75rem",
-} as const;
+import { Alert } from "../ui/alert";
+import type { AlertTone } from "../ui/alert";
+import { Button } from "../ui/button";
+import { cx } from "../ui/cx";
+import { Pill } from "../ui/pill";
+import styles from "./account.module.css";
 
 // Итоги возврата с экрана согласия Google (?google= от api, ADR-023)
-// и отключения (not_revoked ставит сама страница)
-const results: Record<string, { text: string; ok: boolean }> = {
-  connected: { text: "Календарь подключён: уроки появятся в нём в течение минуты.", ok: true },
-  denied: { text: "Доступ не выдан — календарь не подключён.", ok: false },
+// и отключения (not_revoked ставит сама страница). not_revoked — не сбой:
+// календарь отключён, осталось снять доступ в Google вручную.
+const results: Record<string, { text: string; tone: AlertTone }> = {
+  connected: { text: "Календарь подключён: уроки появятся в нём в течение минуты.", tone: "success" },
+  denied: { text: "Доступ не выдан — календарь не подключён.", tone: "danger" },
   scope: {
     text: "Google не дал доступ к событиям календаря: при подключении оставьте отмеченным пункт про календарь.",
-    ok: false,
+    tone: "danger",
   },
-  failed: { text: "Не удалось подключить календарь, попробуйте ещё раз.", ok: false },
-  unavailable: { text: "Подключение календаря на стенде пока не настроено.", ok: false },
+  failed: { text: "Не удалось подключить календарь, попробуйте ещё раз.", tone: "danger" },
+  unavailable: { text: "Подключение календаря на стенде пока не настроено.", tone: "danger" },
   not_revoked: {
     text:
       "Календарь отключён, но отозвать доступ в Google не удалось. Снимите его вручную: аккаунт Google → " +
       "Безопасность → Сторонние приложения с доступом к аккаунту.",
-    ok: false,
+    tone: "warning",
   },
 };
 
@@ -43,6 +42,7 @@ export default function GoogleCalendar({
   result?: string;
 }) {
   const router = useRouter();
+  const titleId = useId();
   // Старт — POST: api кладёт state в cookie и отдаёт адрес экрана согласия
   const connect = useSubmit(async () => {
     const { url } = await requestJson<{ url: string }>("/api/auth/google/start", "POST");
@@ -56,38 +56,71 @@ export default function GoogleCalendar({
   const shown = result ? results[result] : undefined;
 
   return (
-    <section style={sectionStyle}>
-      <h2 style={{ margin: 0 }}>Google Календарь</h2>
-      {shown && <span style={{ color: shown.ok ? "#2a7" : "crimson" }}>{shown.text}</span>}
-      {!status.available ? (
-        <p style={{ margin: 0, color: "#666" }}>
-          Недоступно: на стенде не настроено приложение Google. Уроки пока видны только здесь, на
-          платформе.
-        </p>
-      ) : status.connected ? (
-        <form onSubmit={disconnect.submit} style={{ display: "grid", gap: "0.75rem" }}>
-          <p style={{ margin: 0 }}>
-            Подключён: созданные, перенесённые и отменённые уроки отражаются в вашем календаре,
-            участники получают приглашения от Google.
+    <section className="card" aria-labelledby={titleId}>
+      <div className="card-head">
+        <h2 id={titleId}>Google Календарь</h2>
+        {!status.available ? (
+          <Pill>Недоступно</Pill>
+        ) : status.connected ? (
+          <Pill tone="success">Подключён</Pill>
+        ) : (
+          <Pill>Не подключён</Pill>
+        )}
+      </div>
+      <div className="card-pad stack stack--sm">
+        {shown && <Alert tone={shown.tone}>{shown.text}</Alert>}
+        {!status.available ? (
+          <p className="muted">
+            На стенде не настроено приложение Google. Уроки пока видны только здесь, на платформе.
           </p>
-          <p style={{ margin: 0, color: "#666" }}>
-            Отключение не удаляет уже созданные события. Уроки, отменённые без подключения, исчезнут
-            из календаря, когда вы снова подключите тот же аккаунт Google.
-          </p>
-          <button type="submit" disabled={disconnect.busy} style={{ padding: "0.6rem" }}>
-            {disconnect.busy ? "Отключаем…" : "Отключить"}
-          </button>
-          <FormStatus error={disconnect.error} done={false} doneText="" />
-        </form>
-      ) : (
-        <form onSubmit={connect.submit} style={{ display: "grid", gap: "0.75rem" }}>
-          <p style={{ margin: 0 }}>
-            Подключите календарь, чтобы уроки появлялись в нём, а участники получали приглашения.
-          </p>
-          <button type="submit" disabled={connect.busy} style={{ padding: "0.6rem" }}>
-            {connect.busy ? "Переходим в Google…" : "Подключить Google Календарь"}
-          </button>
-          <FormStatus error={connect.error} done={false} doneText="" />
+        ) : status.connected ? (
+          <>
+            <p>
+              Созданные, перенесённые и отменённые уроки отражаются в вашем календаре, участники получают
+              приглашения от Google.
+            </p>
+            <p className="small muted">
+              Отключение не удаляет уже созданные события. Уроки, отменённые без подключения, исчезнут из
+              календаря, когда вы снова подключите тот же аккаунт Google.
+            </p>
+          </>
+        ) : (
+          <p>Подключите календарь, чтобы уроки появлялись в нём, а участники получали приглашения.</p>
+        )}
+      </div>
+      {status.available && (
+        <form
+          onSubmit={status.connected ? disconnect.submit : connect.submit}
+          className={cx("card-foot", styles.foot)}
+        >
+          {status.connected ? (
+            <>
+              <FormStatus error={disconnect.error} done={false} doneText="" />
+              <Button
+                type="submit"
+                blockOnPhone
+                disabled={disconnect.busy}
+                busy={disconnect.busy}
+                className={styles.submit}
+              >
+                {disconnect.busy ? "Отключаем…" : "Отключить"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <FormStatus error={connect.error} done={false} doneText="" />
+              <Button
+                type="submit"
+                variant="primary"
+                blockOnPhone
+                disabled={connect.busy}
+                busy={connect.busy}
+                className={styles.submit}
+              >
+                {connect.busy ? "Переходим в Google…" : "Подключить Google Календарь"}
+              </Button>
+            </>
+          )}
         </form>
       )}
     </section>

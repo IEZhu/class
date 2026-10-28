@@ -4,8 +4,13 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "../../lib/api";
 import type { GoogleCalendarStatus, User } from "../../lib/api";
 import { roleLabels } from "../../lib/roles";
+import { cx } from "../ui/cx";
+import { Icon } from "../ui/icons";
+import { PageHeader } from "../ui/page-header";
+import { Pill } from "../ui/pill";
 import UserBar from "../user-bar";
 import AccountForms from "./account-forms";
+import styles from "./account.module.css";
 import GoogleCalendar from "./google-calendar";
 
 export const metadata: Metadata = { title: "Учётная запись" };
@@ -28,15 +33,29 @@ export default async function AccountPage({
   const { google } = await searchParams;
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
+    <>
       <UserBar name={me.name} role={me.role} />
-      <h1>Моя учётная запись</h1>
-      <p style={{ color: "#666" }}>
-        {me.email} · {roleLabels[me.role]}
-      </p>
-      {/* email и роль себе не меняют: email — логин, роль выдаёт админ (ADR-007) */}
-      <AccountForms name={me.name} />
-      {calendar && <GoogleCalendar status={calendar} result={google} />}
-    </main>
+      <main className="page page--narrow">
+        <PageHeader title="Моя учётная запись">
+          {/* email и роль себе не меняют: email — логин, роль выдаёт админ (ADR-007) */}
+          <div className={styles.profile}>
+            <span className={cx("avatar", styles.avatar)} aria-hidden="true">
+              <Icon name="user" />
+            </span>
+            <div className={styles.who}>
+              <p className={styles.nameRow}>
+                <span className={styles.name}>{me.name}</span>
+                <Pill tone="accent">{roleLabels[me.role]}</Pill>
+              </p>
+              <p className={styles.email}>{me.email}</p>
+            </div>
+          </div>
+        </PageHeader>
+        <div className="stack">
+          <AccountForms name={me.name} />
+          {calendar && <GoogleCalendar status={calendar} result={google} />}
+        </div>
+      </main>
+    </>
   );
 }
