@@ -1,0 +1,40 @@
+/* Видео по словам (DESIGN §6.9): плеер 16:9 со своей панелью субтитров,
+   подбор роликов карточками; поиск по словам — общий с текстами
+   (../words-search). Время — кнопки/ссылки .ts (приглушённый
+   цвет, 6.31:1), целевые слова — метки primary-soft (7.7:1). */
+
+.content { display: grid; gap: var(--sp-6); }
+/* Сообщения плеера и api начинаются со строчной — в рамке с заглавной */
+.alert :global(.alert-body) > div::first-letter { text-transform: uppercase; }
+
+/* Плеер выбранного ролика */
+.playerCard { display: grid; gap: var(--sp-3); }
+.playerTitle { font-size: var(--fs-lg); }
+.player { display: grid; gap: var(--sp-3); }
+.frame { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--r-lg); background: var(--c-media-bg); }
+/* iframe плеера создаёт и удаляет YouTube API — размеры только отсюда */
+.frame > iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.loading { display: flex; align-items: center; gap: var(--sp-2); }
+
+/* Субтитры: свой скролл, звучащая строка — фоном и полосой слева */
+.subs { position: relative; display: grid; gap: 2px; max-height: 50vh; overflow-y: auto; padding-right: var(--sp-1); }
+.sub {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2); border-left: 3px solid transparent; border-radius: var(--r-sm);
+}
+.target { border-left-color: var(--c-hl-1); }
+.active { border-left-color: var(--c-live); background: var(--c-live-soft); }
+.subText { cursor: pointer; }
+
+/* Метки целевых слов */
+.tags { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); margin-left: var(--sp-2); vertical-align: middle; }
+
+.targets { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.targetList { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin: 0; padding: 0; list-style: none; }
+
+/* Подбор роликов */
+.picks { display: grid; gap: var(--sp-3); }
+.pick { display: grid; gap: var(--sp-2); }
+.pickTitle { font-size: var(--fs-lg); }
+.segments { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.segment { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--sp-2); }

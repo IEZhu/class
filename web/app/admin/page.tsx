@@ -1,11 +1,18 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { apiFetch, ApiError } from "../../lib/api";
 import type { Group, Invite, User, UserWithGroups } from "../../lib/api";
+import RoleRestricted from "../role-restricted";
 import UserBar from "../user-bar";
 import AdminPanel from "./admin-panel";
 
+export const metadata: Metadata = { title: "Люди и группы" };
+
 export default async function AdminPage() {
+  // Кто зритель — отдельным запросом в том же Promise.all: при 403 списков
+  // (студент, гость) он нужен для каркаса страницы
+  const meRequest = apiFetch<User>("/auth/me");
   let me: User;
   let users: UserWithGroups[];
   let archived: UserWithGroups[];
@@ -13,7 +20,7 @@ export default async function AdminPage() {
   let invites: Invite[];
   try {
     [me, users, archived, groups, invites] = await Promise.all([
-      apiFetch<User>("/auth/me"),
+      meRequest,
       apiFetch<UserWithGroups[]>("/users"),
       // Архив — отдельным списком: в основном его нет (ADR-024)
       apiFetch<UserWithGroups[]>("/users?archived=1"),
@@ -22,27 +29,24 @@ export default async function AdminPage() {
     ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) redirect("/login");
+    // Роль без доступа (студент, гость): каркас и карточка, как у других
+    // недоступных роли страниц
     if (e instanceof ApiError && e.status === 403) {
       return (
-        <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "4rem auto", padding: "0 1rem" }}>
-          <h1>Нет доступа</h1>
-          <p>Людьми и группами управляют админ и преподаватели.</p>
-        </main>
+        <RoleRestricted me={await meRequest} title="Люди и группы" icon="people">
+          Людьми и группами управляют админ и преподаватели.
+        </RoleRestricted>
       );
     }
     throw e;
   }
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 760, margin: "2rem auto", padding: "0 1rem" }}>
+    <>
       <UserBar name={me.name} role={me.role} />
-      <h1>Люди и группы</h1>
-      <p style={{ color: "#666" }}>
-        {me.role === "admin"
-          ? "Админ: полный список людей и групп."
-          : "Преподаватель: студенты ваших групп; заводить можно только студентов."}
-      </p>
-      <AdminPanel me={me} users={users} archived={archived} groups={groups} invites={invites} />
-    </main>
+      <main className="page">
+        <AdminPanel me={me} users={users} archived={archived} groups={groups} invites={invites} />
+      </main>
+    </>
   );
 }

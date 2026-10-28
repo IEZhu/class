@@ -1,0 +1,27 @@
+/* Тексты для практики и текст по словам (DESIGN §6.8): карточки текстов
+   (свой текст — с отметкой «Мой текст»), форма генерации; поиск по словам —
+   общий с видео (../words-search). Цвета — токены globals.css. */
+
+/* Слова поиска — нейтральные метки */
+.words { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.tags { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin: 0; padding: 0; list-style: none; }
+
+.list { display: grid; gap: var(--sp-3); }
+.results { display: grid; gap: var(--sp-4); }
+
+.item { display: grid; gap: var(--sp-3); }
+.itemHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+.sentence { font-size: var(--fs-lg); line-height: var(--lh-read); max-width: 68ch; }
+.translation { color: var(--c-text-muted); }
+
+/* Листалка: «Дальше →» справа и тогда, когда «В начало» нет */
+.next { margin-left: auto; }
+
+/* Форма генерации */
+.form { display: grid; gap: var(--sp-4); }
+.selects { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-4); }
+.submit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.history { display: grid; gap: var(--sp-3); margin-top: var(--sp-8); }
+
+.details > summary { min-height: var(--h-sm); font-size: var(--fs-sm); color: var(--c-text-muted); }
+.details > p { margin-top: var(--sp-1); }

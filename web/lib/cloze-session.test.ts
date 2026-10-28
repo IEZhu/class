@@ -9,11 +9,12 @@ import {
   itemOptions,
   llmErrorNote,
   MAX_RESPONSE_MS,
+  optionState,
   responseMs,
   restartClock,
   scheduleText,
   sourceLabel,
-  verdictText,
+  verdictParts,
 } from "./cloze-session.ts";
 
 test("цифры выбирают вариант только до ответа и в режиме вариантов", () => {
@@ -58,9 +59,9 @@ test("время ответа: заново с новым пунктом, с п�
 
 test("итог ответа и график", () => {
   const base = { answer: "ran", rating: "easy", counted: true } as const;
-  assert.equal(verdictText({ ...base, correct: true, exact: true }), "Верно!");
-  assert.equal(verdictText({ ...base, correct: true, exact: false }), "Верно — в предложении «ran»");
-  assert.equal(verdictText({ ...base, correct: false, exact: false, rating: "again" }), "Неверно — в предложении «ran»");
+  assert.deepEqual(verdictParts({ ...base, correct: true, exact: true }), { label: "Верно!", word: null });
+  assert.deepEqual(verdictParts({ ...base, correct: true, exact: false }), { label: "Верно — в предложении", word: "ran" });
+  assert.deepEqual(verdictParts({ ...base, correct: false, exact: false, rating: "again" }), { label: "Неверно — в предложении", word: "ran" });
   assert.equal(scheduleText({ ...base, correct: true, exact: true }), "в график повторений: легко");
   assert.match(scheduleText({ ...base, correct: true, exact: true, counted: false }), /не засчитан/);
   assert.equal(sourceLabel("material"), "из материалов урока");
@@ -71,6 +72,18 @@ test("ответ среди вариантов: форма у вариантов
   assert.ok(isAnswerOption("ran", result));
   assert.ok(isAnswerOption("run", result));
   assert.ok(!isAnswerOption("walk", result));
+});
+
+test("вид варианта: выбранный до ответа, после — верный и выбранный неверный", () => {
+  const result = { answer: "Ran", lemma: "run" };
+  assert.equal(optionState("walk", "walk", null), "chosen");
+  assert.equal(optionState("run", "walk", null), null);
+  assert.equal(optionState("run", null, null), null);
+  assert.equal(optionState("run", "walk", result), "correct", "верный виден и когда выбран другой");
+  assert.equal(optionState("ran", "ran", result), "correct");
+  assert.equal(optionState("walk", "walk", result), "wrong");
+  assert.equal(optionState("jump", "walk", result), null);
+  assert.equal(optionState("walk", null, result), null, "ответ вводом: выбранного варианта нет");
 });
 
 const list = (id: number, options: string[]) => ({ id, options, distractor_source: "list" as const });

@@ -12,6 +12,7 @@
 | [05-storage-s3.md](05-storage-s3.md) | S3: layout, presigned, lifecycle, бэкапы |
 | [06-budget.md](06-budget.md) | Смета и пороги апгрейда |
 | [07-risks.md](07-risks.md) | Риски и митигации |
+| [08-ui.md](08-ui.md) | Интерфейс: токены, контраст, компоненты, правила взаимодействия (ADR-040); пересчёт цветов — [ui/tokens.py](ui/tokens.py) |
 | [decisions.md](decisions.md) | Журнал решений (ADR) |
 | [flows/](flows/README.md) | Потоки: жизненный цикл урока, клик по слову, практика, сборщик субтитров |
 | [integrations/](integrations/README.md) | Интеграции: Google Calendar, LiveKit, AssemblyAI, перевод, LLM |

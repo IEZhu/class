@@ -17,6 +17,9 @@ import { io } from "socket.io-client";
 import type { Socket } from "socket.io-client";
 
 import { requestJson } from "../../forms";
+import { Alert } from "../../ui/alert";
+import { cx } from "../../ui/cx";
+import styles from "./media.module.css";
 import { decryptMessage, encryptMessage, importRoomKey, MAX_RELAY_BYTES } from "./whiteboard-sync";
 
 declare global {
@@ -389,15 +392,26 @@ export default function WhiteboardCanvas({ lessonId, userName }: { lessonId: num
     };
   }, [api, initial, lessonId, userName]);
 
-  if (failure) return <p style={{ color: "crimson", margin: 0 }}>Доска: {failure}</p>;
-  if (!initial) return <p style={{ color: "#666", margin: 0 }}>Открываем доску…</p>;
+  if (failure) return <Alert tone="danger">Доска: {failure}</Alert>;
+  if (!initial) {
+    return (
+      <div className={cx("light-island", styles.boardCanvas, styles.boardLoading)} role="status">
+        <span className="spinner" aria-hidden="true" />
+        Открываем доску…
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <p style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", color: status.error ? "crimson" : "#666" }} role="status">
+    <div className={styles.board}>
+      {/* Строка состояния — как раньше role="status"; сбой связи или
+          сохранения — предупреждением */}
+      <Alert tone={status.error ? "warning" : "info"}>
         Доска: {status.text} · на доске {peers}
-      </p>
-      <div style={{ height: "70vh", minHeight: 400, border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+      </Alert>
+      {/* Excalidraw остаётся светлым в обеих темах: рисунки на белом листе
+          (DESIGN §4.5); светлый остров с рамкой отделяет его от тёмной страницы */}
+      <div className={cx("light-island", styles.boardCanvas)}>
         <Excalidraw
           excalidrawAPI={setApi}
           initialData={{ elements: initial.elements, scrollToContent: true }}

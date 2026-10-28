@@ -61,11 +61,13 @@ export interface ClozeVerdict {
 
 const RATING_LABELS: Record<ClozeVerdict["rating"], string> = { again: "снова", good: "хорошо", easy: "легко" };
 
-// verdictText — строка итога: верно ли и какое слово стояло в предложении
-// (засчитывается любая форма слова, точная форма — подсказкой).
-export function verdictText(v: ClozeVerdict): string {
-  if (!v.correct) return `Неверно — в предложении «${v.answer}»`;
-  return v.exact ? "Верно!" : `Верно — в предложении «${v.answer}»`;
+// verdictParts — итог по частям: верно ли (label) и какое слово стояло в
+// предложении (word; засчитывается любая форма слова, точная форма —
+// подсказкой). Слово английское: страница помечает его lang="en" (WCAG
+// 3.1.2). У точного верного ответа слова нет.
+export function verdictParts(v: ClozeVerdict): { label: string; word: string | null } {
+  if (!v.correct) return { label: "Неверно — в предложении", word: v.answer };
+  return v.exact ? { label: "Верно!", word: null } : { label: "Верно — в предложении", word: v.answer };
 }
 
 // scheduleText — что ответ сделал с графиком повторений: оценка FSRS или
@@ -93,6 +95,20 @@ export function sourceLabel(source: "lesson" | "material" | "generated" | "tatoe
 // (варианты LLM) или лемма (варианты словаря).
 export function isAnswerOption(option: string, result: { answer: string; lemma: string }): boolean {
   return option === result.answer.toLowerCase() || option === result.lemma;
+}
+
+// Вид кнопки варианта: chosen — выбран, ответ ещё в пути; после ответа
+// correct — верный вариант, wrong — выбранный неверный; null — обычный.
+export type OptionState = "chosen" | "correct" | "wrong" | null;
+
+export function optionState(
+  option: string,
+  chosen: string | null,
+  result: { answer: string; lemma: string } | null,
+): OptionState {
+  if (!result) return option === chosen ? "chosen" : null;
+  if (isAnswerOption(option, result)) return "correct";
+  return option === chosen ? "wrong" : null;
 }
 
 // Пункт для набора вариантов — что из него нужно этим помощникам

@@ -1,0 +1,322 @@
+/* Страница урока (DESIGN §6.3): шапка, навигация по разделам, сетка
+   материалов и участников. Цвета, отступы и компоненты — из globals.css
+   (ADR-040); здесь только раскладка страницы. */
+
+/* Высота липкой строки разделов: на неё сдвигаются якоря и транскрипт */
+.page {
+  --lesson-nav-h: 56px;
+}
+
+/* Шапка: гостевая ссылка справа, а не по нижнему краю заголовка. Ширина
+   колонки действий задана: иначе длинная подсказка раскрытой ссылки
+   считалась бы её шириной и уводила её под заголовок. Колонка — у правого
+   края и тогда, когда не поместилась рядом с заголовком и ушла под него:
+   свёрнутая и раскрытая ссылка кончаются у края содержимого */
+.head > :global(.page-header) {
+  align-items: flex-start;
+}
+
+.head :global(.page-actions) {
+  flex: 0 1 400px;
+  min-width: 0;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+/* Строка разделов: якоря на секции страницы, липнет под верхней панелью */
+.sectionNav {
+  position: sticky;
+  top: var(--shell-top);
+  z-index: var(--z-sticky);
+  margin: 0 calc(-1 * var(--sp-1)) var(--sp-6);
+  padding: var(--sp-3) var(--sp-1);
+  background: var(--c-bg);
+}
+
+/* Якорь не уходит под шапку каркаса и строку разделов */
+.page :global(.section[id]),
+.page :where(section[id]) {
+  scroll-margin-top: calc(var(--shell-top) + var(--lesson-nav-h) + var(--sp-4));
+}
+
+/* Состояние урока над материалами: расписание, обработка, завершён */
+.phase {
+  display: grid;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-8);
+}
+
+.media {
+  margin-bottom: var(--sp-8);
+}
+
+/* Заглушка плеера, пока запись обрабатывается: ширина колонки плеера */
+.pendingPlayer {
+  width: 100%;
+  max-width: 760px;
+}
+
+/* Материалы и домашка слева, участники справа; уже 1024px — одна колонка */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--sp-8) var(--sp-6);
+  align-items: start;
+}
+
+.mainCol {
+  display: grid;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+
+.sideCol {
+  display: grid;
+  gap: var(--sp-6);
+  min-width: 0;
+}
+
+.picker {
+  margin-top: var(--sp-8);
+}
+
+/* Под плеером прошедшего урока у преподавателя: путь к подбору слов */
+.pickerNote {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.pickerNote p {
+  max-width: 60ch;
+}
+
+/* Материал: заголовок и «Удалить» в одной строке, текст для чтения, файл */
+.material {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.materialHead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.materialHead h3 {
+  flex: 1;
+  min-width: 0;
+  padding-top: 5px;
+}
+
+.empty {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+/* Карточка с шапкой и списком: без зазора .section между ними */
+.flush {
+  gap: 0;
+}
+
+/* Участники: аватар с инициалами и имя; архивный — приглушён */
+.people {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+
+.peopleEmpty {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+/* Словарь урока: слово и перевод в строку, на широком экране — в две
+   колонки; внизу — подпись к подсветке слов */
+.termGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0 var(--sp-6);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-5) var(--sp-3);
+  list-style: none;
+}
+
+.termGrid li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--c-border);
+  min-width: 0;
+}
+
+.lemma {
+  font-weight: 600;
+  min-width: 0;
+}
+
+.legend {
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+}
+
+/* Гостевая ссылка — раскрывашка-карточка в шапке справа (на телефоне —
+   под заголовком): свёрнута — одна строка, раскрыта — ссылка и действия */
+.guest {
+  width: 100%;
+  padding: var(--sp-1) var(--sp-4);
+}
+
+.guestTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-md);
+}
+
+.guestBody {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-1) 0 var(--sp-3);
+}
+
+.guestActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+/* «Добавить материал»: название, куда, файл — в строку на широком экране */
+.upload {
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  border-style: dashed;
+  border-color: var(--c-border-strong);
+  box-shadow: none;
+}
+
+.upload h3 {
+  font-size: var(--fs-md);
+}
+
+.uploadFields {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) auto minmax(200px, 1fr);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+/* Файл материала: тип, имя и размер, «Скачать» */
+.fileRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  background: var(--c-surface-2);
+}
+
+.fileIc {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-md);
+  background: var(--c-primary-soft);
+  color: var(--c-primary-strong);
+  font: 700 var(--fs-xs)/1 var(--font-sans);
+}
+
+.fileMeta {
+  display: grid;
+  flex: 1 1 160px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.fileName {
+  overflow-wrap: anywhere;
+}
+
+.deleteForm {
+  display: grid;
+  justify-items: end;
+  gap: var(--sp-1);
+  flex: none;
+}
+
+@media (max-width: 1023px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .uploadFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Свёрнутая ссылка на широком экране — по содержимому (у правого края
+   колонки действий) */
+@media (min-width: 768px) {
+  .guest:not([open]) {
+    width: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .material,
+  .upload,
+  .pickerNote {
+    padding: var(--sp-4);
+  }
+
+  .head :global(.page-actions) {
+    flex-basis: 100%;
+  }
+
+  .termGrid {
+    padding-inline: var(--sp-4);
+  }
+
+  .legend {
+    padding-inline: var(--sp-4);
+  }
+
+  .sectionNav {
+    margin-bottom: var(--sp-4);
+  }
+
+  .media,
+  .phase {
+    margin-bottom: var(--sp-6);
+  }
+
+  .grid {
+    gap: var(--sp-6);
+  }
+
+  .mainCol {
+    gap: var(--sp-6);
+  }
+
+  /* Текст для чтения на телефоне — обычным кеглем: строка длиннее */
+  .reading {
+    font-size: var(--fs-md);
+  }
+}

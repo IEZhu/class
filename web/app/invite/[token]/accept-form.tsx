@@ -1,56 +1,85 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { FormEvent } from "react";
+import { flushSync } from "react-dom";
 
 import { FormStatus, request, useSubmit } from "../../forms";
-
-const fieldStyle = { width: "100%", padding: "0.5rem" };
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { Field } from "../../ui/field";
 
 // Пароль придумывает сам приглашённый — пригласивший его не узнаёт (ADR-008).
 export default function AcceptForm({ token }: { token: string }) {
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
+  // Несовпадение паролей — ошибка поля «Ещё раз», а не всей формы: фокус
+  // уходит в поле, и программа экранного доступа читает его вместе с ошибкой.
+  // Правка любого из двух полей снимает ошибку до следующей отправки
+  const [mismatch, setMismatch] = useState(false);
+  const repeatRef = useRef<HTMLInputElement>(null);
 
   const { busy, error, done, submit } = useSubmit(async () => {
-    if (password !== repeat) throw new Error("пароли не совпадают");
     await request(`/api/signup/${encodeURIComponent(token)}`, "POST", { password });
     // accept сразу выдаёт cookie сессии — человек попадает в кабинет залогиненным
     router.push("/lessons");
     router.refresh();
   });
 
+  function onSubmit(e: FormEvent) {
+    const differ = password !== repeat;
+    // Ошибка должна быть в разметке (aria-describedby) до переноса фокуса
+    flushSync(() => setMismatch(differ));
+    if (differ) {
+      e.preventDefault();
+      repeatRef.current?.focus();
+      return;
+    }
+    void submit(e);
+  }
+
   return (
-    <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
-      <label>
-        Придумайте пароль
+    <form onSubmit={onSubmit} className="stack">
+      <Field label="Придумайте пароль" hint="Не короче 8 символов.">
         <input
+          className="input"
           type="password"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setMismatch(false);
+          }}
           required
           minLength={8}
           autoComplete="new-password"
-          style={fieldStyle}
         />
-      </label>
-      <label>
-        Ещё раз
+      </Field>
+      <Field label="Ещё раз" error={mismatch ? "Пароли не совпадают" : null}>
         <input
+          ref={repeatRef}
+          className="input"
           type="password"
           value={repeat}
-          onChange={(e) => setRepeat(e.target.value)}
+          onChange={(e) => {
+            setRepeat(e.target.value);
+            setMismatch(false);
+          }}
           required
           minLength={8}
           autoComplete="new-password"
-          style={fieldStyle}
         />
-      </label>
-      <button type="submit" disabled={busy} style={{ padding: "0.6rem" }}>
+      </Field>
+      {error && (
+        <Alert tone="danger">
+          <span className="form-status-text">{error}</span>
+        </Alert>
+      )}
+      <Button type="submit" variant="primary" size="lg" block disabled={busy} busy={busy}>
         {busy ? "Заходим…" : "Принять приглашение"}
-      </button>
-      <FormStatus error={error} done={done} doneText="Готово, открываем кабинет…" />
+      </Button>
+      <FormStatus error={null} done={done} doneText="Готово, открываем кабинет…" />
     </form>
   );
 }

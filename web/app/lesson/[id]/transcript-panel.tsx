@@ -1,17 +1,35 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import type { Transcript, Utterance } from "../../../lib/api";
+import { initials } from "../../../lib/initials";
 import { activeAt, clock } from "../../../lib/timeline";
+import { moreReplicas, replicas, replicasOf, withLocalChanges } from "../../../lib/transcript";
+import type { LocalChanges, SpeakerLink } from "../../../lib/transcript";
+import { langOf } from "../../../lib/word-nav";
 import { FormStatus, RequestError, requestJson, useSubmit } from "../../forms";
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { Icon } from "../../ui/icons";
+import { useLocalTimeText } from "../../ui/local-time";
+import { Skeleton } from "../../ui/skeleton";
+import styles from "./media.module.css";
 import UtteranceText from "./utterance-text";
 
 // Человек урока, с которым преподаватель сопоставляет метку спикера (S2-5):
 // сам teacher урока или участник снапшота — других api не примет.
 export type Person = { user_id: number; name: string };
 
-type Speaker = { speaker_label: string; user_id: number | null; speaker_name: string | null };
+// Транскрипт, который сервер получил вместе со страницей (page.tsx):
+// missing — у урока его нет (404). null вместо него — сервер не получил,
+// панель начинает с заглушки
+// total — сервер прислал только начало транскрипта (page.tsx, SSR_UTTERANCES),
+// а всего реплик total: остальное панель дочитывает сама, и сбой этого
+// запроса уже не скрыть
+export type InitialTranscript = { transcript: Transcript; total?: number } | { missing: true };
 
 const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = {
   queued: "Транскрипт ещё готовится.",
@@ -20,52 +38,118 @@ const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = 
   error: "Транскрипт не получился — запись доступна без него.",
 };
 
-const mutedStyle = { color: "#666", margin: 0 } as const;
-
 // Транскрипт по спикерам (S2-4) рядом с плеером: подряд идущие реплики
 // одного спикера — один блок, клик по реплике мотает запись к её началу,
 // звучащая реплика подсвечена и держится в видимой части списка.
 // Преподаватель урока правит текст реплик и сопоставляет метки с людьми.
+// Первый показ — из initial (сервер), затем панель перечитывает транскрипт
+// сама: он мог дозреть, а правки идут уже от свежей копии. Правки,
+// сохранённые до ответа перечитывания, ложатся поверх него
+// (withLocalChanges). Пока показано только начало (total), шапка — «40 из N
+// реплик», в конце списка — строка загрузки (после сбоя — ошибка с
+// «Повторить», начало остаётся), а метки спикеров ждут весь транскрипт: по
+// началу их список неполон.
 export default function TranscriptPanel({
   lessonId,
+  initial,
   timeMs,
   onSeek,
   canEdit,
   people,
 }: {
   lessonId: number;
+  initial: InitialTranscript | null;
   timeMs: number;
   onSeek: (ms: number) => void;
   canEdit: boolean;
   people: Person[];
 }) {
-  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const fromServer = initial !== null && "transcript" in initial;
+  const total = fromServer ? (initial.total ?? null) : null;
+  const partial = total !== null;
+  const [transcript, setTranscript] = useState<Transcript | null>(fromServer ? initial.transcript : null);
+  // complete — показан весь транскрипт, а не только начало с сервера
+  const [complete, setComplete] = useState(!partial);
+  // local — правки, сохранённые с открытия страницы: их кладёт поверх
+  // перечитанного транскрипта withLocalChanges
+  const local = useRef<LocalChanges>({ utterances: new Map(), speakers: new Map() }).current;
   // missing — транскрипта у урока нет (ASR не настроен или записи не было)
-  const [missing, setMissing] = useState(false);
+  const [missing, setMissing] = useState(initial !== null && "missing" in initial);
   const [error, setError] = useState<string | null>(null);
+  // moreError — остальное к началу с сервера не дочиталось; reload —
+  // номер попытки дочитать («Повторить»)
+  const [moreError, setMoreError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [editing, setEditing] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // more — строка дочитывания в конце списка, одна на загрузку и ошибку с
+  // «Повторить» (tabIndex=-1): фокус с нажатой «Повторить» остаётся в ней, а
+  // не падает на <body>. Если он ещё там, когда попытка кончилась, — он идёт
+  // дальше (moreFocus): на первую дочитанную реплику, а после нового сбоя —
+  // на новую «Повторить». Список прокручивается к реплике, только если
+  // строка была на экране: кто отлистал в сторону, остаётся на своём месте
+  const moreRef = useRef<HTMLDivElement>(null);
+  const retried = useRef(false);
+  const moreFocus = useRef<{ to: "first" | "retry"; scroll: boolean } | null>(null);
+  const shownFromServer = fromServer ? initial.transcript.utterances.length : 0;
+  const titleId = useId();
+  const moreErrorId = useId();
 
   useEffect(() => {
     let cancelled = false;
     requestJson<Transcript>(`/api/lessons/${lessonId}/transcript`, "GET")
       .then((t) => {
-        if (!cancelled) setTranscript(t);
+        if (cancelled) return;
+        if (focusInMore()) moreFocus.current = { to: "first", scroll: onScreen(moreRef.current, listRef.current) };
+        setTranscript(withLocalChanges(t, local));
+        setComplete(true);
+        setMoreError(null);
+        setMissing(false);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        if (e instanceof RequestError && e.status === 404) setMissing(true);
-        else setError(e instanceof Error ? e.message : "не удалось получить транскрипт");
+        if (e instanceof RequestError && e.status === 404) {
+          setTranscript(null);
+          setMissing(true);
+          return;
+        }
+        // Сбой перечитывания не прячет транскрипт, показанный с сервера:
+        // полный остаётся как есть, у начала (partial) вместо строки загрузки —
+        // ошибка с «Повторить»; открытая правка и сохранённое не пропадают
+        const message = e instanceof Error ? e.message : "не удалось получить транскрипт";
+        if (!fromServer) setError(message);
+        else if (partial) {
+          if (focusInMore()) moreFocus.current = { to: "retry", scroll: false };
+          setMoreError(message);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [lessonId]);
+  }, [lessonId, fromServer, partial, local, reload]);
 
   const utterances = useMemo(() => transcript?.utterances ?? [], [transcript]);
   const timeline = useMemo(() => [...utterances].sort((a, b) => a.start_ms - b.start_ms), [utterances]);
   const active = activeAt(timeline, timeMs);
   const groups = useMemo(() => groupBySpeaker(utterances), [utterances]);
+
+  useEffect(() => {
+    const f = moreFocus.current;
+    if (f?.to === "first" && complete) {
+      moreFocus.current = null;
+      const first = utterances[shownFromServer];
+      const target = first && listRef.current?.querySelector<HTMLElement>(`[data-idx="${first.idx}"] button`);
+      target?.focus({ preventScroll: !f.scroll });
+    } else if (f?.to === "retry" && moreError) {
+      moreFocus.current = null;
+      moreRef.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    }
+  }, [complete, moreError, utterances, shownFromServer]);
+
+  // focusInMore — фокус в строке дочитывания, куда его поставила «Повторить»
+  function focusInMore(): boolean {
+    return retried.current && (moreRef.current?.contains(document.activeElement) ?? false);
+  }
 
   // Звучащая реплика остаётся в видимой части списка; прокручивается только
   // сам список, не страница. Пока преподаватель правит текст, список стоит.
@@ -81,43 +165,83 @@ export default function TranscriptPanel({
     }
   }, [active, editing]);
 
-  const saved = useCallback((u: Utterance) => {
-    setTranscript((t) => t && { ...t, utterances: t.utterances.map((it) => (it.idx === u.idx ? u : it)) });
-    setEditing(null);
-  }, []);
+  const saved = useCallback(
+    (u: Utterance) => {
+      local.utterances.set(u.idx, u);
+      setTranscript((t) => t && { ...t, utterances: t.utterances.map((it) => (it.idx === u.idx ? u : it)) });
+      setEditing(null);
+    },
+    [local],
+  );
 
-  const mapped = useCallback((s: Speaker) => {
-    setTranscript(
-      (t) =>
-        t && {
-          ...t,
-          utterances: t.utterances.map((it) =>
-            it.speaker_label === s.speaker_label ? { ...it, user_id: s.user_id, speaker_name: s.speaker_name } : it,
-          ),
-        },
+  const mapped = useCallback(
+    (s: SpeakerLink) => {
+      local.speakers.set(s.speaker_label, s);
+      setTranscript((t) => t && withLocalChanges(t, local));
+    },
+    [local],
+  );
+
+  // Все состояния — в одной карточке «Транскрипт»: место рядом с плеером
+  // не прыгает, пока транскрипт грузится (DESIGN §4.3)
+  function card(body: ReactNode, count?: string) {
+    return (
+      <section className={cx("card", styles.transcript)} aria-labelledby={titleId}>
+        <div className="card-head">
+          <h2 id={titleId}>Транскрипт</h2>
+          {count !== undefined && <span className={cx("muted small", styles.count)}>{count}</span>}
+        </div>
+        {body}
+      </section>
     );
-  }, []);
+  }
 
-  if (missing) return <p style={mutedStyle}>Транскрипта у этого урока нет.</p>;
-  if (error) return <p style={{ color: "crimson", margin: 0 }}>Транскрипт недоступен: {error}</p>;
-  if (!transcript) return <p style={mutedStyle}>Загружаем транскрипт…</p>;
-  if (transcript.status !== "completed") return <p style={mutedStyle}>{statusTexts[transcript.status]}</p>;
-  if (utterances.length === 0) return <p style={mutedStyle}>В записи не распознано речи.</p>;
+  if (missing) return card(<p className={cx("muted", styles.note)}>Транскрипта у этого урока нет.</p>);
+  if (error) {
+    return card(
+      <div className={styles.note}>
+        <Alert tone="danger">Транскрипт недоступен: {error}</Alert>
+      </div>,
+    );
+  }
+  if (!transcript) {
+    return card(
+      <div className={styles.note}>
+        <Skeleton lines={6} label="Загружаем транскрипт…" />
+      </div>,
+    );
+  }
+  if (transcript.status !== "completed") {
+    return card(
+      <div className={styles.note}>
+        <Alert tone={transcript.status === "error" ? "warning" : "info"}>{statusTexts[transcript.status]}</Alert>
+      </div>,
+    );
+  }
+  if (utterances.length === 0) return card(<p className={cx("muted", styles.note)}>В записи не распознано речи.</p>);
 
-  return (
-    <div>
-      <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.1rem" }}>Транскрипт</h2>
+  return card(
+    <>
       {canEdit && (
-        <SpeakerMapping lessonId={lessonId} utterances={utterances} people={people} onSeek={onSeek} onMapped={mapped} />
+        <SpeakerMapping
+          lessonId={lessonId}
+          utterances={utterances}
+          complete={complete}
+          people={people}
+          onSeek={onSeek}
+          onMapped={mapped}
+        />
       )}
-      <div
-        ref={listRef}
-        // position: relative — offsetTop реплик отсчитывается от списка
-        style={{ position: "relative", maxHeight: "70vh", overflowY: "auto", paddingRight: "0.25rem" }}
-      >
+      {/* position: relative (в CSS) — offsetTop реплик отсчитывается от списка */}
+      <div ref={listRef} className={styles.list} aria-busy={(!complete && !moreError) || undefined}>
         {groups.map((g) => (
-          <div key={g[0].idx} style={{ marginBottom: "0.75rem" }}>
-            <div style={{ fontWeight: 600, fontSize: "0.9rem", color: "#2a7" }}>{speakerTitle(g[0])}</div>
+          <div key={g[0].idx} className={styles.group}>
+            <div className={styles.speaker}>
+              <span className="avatar avatar--sm" aria-hidden="true">
+                {speakerBadge(g[0])}
+              </span>
+              {speakerTitle(g[0])}
+            </div>
             {g.map((u) => (
               <UtteranceRow
                 key={u.idx}
@@ -133,9 +257,48 @@ export default function TranscriptPanel({
             ))}
           </div>
         ))}
+        {total !== null && !complete && (
+          <div ref={moreRef} tabIndex={-1} className={cx("small", styles.more, !moreError && "muted")}>
+            {moreError ? (
+              <>
+                <p id={moreErrorId} className="field-error" role="alert">
+                  <Icon name="error" />
+                  Не удалось загрузить {moreReplicas(total - utterances.length)}: {moreError}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  aria-describedby={moreErrorId}
+                  onClick={() => {
+                    retried.current = true;
+                    moreRef.current?.focus({ preventScroll: true });
+                    setMoreError(null);
+                    setReload((n) => n + 1);
+                  }}
+                >
+                  Повторить
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="spinner" aria-hidden="true" />
+                Загружаем {moreReplicas(total - utterances.length)}…
+              </>
+            )}
+          </div>
+        )}
       </div>
-    </div>
+    </>,
+    total !== null && !complete ? replicasOf(utterances.length, total) : replicas(utterances.length),
   );
+}
+
+// onScreen — элемент el виден: в окне и в прокручиваемом списке box
+function onScreen(el: HTMLElement | null, box: HTMLElement | null): boolean {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  const b = box?.getBoundingClientRect();
+  return r.bottom > 0 && r.top < window.innerHeight && (!b || (r.bottom > b.top && r.top < b.bottom));
 }
 
 // Строка мемоизирована: время плеера меняется несколько раз в секунду,
@@ -159,15 +322,12 @@ const UtteranceRow = memo(function UtteranceRow({
   onEdit: (idx: number | null) => void;
   onSaved: (u: Utterance) => void;
 }) {
+  const at = clock(u.start_ms);
   return (
     <div
       data-idx={u.idx}
-      style={{
-        padding: "0.2rem 0.4rem",
-        borderLeft: `3px solid ${active ? "#2a7" : "transparent"}`,
-        background: active ? "#e8f6ef" : "transparent",
-        borderRadius: 4,
-      }}
+      className={cx(styles.utt, active && styles.active, editing && styles.editing)}
+      aria-current={active || undefined}
     >
       {editing ? (
         <UtteranceEditor lessonId={lessonId} utterance={u} onSaved={onSaved} onCancel={() => onEdit(null)} />
@@ -175,30 +335,33 @@ const UtteranceRow = memo(function UtteranceRow({
         <>
           <button
             type="button"
+            className="ts"
             onClick={() => onSeek(u.start_ms)}
             title="Перейти к этому месту записи"
-            style={{ border: "none", background: "none", padding: 0, color: "#888", cursor: "pointer", fontVariantNumeric: "tabular-nums" }}
+            aria-label={`Перейти к ${at}`}
           >
-            {clock(u.start_ms)}
-          </button>{" "}
-          <span onClick={() => onSeek(u.start_ms)} style={{ cursor: "pointer" }}>
-            <UtteranceText text={u.text} />
-          </span>
-          {u.edited_at && (
-            <span title={`исправлено ${new Date(u.edited_at).toLocaleString("ru-RU")}`} style={{ color: "#999", fontSize: "0.8rem" }}>
-              {" "}
-              (испр.)
+            {at}
+          </button>
+          <div className={styles.uttBody}>
+            <span className={styles.uttText} onClick={() => onSeek(u.start_ms)}>
+              <UtteranceText text={u.text} />
             </span>
-          )}
+            {u.edited_at && (
+              <>
+                {" "}
+                <EditedMark at={u.edited_at} />
+              </>
+            )}
+          </div>
           {canEdit && (
             <button
               type="button"
+              className="icon-btn icon-btn--sm"
               onClick={() => onEdit(u.idx)}
               title="Исправить текст реплики"
               aria-label="Исправить текст реплики"
-              style={{ border: "none", background: "none", padding: "0 0.25rem", color: "#888", cursor: "pointer" }}
             >
-              ✎
+              <Icon name="edit" size="sm" />
             </button>
           )}
         </>
@@ -206,6 +369,21 @@ const UtteranceRow = memo(function UtteranceRow({
     </div>
   );
 });
+
+// Время правки в подсказке «испр.»: «28.10.2026, 05:11:39»
+const editedFormat: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "medium" };
+
+// «испр.» у исправленной реплики: когда — в подсказке, в поясе зрителя
+// (DESIGN §5.4). Первые реплики рендерит сервер — по UTC, с подписью; после
+// гидратации подсказка перерисовывается в поясе браузера
+function EditedMark({ at }: { at: string }) {
+  const time = useLocalTimeText(at, editedFormat);
+  return (
+    <span className={cx("pill pill--plain", styles.edited)} title={`исправлено ${time}`} suppressHydrationWarning>
+      испр.
+    </span>
+  );
+}
 
 // Правка текста реплики (S2-4): компенсация ошибок ASR. Пробелы и переводы
 // строк api схлопывает сам — реплика остаётся одной строкой речи.
@@ -226,21 +404,22 @@ function UtteranceEditor({
   });
 
   return (
-    <form onSubmit={save.submit}>
+    <form onSubmit={save.submit} className={styles.editor}>
       <textarea
+        className="textarea"
+        aria-label="Текст реплики"
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={3}
         autoFocus
-        style={{ width: "100%", boxSizing: "border-box", padding: "0.4rem", font: "inherit" }}
       />
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-        <button type="submit" disabled={save.busy || text.trim() === ""}>
+      <div className="row">
+        <Button type="submit" variant="primary" size="sm" disabled={save.busy || text.trim() === ""} busy={save.busy}>
           {save.busy ? "Сохраняем…" : "Сохранить"}
-        </button>
-        <button type="button" onClick={onCancel} disabled={save.busy}>
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={save.busy}>
           Отмена
-        </button>
+        </Button>
         <FormStatus error={save.error} done={false} doneText="" />
       </div>
     </form>
@@ -249,33 +428,41 @@ function UtteranceEditor({
 
 // Маппинг спикеров (S2-5): метка ASR → человек урока. Возле метки — её первая
 // реплика: по голосу и словам легче узнать, кто это. Выбор сохраняется сразу.
+// Пока показано только начало транскрипта (complete=false), меток и их
+// счёта нет: в начале встречаются не все метки.
 function SpeakerMapping({
   lessonId,
   utterances,
+  complete,
   people,
   onSeek,
   onMapped,
 }: {
   lessonId: number;
   utterances: Utterance[];
+  complete: boolean;
   people: Person[];
   onSeek: (ms: number) => void;
-  onMapped: (s: Speaker) => void;
+  onMapped: (s: SpeakerLink) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const baseId = useId();
   const firstByLabel = useMemo(() => {
     const first = new Map<string, Utterance>();
     for (const u of utterances) if (!first.has(u.speaker_label)) first.set(u.speaker_label, u);
     return [...first.values()];
   }, [utterances]);
+  // Свёрнуто: раскрытое съело бы место реплик на первом экране. Сколько
+  // меток ещё не сопоставлено — видно в заголовке
+  const unmapped = firstByLabel.filter((u) => u.user_id === null).length;
 
   async function map(label: string, userID: number | null) {
     setBusy(label);
     setError(null);
     try {
       onMapped(
-        await requestJson<Speaker>(`/api/lessons/${lessonId}/transcript/speakers/${encodeURIComponent(label)}`, "PUT", {
+        await requestJson<SpeakerLink>(`/api/lessons/${lessonId}/transcript/speakers/${encodeURIComponent(label)}`, "PUT", {
           user_id: userID,
         }),
       );
@@ -287,13 +474,26 @@ function SpeakerMapping({
   }
 
   return (
-    <fieldset style={{ border: "1px solid #eee", borderRadius: 6, margin: "0 0 0.75rem", padding: "0.5rem 0.75rem" }}>
-      <legend style={{ fontSize: "0.9rem", color: "#666" }}>Кто говорит</legend>
-      {firstByLabel.map((u) => (
-        <div key={u.speaker_label} style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.25rem" }}>
-          <label>
-            Спикер {u.speaker_label}:{" "}
+    <details className={cx("disclosure", styles.speakers)}>
+      <summary>
+        Кто говорит
+        {complete && (
+          <span className="muted small">
+            · {firstByLabel.length}
+            {unmapped > 0 && ` · не указан: ${unmapped}`}
+          </span>
+        )}
+      </summary>
+      <div className={styles.speakerRows}>
+        {!complete && <p className="muted small">Метки спикеров появятся, когда загрузится весь транскрипт.</p>}
+        {complete && firstByLabel.map((u) => (
+          <div key={u.speaker_label} className={styles.speakerRow}>
+            <label className="label" htmlFor={`${baseId}-${u.speaker_label}`}>
+              Спикер {u.speaker_label}
+            </label>
             <select
+              id={`${baseId}-${u.speaker_label}`}
+              className="select"
               value={u.user_id ?? ""}
               disabled={busy !== null}
               onChange={(e) => void map(u.speaker_label, e.target.value === "" ? null : Number(e.target.value))}
@@ -309,19 +509,20 @@ function SpeakerMapping({
                 </option>
               ))}
             </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => onSeek(u.start_ms)}
-            title="Послушать первую реплику"
-            style={{ border: "none", background: "none", padding: 0, color: "#888", cursor: "pointer", textAlign: "left" }}
-          >
-            ▶ «{preview(u.text)}»
-          </button>
-        </div>
-      ))}
-      <FormStatus error={error} done={false} doneText="" />
-    </fieldset>
+            <button
+              type="button"
+              className={cx("btn btn--ghost btn--sm", styles.preview)}
+              onClick={() => onSeek(u.start_ms)}
+              title="Послушать первую реплику"
+            >
+              <Icon name="play" size="sm" />
+              <span lang={langOf(u.text)}>«{preview(u.text)}»</span>
+            </button>
+          </div>
+        ))}
+        <FormStatus error={error} done={false} doneText="" />
+      </div>
+    </details>
   );
 }
 
@@ -340,6 +541,11 @@ function groupBySpeaker(utterances: Utterance[]): Utterance[][] {
 
 function speakerTitle(u: Utterance): string {
   return u.speaker_name ?? `Спикер ${u.speaker_label}`;
+}
+
+// Аватар спикера: инициалы человека или метка ASR («C»)
+function speakerBadge(u: Utterance): string {
+  return u.speaker_name ? initials(u.speaker_name, u.speaker_label) : u.speaker_label;
 }
 
 function preview(text: string): string {

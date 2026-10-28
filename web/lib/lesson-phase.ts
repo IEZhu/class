@@ -16,3 +16,13 @@ export function lessonPhase(
   if (now <= new Date(endsAt)) return "live";
   return "ended";
 }
+
+// Русские подписи фаз — и в списке уроков, и на странице урока; сырой
+// статус api пользователю не показываем (live при status=scheduled).
+export const phaseTitles: Record<LessonPhase, string> = {
+  scheduled: "Запланирован",
+  live: "Идёт сейчас",
+  ended: "Завершён",
+  processing: "Запись обрабатывается",
+  done: "Прошёл",
+};

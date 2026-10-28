@@ -5,21 +5,19 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
 import type { PracticeCard, PracticeQueue, ReviewResult } from "../../../lib/api";
+import { isSessionKey, SESSION_PROPS } from "../../../lib/practice-keys";
 import { delayLabel, keyAction, RATINGS, reviewId } from "../../../lib/review-session";
 import type { Rating } from "../../../lib/review-session";
 import ClickableText, { ExampleAuthors } from "../../clickable-text";
 import { RequestError, requestJson } from "../../forms";
 import { termStatuses } from "../../term-status-control";
-
-const mutedStyle = { color: "#666" } as const;
-const cardStyle: CSSProperties = {
-  border: "1px solid #ddd",
-  borderRadius: 8,
-  padding: "1.25rem",
-  minHeight: 180,
-  lineHeight: 1.5,
-};
-const buttonStyle = { padding: "0.4rem 0.8rem", border: "1px solid #ccc", borderRadius: 4, background: "#fff" };
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { EmptyState } from "../../ui/empty";
+import { Kbd } from "../../ui/kbd";
+import s from "../practice.module.css";
+import { useSessionFocus } from "../session-focus";
 
 function newReviewId(): string {
   return reviewId(crypto.getRandomValues(new Uint8Array(16)));
@@ -49,6 +47,7 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
   // (карточка на шаге обучения вернётся через минуты)
   const [nextDue, setNextDue] = useState<string | null>(queue.next_due_at);
   const idRef = useRef<string | null>(null);
+  const sessionRef = useRef<HTMLElement>(null);
   const card: PracticeCard | undefined = queue.items[index];
   const total = queue.items.length;
 
@@ -88,15 +87,14 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
     }
   }
 
-  // Клавиши — на всё окно. Ввод в поля и попап слова не перехватываются;
-  // пробел и Enter на кнопке или ссылке — их собственное нажатие.
-  // Обработчик переподписывается на каждый рендер: видит текущую карточку
+  // Клавиши — только с фокусом в сессии (WCAG 2.1.4). Ввод в поля, попап
+  // и слова текста не перехватываются; пробел и Enter на кнопке или
+  // ссылке — их собственное нажатие (lib/practice-keys). Обработчик
+  // переподписывается на каждый рендер: видит текущую карточку
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!card || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target instanceof Element ? e.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
-      if ((e.key === " " || e.key === "Enter") && target?.closest("button, a")) return;
+      if (!isSessionKey(e.target instanceof Element ? e.target : null, e.key)) return;
       const action = keyAction(e.key, flipped);
       if (!action) return;
       e.preventDefault();
@@ -107,34 +105,57 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Фокус — в сессии с начала, после переворота и после запроса оценки:
+  // нажатая мышью кнопка оценки на время запроса disabled, фокус с неё
+  // падает на <body>, и после сбоя клавиши иначе молчали бы
+  useSessionFocus(sessionRef, `${index}:${flipped}:${busy}`);
+
+  // Пустая выдача — только итог, без счёта «0 из 0»
+  if (total === 0) {
+    return <Finished queue={queue} nextDue={nextDue} reviewed={false} onMore={() => router.refresh()} />;
+  }
+
   const done = Math.min(index, total);
+  const progress = { "--progress": `${(100 * done) / total}%` } as CSSProperties;
   return (
-    <section>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
-        <span>
-          {done} из {total}
-          {queue.due_total > total && <span style={mutedStyle}> · всего к повторению {queue.due_total}</span>}
-        </span>
-        <span style={mutedStyle}>
-          снова {tally.again} · трудно {tally.hard} · хорошо {tally.good} · легко {tally.easy}
-        </span>
-      </div>
-      <div
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={total}
-        aria-valuenow={done}
-        style={{ height: 6, background: "#eee", borderRadius: 3, margin: "0.5rem 0 1rem" }}
-      >
-        <div style={{ width: total ? `${(100 * done) / total}%` : "0%", height: "100%", background: "#4c6ef5", borderRadius: 3 }} />
-      </div>
-      {last && (
-        <p style={{ ...mutedStyle, margin: "0 0 0.75rem" }}>
-          «{last.lemma}» — {RATINGS.find((o) => o.rating === last.rating)?.label.toLowerCase()}, снова{" "}
-          {delayLabel(Date.parse(last.dueAt) - Date.now())}
+    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} aria-label="Карточки" className={s.session}>
+      <div className={s.bar}>
+        <div className={s.barRow}>
+          <span>
+            <span className={s.count}>
+              {done} из {total}
+            </span>
+            {queue.due_total > total && <span className="small muted"> · всего к повторению {queue.due_total}</span>}
+          </span>
+          <span className="small muted">
+            снова {tally.again} · трудно {tally.hard} · хорошо {tally.good} · легко {tally.easy}
+          </span>
+        </div>
+        <div
+          className="progress"
+          role="progressbar"
+          aria-label="Пройдено карточек"
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={done}
+          style={progress}
+        >
+          <span />
+        </div>
+        <p className={s.last} role="status">
+          {last && (
+            <>
+              «{last.lemma}» — {RATINGS.find((o) => o.rating === last.rating)?.label.toLowerCase()}, снова{" "}
+              {delayLabel(Date.parse(last.dueAt) - Date.now())}
+            </>
+          )}
         </p>
+      </div>
+      {error && (
+        <Alert tone="danger" className={s.alert}>
+          {error}
+        </Alert>
       )}
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
       {card ? (
         <CardView
           key={card.term_id}
@@ -166,30 +187,46 @@ function CardView({
 }) {
   return (
     <>
-      <div style={cardStyle}>
-        <div style={{ fontSize: "2rem", fontWeight: 600 }}>
+      <article className={cx("card", s.flashcard, !flipped && s.front)}>
+        <p className={s.lemma}>
           <ClickableText text={card.lemma} />
-        </div>
+        </p>
         {card.surface.toLowerCase() !== card.lemma && (
-          <div style={mutedStyle}>
+          <p className={s.surface}>
             <ClickableText text={card.surface} />
-          </div>
+          </p>
         )}
         {flipped && <CardBack card={card} />}
-      </div>
-      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
+      </article>
+      <div className={cx(s.actions, s.sticky)}>
         {flipped ? (
-          RATINGS.map((o) => (
-            <button key={o.rating} type="button" disabled={busy} onClick={() => onRate(o.rating)} style={buttonStyle}>
-              {o.label} <kbd style={mutedStyle}>{o.key}</kbd>
-            </button>
-          ))
+          <div className={s.rate} role="group" aria-label="Оценка">
+            {RATINGS.map((o) => (
+              <button
+                key={o.rating}
+                type="button"
+                className={cx(s.rateBtn, s[o.rating])}
+                disabled={busy}
+                onClick={() => onRate(o.rating)}
+              >
+                {o.label} <Kbd>{o.key}</Kbd>
+              </button>
+            ))}
+          </div>
         ) : (
-          <button type="button" onClick={onFlip} style={buttonStyle}>
-            Показать <kbd style={mutedStyle}>пробел</kbd>
-          </button>
+          <Button type="button" variant="primary" size="lg" blockOnPhone className={cx(s.flip, s.onPrimary)} onClick={onFlip}>
+            Показать <Kbd>Пробел</Kbd>
+          </Button>
         )}
       </div>
+      <p className={s.shortcuts}>
+        <span>
+          <Kbd>Пробел</Kbd> перевернуть
+        </span>
+        <span>
+          <Kbd>1</Kbd>–<Kbd>4</Kbd> оценить
+        </span>
+      </p>
     </>
   );
 }
@@ -199,19 +236,21 @@ function CardView({
 // по их лицензиям (ADR-019, ADR-028)
 function CardBack({ card }: { card: PracticeCard }) {
   return (
-    <div style={{ borderTop: "1px solid #eee", marginTop: "0.75rem", paddingTop: "0.75rem" }}>
-      <p style={{ margin: "0 0 0.5rem", fontSize: "1.25rem" }}>
-        {card.translation ? <ClickableText text={card.translation} /> : <span style={mutedStyle}>перевода пока нет</span>}
+    <div className={s.back}>
+      <p className={s.translation}>
+        {card.translation ? <ClickableText text={card.translation} /> : <span className="muted">перевода пока нет</span>}
       </p>
       {card.definitions.length > 0 && (
-        <div style={{ fontSize: "0.95em" }}>
-          <ol style={{ margin: 0, paddingLeft: "1.25rem" }}>
+        <div className={s.block}>
+          <ol className={s.defs}>
             {card.definitions.map((d, i) => (
-              <li key={i} style={{ marginBottom: "0.25rem" }}>
-                <em style={mutedStyle}>{d.pos}</em>{" "}
+              <li key={i}>
+                <em lang="en" className={s.pos}>
+                  {d.pos}
+                </em>{" "}
                 <ClickableText text={d.glosses.join("; ")} />
                 {d.translations_ru.length > 0 && (
-                  <span style={mutedStyle}>
+                  <span className="muted">
                     {" — "}
                     <ClickableText text={d.translations_ru.join(", ")} />
                   </span>
@@ -219,7 +258,7 @@ function CardBack({ card }: { card: PracticeCard }) {
               </li>
             ))}
           </ol>
-          <p style={{ ...mutedStyle, fontSize: "0.85em", margin: "0.25rem 0 0" }}>
+          <p className="attr">
             <a href={`https://en.wiktionary.org/wiki/${encodeURIComponent(card.definitions[0].word)}`} target="_blank" rel="noreferrer">
               Wiktionary
             </a>
@@ -231,17 +270,21 @@ function CardBack({ card }: { card: PracticeCard }) {
         </div>
       )}
       {card.examples.length > 0 && (
-        <div style={{ marginTop: "0.5rem" }}>
-          {card.examples.map((ex, i) => (
-            <div key={i} style={{ marginBottom: "0.25rem" }}>
-              <ClickableText text={ex.text} />
-              <div style={mutedStyle}>
-                <ClickableText text={ex.translation} />
+        <div className={s.block}>
+          <div className={s.examples}>
+            {card.examples.map((ex, i) => (
+              <div key={i} className={s.example}>
+                <span>
+                  <ClickableText text={ex.text} />
+                </span>
+                <span className="muted">
+                  <ClickableText text={ex.translation} />
+                </span>
+                <ExampleAuthors example={ex} />
               </div>
-              <ExampleAuthors example={ex} />
-            </div>
-          ))}
-          <p style={{ ...mutedStyle, fontSize: "0.85em", margin: "0.25rem 0 0" }}>
+            ))}
+          </div>
+          <p className="attr">
             <a href="https://tatoeba.org" target="_blank" rel="noreferrer">
               Tatoeba
             </a>
@@ -271,15 +314,20 @@ function Finished({
 }) {
   const left = queue.due_total - queue.items.length;
   return (
-    <div style={cardStyle}>
-      <p style={{ marginTop: 0 }}>{reviewed ? "Выдача пройдена." : "Сейчас повторять нечего."}</p>
-      {left > 0 && <p>К повторению ещё {left}.</p>}
-      {left <= 0 && nextDue && (
-        <p style={mutedStyle}>Следующая карточка — {delayLabel(Date.parse(nextDue) - Date.now())}.</p>
-      )}
-      <button type="button" onClick={onMore} style={buttonStyle}>
-        Проверить очередь
-      </button>
+    <div className="card">
+      <EmptyState
+        icon={reviewed ? "check" : "cards"}
+        title={reviewed ? "Выдача пройдена" : "Сейчас повторять нечего"}
+        action={
+          <Button type="button" variant="secondary" blockOnPhone onClick={onMore}>
+            Проверить очередь
+          </Button>
+        }
+      >
+        {left > 0
+          ? `К повторению ещё ${left}.`
+          : nextDue && `Следующая карточка — ${delayLabel(Date.parse(nextDue) - Date.now())}.`}
+      </EmptyState>
     </div>
   );
 }

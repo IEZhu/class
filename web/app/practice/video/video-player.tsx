@@ -4,7 +4,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PracticeVideo, VideoSegment } from "../../../lib/api";
 import { activeAt, clock } from "../../../lib/timeline";
+import { langOf } from "../../../lib/word-nav";
 import ClickableText from "../../clickable-text";
+import { Alert } from "../../ui/alert";
+import { cx } from "../../ui/cx";
+import { Pill } from "../../ui/pill";
+import v from "./video.module.css";
 
 // Плеер видео-практики (S5-5, ADR-038): ролик встраивается плеером
 // YouTube в режиме повышенной конфиденциальности (youtube-nocookie.com) —
@@ -69,8 +74,6 @@ function loadYouTubeApi(): Promise<YTNamespace> {
 // Коды onError: 101 и 150 — владелец запретил встраивание
 const embedForbidden = new Set([101, 150]);
 
-const mutedStyle = { color: "#666", margin: 0 } as const;
-
 export default function VideoPlayer({ video, startMs }: { video: PracticeVideo; startMs: number }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
@@ -97,7 +100,7 @@ export default function VideoPlayer({ video, startMs }: { video: PracticeVideo; 
     iframe.allow = "encrypted-media; picture-in-picture; fullscreen";
     // Без Referer плеер отвечает ошибкой 153
     iframe.referrerPolicy = "strict-origin-when-cross-origin";
-    iframe.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0";
+    // Размер и место iframe — из .frame > iframe (video.module.css)
     host.appendChild(iframe);
 
     let cancelled = false;
@@ -169,27 +172,40 @@ export default function VideoPlayer({ video, startMs }: { video: PracticeVideo; 
   }, [active]);
 
   return (
-    <section style={{ display: "grid", gap: "0.75rem" }}>
-      <div ref={hostRef} style={{ position: "relative", width: "100%", aspectRatio: "16 / 9", background: "#000" }} />
-      <p style={{ ...mutedStyle, fontSize: "0.9rem" }}>
-        «{video.title}»{video.channel && ` — ${video.channel}`}, видео и{" "}
+    <div className={v.player}>
+      <div ref={hostRef} className={v.frame} />
+      <p className="small muted">
+        «<span lang={langOf(video.title)}>{video.title}</span>»
+        {video.channel && (
+          <>
+            {" — "}
+            <span lang={langOf(video.channel)}>{video.channel}</span>
+          </>
+        )}
+        , видео и{" "}
         {video.subtitles === "manual" ? "субтитры автора" : "автоматические субтитры"} —{" "}
         <a href={video.url} target="_blank" rel="noopener noreferrer">
           YouTube
         </a>
       </p>
-      {error && <p style={{ color: "crimson", margin: 0 }}>{error}</p>}
-      {!ready && !error && <p style={mutedStyle}>Плеер загружается…</p>}
-      <div
-        ref={listRef}
-        // position: relative — offsetTop строк отсчитывается от списка
-        style={{ position: "relative", maxHeight: "50vh", overflowY: "auto", paddingRight: "0.25rem" }}
-      >
+      {error && (
+        <Alert tone="danger" className={v.alert}>
+          {error}
+        </Alert>
+      )}
+      {!ready && !error && (
+        <p className={cx("small muted", v.loading)}>
+          <span className="spinner" aria-hidden="true" />
+          Плеер загружается…
+        </p>
+      )}
+      {/* .subs — position: relative: offsetTop строк отсчитывается от списка */}
+      <div ref={listRef} className={v.subs}>
         {segments.map((s) => (
           <SubtitleRow key={s.idx} segment={s} active={s.idx === active} onSeek={seek} />
         ))}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -206,28 +222,34 @@ const SubtitleRow = memo(function SubtitleRow({
 }) {
   const target = s.words.length > 0;
   return (
-    <div
-      data-idx={s.idx}
-      style={{
-        padding: "0.2rem 0.4rem",
-        borderLeft: `3px solid ${active ? "#2a7" : target ? "#f0b400" : "transparent"}`,
-        background: active ? "#e8f6ef" : "transparent",
-        borderRadius: 4,
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => onSeek(s.start_ms)}
-        title="Перейти к этому месту видео"
-        style={{ border: "none", background: "none", padding: 0, color: "#888", cursor: "pointer", fontVariantNumeric: "tabular-nums" }}
-      >
+    <div data-idx={s.idx} className={cx(v.sub, target && v.target, active && v.active)}>
+      <button type="button" className="ts" onClick={() => onSeek(s.start_ms)} title="Перейти к этому месту видео">
         {clock(s.start_ms)}
-      </button>{" "}
-      {/* Клик по слову — попап (ClickableText его не пропускает дальше), мимо слов — перемотка */}
-      <span onClick={() => onSeek(s.start_ms)} style={{ cursor: "pointer" }}>
-        <ClickableText text={s.text} />
-      </span>
-      {target && <span style={{ color: "#b07d00", fontSize: "0.8rem" }}> · {s.words.join(", ")}</span>}
+      </button>
+      <div>
+        {/* Клик по слову — попап (ClickableText его не пропускает дальше), мимо слов — перемотка */}
+        <span className={v.subText} onClick={() => onSeek(s.start_ms)}>
+          <ClickableText text={s.text} />
+        </span>
+        {target && <TargetTags words={s.words} />}
+      </div>
     </div>
   );
 });
+
+// TargetTags — целевые слова строки метками, английские (lang="en");
+// «слова:» — для чтения с экрана, по-русски
+export function TargetTags({ words }: { words: string[] }) {
+  return (
+    <span className={v.tags} lang="en">
+      <span className="sr-only" lang="ru">
+        слова:
+      </span>
+      {words.map((w) => (
+        <Pill key={w} tone="accent">
+          {w}
+        </Pill>
+      ))}
+    </span>
+  );
+}

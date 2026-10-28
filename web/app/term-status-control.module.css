@@ -1,0 +1,37 @@
+/* Статус слова в личном словаре (DESIGN §4.2, §6.4, §6.5): пять сегментов
+   с aria-pressed. В попапе — номер и слово статуса, высота 52px (цель
+   касания на телефоне); compact — строка словаря: номера 32×32 с шагом
+   8px (WCAG 2.5.8), слово выбранного статуса рядом. */
+
+.control { display: grid; gap: var(--sp-3); min-width: 0; }
+
+.seg { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-1); }
+.seg button {
+  display: grid; gap: 2px; align-content: center; justify-items: center;
+  min-height: var(--h-touch); padding: var(--sp-1) 2px;
+  border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
+  background: var(--c-surface); color: var(--c-text); cursor: pointer;
+  font: 600 var(--fs-md)/1.1 var(--font-sans);
+}
+.seg button small { font-size: var(--fs-xs); font-weight: 500; line-height: 1.15; color: var(--c-text-muted); text-align: center; }
+.seg button:hover { background: var(--c-surface-2); }
+.seg button[aria-pressed="true"] { background: var(--c-primary); border-color: var(--c-primary); color: var(--c-on-primary); }
+.seg button[aria-pressed="true"] small { color: var(--c-on-primary); }
+.seg button[aria-disabled="true"] { cursor: progress; }
+
+/* Строка словаря: сегменты и слово статуса вместе («Убрать» — в конце
+   строки таблицы, не здесь); слово не помещается рядом — встаёт под
+   сегментами */
+.compact { gap: var(--sp-1); }
+.compactRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
+.compact .seg { display: flex; gap: var(--sp-2); }
+.compact .seg button { width: var(--h-sm); min-height: var(--h-sm); height: var(--h-sm); padding: 0; border-radius: var(--r-sm); font-size: var(--fs-sm); }
+.current { font-size: var(--fs-xs); font-weight: 500; color: var(--c-text-muted); white-space: nowrap; }
+
+/* Таблица словаря от 1280px (dictionary/page.module.css): слово статуса —
+   всегда рядом с сегментами, в месте под самое длинное («почти знаю»), —
+   у всех строк одна раскладка */
+@media (min-width: 1280px) {
+  .compactRow { flex-wrap: nowrap; }
+  .current { min-width: 5.5rem; }
+}

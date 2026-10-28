@@ -4,6 +4,9 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { FormStatus, requestJson, useSubmit } from "../../forms";
+import { Alert } from "../../ui/alert";
+import { Button } from "../../ui/button";
+import { Field } from "../../ui/field";
 
 type Joined = { lesson_id: number };
 
@@ -20,23 +23,27 @@ export default function JoinForm({ token }: { token: string }) {
   });
 
   return (
-    <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
-      <label>
-        Как вас представить
+    <form onSubmit={submit} className="stack">
+      <Field label="Как вас представить">
         <input
+          className="input"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
           maxLength={60}
           autoComplete="name"
           placeholder="Имя и фамилия"
-          style={{ width: "100%", padding: "0.5rem" }}
         />
-      </label>
-      <button type="submit" disabled={busy} style={{ padding: "0.6rem" }}>
+      </Field>
+      {error && (
+        <Alert tone="danger">
+          <span className="form-status-text">{error}</span>
+        </Alert>
+      )}
+      <Button type="submit" variant="primary" size="lg" block disabled={busy} busy={busy}>
         {busy ? "Заходим…" : "Войти на событие"}
-      </button>
-      <FormStatus error={error} done={done} doneText="Готово, открываем событие…" />
+      </Button>
+      <FormStatus error={null} done={done} doneText="Готово, открываем событие…" />
     </form>
   );
 }

@@ -4,9 +4,14 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { FormStatus, request, useSubmit } from "../../forms";
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { Field } from "../../ui/field";
+import { Icon } from "../../ui/icons";
+import { Skeleton } from "../../ui/skeleton";
 import { genreLabel, genres } from "./generated-text";
+import t from "./text.module.css";
 
-const fieldStyle = { width: "100%", padding: "0.5rem" };
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
 // Форма генерации: слова через пробел или запятую, уровень, жанр, длина.
@@ -35,56 +40,61 @@ export default function GenerateForm({ fromDictionary }: { fromDictionary: boole
   });
 
   return (
-    <form
-      onSubmit={submit}
-      style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem", display: "grid", gap: "0.75rem" }}
-    >
-      <label>
-        Слова (через пробел или запятую, до 20{fromDictionary && "; пусто — из моего словаря"})
-        <textarea
-          value={words}
-          onChange={(e) => setWords(e.target.value)}
-          rows={2}
-          required={!fromDictionary}
-          style={fieldStyle}
-        />
-      </label>
-      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-        <label>
-          Уровень{" "}
-          <select value={level} onChange={(e) => setLevel(e.target.value)}>
-            {levels.map((l) => (
-              <option key={l}>{l}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Жанр{" "}
-          <select value={genre} onChange={(e) => setGenre(e.target.value)}>
-            {genres.map((g) => (
-              <option key={g} value={g}>
-                {genreLabel(g)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Слов в тексте{" "}
-          <input
-            type="number"
-            min={50}
-            max={400}
-            step={10}
-            value={maxWords}
-            onChange={(e) => setMaxWords(Number(e.target.value))}
-            style={{ width: "5rem" }}
-          />
-        </label>
+    <form onSubmit={submit} className="card" aria-labelledby="new-text-title">
+      <div className="card-head">
+        <h2 id="new-text-title">Новый текст</h2>
       </div>
-      <button type="submit" disabled={busy} style={{ padding: "0.6rem" }}>
-        {busy ? "Генерируем… (до минуты)" : "Сгенерировать текст"}
-      </button>
-      <FormStatus error={error} done={done} doneText="Текст готов — он первым в списке ниже." />
+      <div className={cx("card-pad", t.form)}>
+        <Field
+          label="Слова"
+          hint={`Через пробел или запятую, до 20${fromDictionary ? "; пусто — из моего словаря" : ""}`}
+        >
+          <textarea
+            className="textarea"
+            value={words}
+            onChange={(e) => setWords(e.target.value)}
+            rows={2}
+            required={!fromDictionary}
+          />
+        </Field>
+        <div className={t.selects}>
+          <Field label="Уровень">
+            <select className="select" value={level} onChange={(e) => setLevel(e.target.value)}>
+              {levels.map((l) => (
+                <option key={l}>{l}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Жанр">
+            <select className="select" value={genre} onChange={(e) => setGenre(e.target.value)}>
+              {genres.map((g) => (
+                <option key={g} value={g}>
+                  {genreLabel(g)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Слов в тексте">
+            <input
+              className="input"
+              type="number"
+              min={50}
+              max={400}
+              step={10}
+              value={maxWords}
+              onChange={(e) => setMaxWords(Number(e.target.value))}
+            />
+          </Field>
+        </div>
+        <div className={t.submit}>
+          <Button type="submit" variant="primary" size="lg" blockOnPhone busy={busy} disabled={busy}>
+            {!busy && <Icon name="spark" />}
+            {busy ? "Генерируем… (до минуты)" : "Сгенерировать текст"}
+          </Button>
+          <FormStatus error={error} done={done} doneText="Текст готов — он первым в списке ниже." />
+        </div>
+        {busy && <Skeleton lines={4} label="Текст пишется" />}
+      </div>
     </form>
   );
 }

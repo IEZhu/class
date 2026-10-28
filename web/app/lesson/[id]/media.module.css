@@ -1,0 +1,360 @@
+/* Медиа урока (DESIGN §4.5, §6.3): запись с транскриптом, живой класс,
+   доска. Сторонние виджеты (Plyr, LiveKit, Excalidraw) держат свой CSS;
+   здесь — контейнеры вокруг них и транскрипт. */
+
+/* Сообщение api с маленькой буквы — в плашке с заглавной */
+.cap {
+  display: inline-block;
+}
+
+.cap::first-letter {
+  text-transform: uppercase;
+}
+
+/* ---------- Запись и транскрипт ---------- */
+
+/* Плеер слева, транскрипт справа во всю высоту; под плеером — словарь
+   урока. Уже 1024px: плеер, транскрипт, словарь — друг под другом */
+.replay {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "player transcript"
+    "below transcript";
+  gap: var(--sp-5);
+  align-items: start;
+}
+
+.replayPlayer {
+  grid-area: player;
+  min-width: 0;
+}
+
+.replayTranscript {
+  grid-area: transcript;
+  min-width: 0;
+  align-self: stretch;
+}
+
+.replayBelow {
+  grid-area: below;
+  min-width: 0;
+}
+
+/* Plyr: свой CSS, основной цвет — фирменный (переменная из plyr 3.8) */
+.player {
+  --plyr-color-main: var(--c-primary);
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--c-media-bg);
+}
+
+.video {
+  display: block;
+  width: 100%;
+  /* Место 16:9 и до метаданных записи — как у заглушки: страница не прыгает,
+     когда браузер узнаёт размер кадра (CLS). Запись Egress — 16:9 */
+  aspect-ratio: 16 / 9;
+}
+
+.playerLoading {
+  display: grid;
+  place-items: center;
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.playerNotice {
+  margin-top: var(--sp-2);
+}
+
+/* Транскрипт: карточка во всю высоту экрана, список прокручивается сам —
+   его прокрутку ведёт подсветка звучащей реплики */
+.transcript {
+  position: sticky;
+  top: calc(var(--shell-top) + var(--lesson-nav-h, 0px) + var(--sp-4));
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - var(--shell-top) - var(--lesson-nav-h, 0px) - var(--sp-8));
+  min-height: 320px;
+}
+
+.transcript > :global(.card-head) {
+  flex: none;
+}
+
+.count {
+  margin-left: auto;
+}
+
+.note {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+.list {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-2) var(--sp-3) var(--sp-4);
+}
+
+.group + .group {
+  margin-top: var(--sp-3);
+}
+
+/* Конец начала транскрипта с сервера: остальные реплики ещё загружаются или не
+   загрузились — тогда ошибка и «Повторить» */
+.more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-3) var(--sp-2) 0;
+}
+
+.speaker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* Реплика: время-кнопка, текст, правка; звучащая — фон и полоса слева */
+.utt {
+  display: grid;
+  grid-template-columns: minmax(48px, max-content) minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: start;
+  padding: 4px var(--sp-2) 4px 5px;
+  border-left: 3px solid transparent;
+  border-radius: var(--r-md);
+  line-height: var(--lh-read);
+}
+
+.utt:hover {
+  background: var(--c-surface-2);
+}
+
+.utt > :global(.ts) {
+  margin-top: 2px;
+}
+
+.utt > :global(.icon-btn) {
+  margin-top: -2px;
+}
+
+.active,
+.active:hover {
+  background: var(--c-live-soft);
+  border-left-color: var(--c-live);
+}
+
+.editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.uttBody {
+  min-width: 0;
+}
+
+.uttText {
+  cursor: pointer;
+}
+
+.edited {
+  vertical-align: 1px;
+}
+
+.editor {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+}
+
+/* «Кто говорит»: метка, человек, первая реплика для узнавания голоса */
+.speakers {
+  flex: none;
+  padding: var(--sp-1) var(--sp-5);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.speakers > summary {
+  font-size: var(--fs-sm);
+}
+
+.speakerRows {
+  display: grid;
+  gap: var(--sp-3);
+  padding: 0 0 var(--sp-4);
+}
+
+.speakerRow {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-3);
+  align-items: center;
+}
+
+.speakerRow > .preview {
+  grid-column: 2;
+}
+
+.preview {
+  justify-content: flex-start;
+  justify-self: start;
+  max-width: 100%;
+  height: auto;
+  padding-block: 6px;
+  white-space: normal;
+  text-align: left;
+  font-weight: 500;
+}
+
+/* ---------- Живой урок ---------- */
+
+.liveTabs {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.liveTabs [role="tab"] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Сцена: цвета видео в обеих темах, внутри — приглашение войти */
+.stage {
+  display: grid;
+  place-items: center;
+  min-height: min(56vh, 520px);
+  padding: var(--sp-8) var(--sp-5);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-lg);
+  background: var(--c-media-bg);
+  color: var(--c-media-fg);
+  /* Фокус на тёмной сцене — светлым кольцом: фирменный на ней ниже 3:1 */
+  --c-focus: var(--c-media-fg);
+}
+
+.stageInvite {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-4);
+  max-width: 460px;
+  text-align: center;
+}
+
+.stageIcon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--c-media-fg) 12%, transparent);
+}
+
+.stageAlert {
+  text-align: left;
+}
+
+.roomWrap {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+/* LiveKit со своей тёмной темой: сцена задаёт высоту и скругление */
+.stageLive {
+  height: min(70vh, 720px);
+  min-height: 360px;
+  overflow: hidden;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-lg);
+  background: var(--c-media-bg);
+}
+
+.lkRoom {
+  height: 100%;
+}
+
+/* ---------- Доска ---------- */
+
+.board {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+/* Excalidraw светлый в обеих темах: светлый остров с рамкой */
+.boardCanvas {
+  height: max(400px, 70vh);
+  overflow: hidden;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+}
+
+.boardLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 1023px) {
+  .replay {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas:
+      "player"
+      "transcript"
+      "below";
+  }
+
+  /* Под плеером список реплик — своей прокруткой до 60% экрана: страница
+     прокручивается мимо него, подсветка реплики остаётся в списке.
+     Высоту держит список, а не карточка: раскрытое «Кто говорит» его
+     не сжимает */
+  .transcript {
+    position: static;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .list {
+    max-height: 60vh;
+  }
+
+  .stage {
+    min-height: 320px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* Plyr на телефоне: без ползунка громкости (кнопка «Без звука» остаётся) —
+     ширина уходит полосе перемотки */
+  .player :global(.plyr__volume input[type="range"]) {
+    display: none;
+  }
+
+  .speakers {
+    padding-inline: var(--sp-4);
+  }
+
+  .speakerRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .speakerRow > .preview {
+    grid-column: 1;
+  }
+
+  .stage {
+    padding: var(--sp-6) var(--sp-4);
+  }
+}

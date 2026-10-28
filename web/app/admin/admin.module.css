@@ -1,0 +1,339 @@
+/* Люди и группы (DESIGN §6.11): раскладка этой страницы. Общие классы
+   (.card, .table, .field, .btn, .pill, .chip) — в globals.css. */
+
+/* Заголовок раздела: h2 со счётчиком и действие справа */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.count {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-full);
+  background: var(--c-surface-3);
+  color: var(--c-text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  vertical-align: middle;
+}
+:global(.chip) .count {
+  background: var(--c-primary-soft);
+  color: var(--c-primary-strong);
+}
+
+/* Формы: поля сеткой (от 2 колонок), кнопки и итог в строку */
+.formGrid {
+  display: grid;
+  gap: var(--sp-4);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.inlineForm {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+}
+.inlineRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2) var(--sp-3);
+}
+.grow {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.level {
+  flex: 0 1 120px;
+}
+.issued {
+  display: block;
+}
+
+/* Таблицы внутри карточек: углы шапки таблицы не вылезают за радиус */
+.tableCard {
+  overflow: hidden;
+}
+.tableCard :global(.table) tr:last-child > td {
+  border-bottom: 0;
+}
+.tableCard :global(.table) td {
+  vertical-align: middle;
+}
+/* Края таблицы — по отступу шапки карточки */
+@media (min-width: 768px) {
+  .tableCard :global(.table) :is(th, td):first-child {
+    padding-left: var(--sp-5);
+  }
+  .tableCard :global(.table) :is(th, td):last-child {
+    padding-right: var(--sp-5);
+  }
+  /* Поле и кнопка формы в строке не переносятся: поле сжимается */
+  .inlineRow {
+    flex-wrap: nowrap;
+  }
+}
+.strong {
+  font-weight: 600;
+  color: var(--c-text);
+}
+/* Длинный email переносится сперва после «@» и точек (<Email>,
+   lib/email-parts), а посреди слова — только кусок шире колонки: иначе он
+   задавал бы ширину таблицы, и та вылезала бы из карточки (WCAG 1.4.10) */
+.email {
+  overflow-wrap: anywhere;
+}
+/* Приглашения и архив таблицей: колонке адреса — место под адрес, иначе
+   «где угодно» сжимал её, и адреса рвались посреди слова; больше места
+   шести колонкам карточки 960px не дают */
+@media (min-width: 1280px) {
+  .rows .email {
+    min-width: 14rem;
+  }
+}
+
+/* Скрытый текст для чтения с экрана (Email): не попадает в выделение и копирование */
+.noSelect {
+  user-select: none;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+.nameLine {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.actionCell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  vertical-align: middle;
+}
+.rowAction {
+  display: inline-grid;
+  justify-items: end;
+  gap: var(--sp-1);
+  white-space: normal;
+}
+.search {
+  display: grid;
+  gap: var(--sp-2);
+  border-bottom: 1px solid var(--c-border);
+}
+.search :global(.input) {
+  max-width: 420px;
+}
+
+/* Люди: строка человека и раскрываемая строка действий под ней */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.toggle :global(.i) {
+  transition: transform var(--dur) var(--ease);
+}
+.toggle[aria-expanded="true"] {
+  background: var(--c-primary-soft);
+  color: var(--c-primary-strong);
+}
+.toggle[aria-expanded="true"] :global(.i) {
+  transform: rotate(180deg);
+}
+.person.isOpen > td {
+  border-bottom-color: transparent;
+}
+/* Последний человек с закрытыми действиями — без линии над краем карточки */
+.people tbody > .person:nth-last-child(2):not(.isOpen) > td,
+.people tbody > .person:nth-last-child(2):not(.isOpen) {
+  border-bottom: 0;
+}
+.details > td {
+  background: var(--c-surface-2);
+  padding: var(--sp-4);
+}
+.people tbody tr.details:hover {
+  background: var(--c-surface-2);
+}
+.personActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-4) var(--sp-8);
+}
+.personActions > .inlineForm {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+.archiveAction {
+  margin-left: auto;
+  align-self: flex-end;
+}
+
+/* Приглашения и архив до 1280px — строками-карточками: имя сверху, под
+   ним колонки с подписями, кнопка — у правого края. Шесть колонок с
+   адресом в карточку на планшете и на ноутбуке с боковой панелью не
+   помещаются: «Отозвать» уезжал за её край, а email сжимался в столбик
+   (DESIGN §3.7, §6.11). На телефоне — table--stack из globals.css */
+@media (min-width: 768px) and (max-width: 1279px) {
+  .rows thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .rows,
+  .rows tbody {
+    display: block;
+    width: 100%;
+  }
+  .rows tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--sp-2) var(--sp-6);
+    padding: var(--sp-3) var(--sp-5);
+    border-bottom: 1px solid var(--c-border);
+  }
+  .tableCard .rows tr:last-child {
+    border-bottom: 0;
+  }
+  /* Сильнее отступов краёв таблицы выше (:first-child, :last-child) */
+  .tableCard .rows :is(td, td:first-child, td:last-child) {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+  .rows td:first-child {
+    flex-basis: 100%;
+  }
+  .rows td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--c-text-muted);
+  }
+  .rows .email {
+    flex: 1 1 14rem;
+    min-width: 0;
+  }
+  .rows .actionCell {
+    width: auto;
+    margin-left: auto;
+  }
+}
+
+/* Телефон: люди — карточками (имя и роль, email, группы и кнопка
+   раскрытия), остальные таблицы — table--stack из globals.css */
+@media (max-width: 767px) {
+  .people thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .people,
+  .people tbody {
+    display: block;
+    width: 100%;
+  }
+  .person {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name role"
+      "email email"
+      "groups toggle";
+    align-items: center;
+    gap: var(--sp-1) var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--c-border);
+  }
+  .person.isOpen {
+    border-bottom-color: transparent;
+  }
+  .person > td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+  .cellName {
+    grid-area: name;
+  }
+  .cellRole {
+    grid-area: role;
+  }
+  .cellEmail {
+    grid-area: email;
+    color: var(--c-text-muted);
+  }
+  .cellGroups {
+    grid-area: groups;
+  }
+  .cellToggle {
+    grid-area: toggle;
+    justify-self: end;
+    width: auto;
+  }
+  .details {
+    display: block;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .details > td {
+    display: block;
+    padding: var(--sp-4);
+  }
+  .personActions {
+    display: grid;
+    gap: var(--sp-5);
+  }
+  .personActions > .inlineForm {
+    max-width: none;
+  }
+  .archiveAction {
+    margin-left: 0;
+    justify-items: start;
+  }
+  .actionCell {
+    text-align: left;
+    width: auto;
+  }
+  .rowAction {
+    justify-items: start;
+  }
+  /* Кнопки в строках на телефоне — 40px (DESIGN §6.11) */
+  .rowButton {
+    min-height: var(--h-md);
+  }
+  .grow,
+  .level {
+    flex-basis: 100%;
+  }
+  .inlineRow > :global(.btn) {
+    width: 100%;
+    min-height: var(--h-touch);
+  }
+  .search :global(.input) {
+    max-width: none;
+  }
+}
