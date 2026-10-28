@@ -14,7 +14,7 @@ import {
   restartClock,
   scheduleText,
   sourceLabel,
-  verdictText,
+  verdictParts,
 } from "./cloze-session.ts";
 
 test("цифры выбирают вариант только до ответа и в режиме вариантов", () => {
@@ -59,9 +59,9 @@ test("время ответа: заново с новым пунктом, с п�
 
 test("итог ответа и график", () => {
   const base = { answer: "ran", rating: "easy", counted: true } as const;
-  assert.equal(verdictText({ ...base, correct: true, exact: true }), "Верно!");
-  assert.equal(verdictText({ ...base, correct: true, exact: false }), "Верно — в предложении «ran»");
-  assert.equal(verdictText({ ...base, correct: false, exact: false, rating: "again" }), "Неверно — в предложении «ran»");
+  assert.deepEqual(verdictParts({ ...base, correct: true, exact: true }), { label: "Верно!", word: null });
+  assert.deepEqual(verdictParts({ ...base, correct: true, exact: false }), { label: "Верно — в предложении", word: "ran" });
+  assert.deepEqual(verdictParts({ ...base, correct: false, exact: false, rating: "again" }), { label: "Неверно — в предложении", word: "ran" });
   assert.equal(scheduleText({ ...base, correct: true, exact: true }), "в график повторений: легко");
   assert.match(scheduleText({ ...base, correct: true, exact: true, counted: false }), /не засчитан/);
   assert.equal(sourceLabel("material"), "из материалов урока");

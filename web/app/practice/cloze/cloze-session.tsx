@@ -17,10 +17,10 @@ import {
   restartClock,
   scheduleText,
   sourceLabel,
-  verdictText,
+  verdictParts,
 } from "../../../lib/cloze-session";
-import type { ClozeClock, ClozeCredit, ClozeMode } from "../../../lib/cloze-session";
-import { ownsKey } from "../../../lib/practice-keys";
+import type { ClozeClock, ClozeCredit, ClozeMode, ClozeVerdict } from "../../../lib/cloze-session";
+import { isSessionKey, SESSION_PROPS } from "../../../lib/practice-keys";
 import { reviewId } from "../../../lib/review-session";
 import ClickableText from "../../clickable-text";
 import { RequestError, requestJson } from "../../forms";
@@ -33,6 +33,7 @@ import { Icon } from "../../ui/icons";
 import { Kbd } from "../../ui/kbd";
 import { Pill } from "../../ui/pill";
 import s from "../practice.module.css";
+import { useSessionFocus } from "../session-focus";
 
 function newAttemptId(): string {
   return reviewId(crypto.getRandomValues(new Uint8Array(16)));
@@ -44,6 +45,9 @@ const modes: { mode: ClozeMode; label: string }[] = [
   { mode: "choice", label: "Варианты" },
   { mode: "typing", label: "Ввод слова" },
 ];
+
+// Надпись клавиши Enter — английское слово на клавише (WCAG 3.1.2)
+const enterKey = <span lang="en">Enter</span>;
 
 // ClozeSession — проход выдачи: предложение с пропуском, ответ кнопкой
 // (клавиши 1–4) или вводом, итог и следующий пункт по Enter. attempt_id
@@ -70,6 +74,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   const attemptRef = useRef<string | null>(null);
   const shownAt = useRef(0);
   const clock = useRef<ClozeClock | null>(null);
+  const sessionRef = useRef<HTMLElement>(null);
   const item: ClozeItem | undefined = page.items[index];
   const total = page.items.length;
   // null — варианты пункта ещё не пришли (pending)
@@ -156,14 +161,14 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
     }
   }
 
-  // Клавиши — на всё окно. Поля ввода, попап и слова текста не
-  // перехватываются; Enter и пробел на кнопке или ссылке — их собственное
-  // нажатие (lib/practice-keys). Обработчик переподписывается на каждый
-  // рендер: видит текущий пункт
+  // Клавиши — только с фокусом в сессии (WCAG 2.1.4). Поля ввода, попап
+  // и слова текста не перехватываются; Enter и пробел на кнопке или
+  // ссылке — их собственное нажатие (lib/practice-keys). Обработчик
+  // переподписывается на каждый рендер: видит текущий пункт
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!item || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (ownsKey(e.target instanceof Element ? e.target : null, e.key)) return;
+      if (!isSessionKey(e.target instanceof Element ? e.target : null, e.key)) return;
       const action = clozeKeyAction(e.key, result !== null, mode, options?.length ?? 0);
       if (!action) return;
       e.preventDefault();
@@ -173,6 +178,9 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // Фокус — в сессии с начала, после ответа и «Дальше»
+  useSessionFocus(sessionRef, `${index}:${result !== null}`);
 
   function submitTyped(e: FormEvent) {
     e.preventDefault();
@@ -192,7 +200,7 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
   }
   const progress = { "--progress": `${(100 * done) / total}%` } as CSSProperties;
   return (
-    <section className={s.session}>
+    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} className={s.session}>
       <div className={s.bar}>
         <div className={s.barRow}>
           <span>
@@ -314,7 +322,11 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
           {/* Итог для чтения с экрана: регион есть с показа пункта, поэтому
               появившийся ответ объявляется */}
           <p className="sr-only" role="status">
-            {result && `${verdictText(result)} — ${scheduleText(result)}`}
+            {result && (
+              <>
+                <Verdict result={result} /> — {scheduleText(result)}
+              </>
+            )}
           </p>
           {result && (
             <Feedback
@@ -348,11 +360,11 @@ export default function ClozeSession({ page, studentId }: { page: ClozePage; stu
             </span>
           ) : (
             <span>
-              <Kbd>Enter</Kbd> проверить
+              <Kbd>{enterKey}</Kbd> проверить
             </span>
           )}
           <span>
-            <Kbd>Enter</Kbd> дальше
+            <Kbd>{enterKey}</Kbd> дальше
           </span>
         </p>
       )}
@@ -391,6 +403,18 @@ function ItemSource({ item, credit: c }: { item: ClozeItem; credit: ClozeCredit 
   );
 }
 
+// Verdict — итог ответа строкой; слово из предложения — английское,
+// с lang="en" (WCAG 3.1.2)
+function Verdict({ result }: { result: ClozeVerdict }) {
+  const { label, word } = verdictParts(result);
+  if (word === null) return label;
+  return (
+    <>
+      {label} «<span lang="en">{word}</span>»
+    </>
+  );
+}
+
 // Feedback — итог ответа: верно ли, что было в пропуске, что стало
 // с графиком, перевод предложения Tatoeba с подписью его автора (CC BY)
 function Feedback({
@@ -407,7 +431,9 @@ function Feedback({
       <div className={cx(s.feedback, result.correct ? s.ok : s.bad)}>
         <p className={s.verdict}>
           <Icon name={result.correct ? "check" : "x"} />
-          {verdictText(result)}
+          <span>
+            <Verdict result={result} />
+          </span>
         </p>
         <p className={s.schedule}>{scheduleText(result)}</p>
         {result.translation && (
@@ -426,7 +452,7 @@ function Feedback({
       </div>
       <div className={s.next}>
         <Button type="button" variant="primary" size="lg" blockOnPhone className={s.onPrimary} autoFocus onClick={onNext}>
-          Дальше <Kbd>Enter</Kbd>
+          Дальше <Kbd>{enterKey}</Kbd>
         </Button>
       </div>
     </>

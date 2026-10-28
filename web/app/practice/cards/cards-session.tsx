@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
 import type { PracticeCard, PracticeQueue, ReviewResult } from "../../../lib/api";
-import { ownsKey } from "../../../lib/practice-keys";
+import { isSessionKey, SESSION_PROPS } from "../../../lib/practice-keys";
 import { delayLabel, keyAction, RATINGS, reviewId } from "../../../lib/review-session";
 import type { Rating } from "../../../lib/review-session";
 import ClickableText, { ExampleAuthors } from "../../clickable-text";
@@ -17,6 +17,7 @@ import { cx } from "../../ui/cx";
 import { EmptyState } from "../../ui/empty";
 import { Kbd } from "../../ui/kbd";
 import s from "../practice.module.css";
+import { useSessionFocus } from "../session-focus";
 
 function newReviewId(): string {
   return reviewId(crypto.getRandomValues(new Uint8Array(16)));
@@ -46,6 +47,7 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
   // (карточка на шаге обучения вернётся через минуты)
   const [nextDue, setNextDue] = useState<string | null>(queue.next_due_at);
   const idRef = useRef<string | null>(null);
+  const sessionRef = useRef<HTMLElement>(null);
   const card: PracticeCard | undefined = queue.items[index];
   const total = queue.items.length;
 
@@ -85,14 +87,14 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
     }
   }
 
-  // Клавиши — на всё окно. Ввод в поля, попап и слова текста не
-  // перехватываются; пробел и Enter на кнопке или ссылке — их собственное
-  // нажатие (lib/practice-keys). Обработчик переподписывается на каждый
-  // рендер: видит текущую карточку
+  // Клавиши — только с фокусом в сессии (WCAG 2.1.4). Ввод в поля, попап
+  // и слова текста не перехватываются; пробел и Enter на кнопке или
+  // ссылке — их собственное нажатие (lib/practice-keys). Обработчик
+  // переподписывается на каждый рендер: видит текущую карточку
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!card || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (ownsKey(e.target instanceof Element ? e.target : null, e.key)) return;
+      if (!isSessionKey(e.target instanceof Element ? e.target : null, e.key)) return;
       const action = keyAction(e.key, flipped);
       if (!action) return;
       e.preventDefault();
@@ -103,10 +105,18 @@ export default function CardsSession({ queue, studentId }: { queue: PracticeQueu
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Фокус — в сессии с начала и после переворота и оценки
+  useSessionFocus(sessionRef, `${index}:${flipped}`);
+
+  // Пустая выдача — только итог, без счёта «0 из 0»
+  if (total === 0) {
+    return <Finished queue={queue} nextDue={nextDue} reviewed={false} onMore={() => router.refresh()} />;
+  }
+
   const done = Math.min(index, total);
-  const progress = { "--progress": `${total ? (100 * done) / total : 0}%` } as CSSProperties;
+  const progress = { "--progress": `${(100 * done) / total}%` } as CSSProperties;
   return (
-    <section className={s.session}>
+    <section ref={sessionRef} tabIndex={-1} {...SESSION_PROPS} className={s.session}>
       <div className={s.bar}>
         <div className={s.barRow}>
           <span>
@@ -233,7 +243,10 @@ function CardBack({ card }: { card: PracticeCard }) {
           <ol className={s.defs}>
             {card.definitions.map((d, i) => (
               <li key={i}>
-                <em className={s.pos}>{d.pos}</em> <ClickableText text={d.glosses.join("; ")} />
+                <em lang="en" className={s.pos}>
+                  {d.pos}
+                </em>{" "}
+                <ClickableText text={d.glosses.join("; ")} />
                 {d.translations_ru.length > 0 && (
                   <span className="muted">
                     {" — "}
