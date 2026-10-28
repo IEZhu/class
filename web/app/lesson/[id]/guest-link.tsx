@@ -4,8 +4,10 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 
 import { FormStatus, request, requestJson, useSubmit } from "../../forms";
-
-const rowStyle = { display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" } as const;
+import { Button } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { Icon } from "../../ui/icons";
+import styles from "./page.module.css";
 
 // Гостевая ссылка на событие (ADR-010): многоразовая, по ней заходят все,
 // представившись именем. Показывается только организатору и только
@@ -63,37 +65,58 @@ export default function GuestLink({ lessonId, hasLink }: { lessonId: number; has
   }
 
   return (
-    <div style={{ margin: "1rem 0" }}>
-      <div style={rowStyle}>
-        <form onSubmit={confirmIssue} style={{ display: "inline" }}>
-          <button type="submit" disabled={issue.busy}>
-            {issue.busy ? "Готовим…" : exists ? "Выпустить новую ссылку" : "Гостевая ссылка"}
-          </button>
-        </form>
-        {exists && (
-          <form onSubmit={confirmRevoke} style={{ display: "inline" }}>
-            <button type="submit" disabled={revoke.busy}>
-              Отозвать
-            </button>
-          </form>
-        )}
-        <FormStatus error={issue.error ?? revoke.error} done={false} doneText="" />
-      </div>
+    <section className={cx("card", styles.guest)} aria-labelledby="guest-link-title">
+      <h2 id="guest-link-title" className={styles.guestTitle}>
+        <Icon name="people" size="sm" />
+        Гостевая ссылка
+      </h2>
       {link && (
-        <div style={{ ...rowStyle, marginTop: "0.5rem" }}>
-          <input readOnly value={link} onFocus={(e) => e.target.select()} style={{ padding: "0.5rem", minWidth: "22rem" }} />
-          <button type="button" onClick={copy}>
+        <div className="copy-field">
+          <input
+            className="input"
+            readOnly
+            value={link}
+            aria-label="Гостевая ссылка"
+            onFocus={(e) => e.target.select()}
+          />
+          <Button type="button" variant="secondary" onClick={copy}>
+            <Icon name={copied ? "check" : "copy"} size="sm" />
             {copied ? "Скопировано" : "Скопировать"}
-          </button>
+          </Button>
         </div>
       )}
+      {/* Смена надписи кнопки сама не озвучивается — итог копирования здесь */}
+      <span className="sr-only" role="status">
+        {copied ? "Ссылка скопирована" : ""}
+      </span>
       {exists && (
-        <p style={{ color: "#666", margin: "0.5rem 0 0" }}>
+        <p className="hint">
           {link
             ? "Ссылка многоразовая: по ней зайдут все, кому вы её отправите. Перевыпуск отключает предыдущую."
             : "Ссылка уже выпущена и действует. Показать её ещё раз нельзя — хранится только отпечаток; нужна снова — выпустите новую, старая при этом перестанет работать."}
         </p>
       )}
-    </div>
+      <div className={styles.guestActions}>
+        <form onSubmit={confirmIssue}>
+          <Button
+            type="submit"
+            variant={exists ? "secondary" : "primary"}
+            size="sm"
+            disabled={issue.busy}
+            busy={issue.busy}
+          >
+            {issue.busy ? "Готовим…" : exists ? "Выпустить новую ссылку" : "Выпустить ссылку"}
+          </Button>
+        </form>
+        {exists && (
+          <form onSubmit={confirmRevoke}>
+            <Button type="submit" variant="danger-ghost" size="sm" disabled={revoke.busy} busy={revoke.busy}>
+              Отозвать
+            </Button>
+          </form>
+        )}
+      </div>
+      <FormStatus error={issue.error ?? revoke.error} done={false} doneText="" />
+    </section>
   );
 }
