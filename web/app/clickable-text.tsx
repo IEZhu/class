@@ -9,6 +9,7 @@ import { isTextSelection } from "../lib/selection";
 import type { TermStatus } from "../lib/term-status";
 import { sentenceAround, tokenize, uniqueKeys } from "../lib/tokenize";
 import type { Token } from "../lib/tokenize";
+import { isRussianPart } from "../lib/word-nav";
 import styles from "./clickable-text.module.css";
 import { RequestError, requestJson } from "./forms";
 import TermStatusControl, { termStatuses } from "./term-status-control";
@@ -22,7 +23,8 @@ import { Skeleton } from "./ui/skeleton";
 // S3-1, ADR-026): материалы, домашка, транскрипт, субтитры, Tatoeba,
 // сгенерированные тексты. Режет текст на слова (lib/tokenize), красит
 // их по статусу в словаре зрителя и по клику открывает попап слова.
-// Признак слова в DOM — атрибут data-i (номер токена).
+// Корень — lang="en" (DESIGN §5.1). Признак слова в DOM — атрибут data-i
+// (номер токена).
 
 interface Scope {
   lessonId: number | null;
@@ -96,6 +98,20 @@ export default function ClickableText({
 }) {
   const scope = useContext(ScopeContext);
   const tokens = useMemo(() => tokenize(text), [text]);
+  // Куски между словами — один раз на текст; с кириллицей — в lang="ru"
+  const parts = useMemo(
+    () =>
+      tokens.map((t, i) =>
+        t.key ? null : isRussianPart(t.text) ? (
+          <span key={i} lang="ru">
+            {t.text}
+          </span>
+        ) : (
+          t.text
+        ),
+      ),
+    [tokens],
+  );
   const wordCache = useRef<WordCache | null>(null);
   useSyncExternalStore(termStatuses.subscribe, termStatuses.getVersion, serverVersion);
   const [popup, setPopup] = useState<OpenPopup | null>(null);
@@ -169,9 +185,9 @@ export default function ClickableText({
   const cache = wordCache.current?.tokens === tokens ? wordCache.current : (wordCache.current = { tokens, cls: [], els: [] });
 
   return (
-    <span className={styles.text} onClick={handleClick}>
+    <span lang="en" className={styles.text} onClick={handleClick}>
       {tokens.map((t, i) => {
-        if (!t.key) return t.text;
+        if (!t.key) return parts[i];
         const cls = WORD_CLASS[(studentId !== null && termStatuses.statusOf(studentId, t.key)) || 0];
         let el = cache.cls[i] === cls ? cache.els[i] : undefined;
         if (!el) {
@@ -267,11 +283,11 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
         <div className="sheet-handle" aria-hidden="true" />
         <div className={styles.head}>
           <div className={styles.titles}>
-            <h2 className={styles.lemma}>
+            <h2 lang="en" className={styles.lemma}>
               {data?.lemma ?? word.surface}
             </h2>
             {data && data.lemma !== word.key && (
-              <p className={styles.form}>
+              <p lang="en" className={styles.form}>
                 {word.surface}
               </p>
             )}
@@ -296,7 +312,10 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: () => void }
                   <ol className={styles.defs}>
                     {data.definitions.map((d, i) => (
                       <li key={i}>
-                        <span className={styles.pos}>{d.pos}</span> {d.word !== data.lemma && <b>{d.word} </b>}
+                        <span lang="en" className={styles.pos}>
+                          {d.pos}
+                        </span>{" "}
+                        {d.word !== data.lemma && <b lang="en">{d.word} </b>}
                         {d.glosses.map((g, j) => (
                           <span key={j}>
                             {j > 0 && "; "}
