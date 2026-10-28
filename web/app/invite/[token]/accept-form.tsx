@@ -16,7 +16,8 @@ export default function AcceptForm({ token }: { token: string }) {
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
   // Несовпадение паролей — ошибка поля «Ещё раз», а не всей формы: фокус
-  // уходит в поле, и программа экранного доступа читает его вместе с ошибкой
+  // уходит в поле, и программа экранного доступа читает его вместе с ошибкой.
+  // Правка любого из двух полей снимает ошибку до следующей отправки
   const [mismatch, setMismatch] = useState(false);
   const repeatRef = useRef<HTMLInputElement>(null);
 
@@ -46,7 +47,10 @@ export default function AcceptForm({ token }: { token: string }) {
           className="input"
           type="password"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setMismatch(false);
+          }}
           required
           minLength={8}
           autoComplete="new-password"
@@ -58,7 +62,10 @@ export default function AcceptForm({ token }: { token: string }) {
           className="input"
           type="password"
           value={repeat}
-          onChange={(e) => setRepeat(e.target.value)}
+          onChange={(e) => {
+            setRepeat(e.target.value);
+            setMismatch(false);
+          }}
           required
           minLength={8}
           autoComplete="new-password"
