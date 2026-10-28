@@ -52,7 +52,9 @@ export default async function AccountPage({
           </div>
         </PageHeader>
         <div className="stack">
-          <AccountForms name={me.name} />
+          {/* У гостя открытого события пароля нет (ADR-010): форма смены
+              могла бы только упасть (DESIGN §5.3) */}
+          <AccountForms name={me.name} canChangePassword={me.role !== "guest"} />
           {calendar && <GoogleCalendar status={calendar} result={google} />}
         </div>
       </main>

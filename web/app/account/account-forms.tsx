@@ -9,13 +9,20 @@ import { cx } from "../ui/cx";
 import { Field } from "../ui/field";
 import styles from "./account.module.css";
 
-export default function AccountForms({ name: initialName }: { name: string }) {
+export default function AccountForms({
+  name: initialName,
+  canChangePassword,
+}: {
+  name: string;
+  // false у гостя: учётка гостя без пароля (ADR-010)
+  canChangePassword: boolean;
+}) {
   const router = useRouter();
 
   return (
     <>
       <NameForm initialName={initialName} onSaved={() => router.refresh()} />
-      <PasswordForm />
+      {canChangePassword && <PasswordForm />}
     </>
   );
 }
