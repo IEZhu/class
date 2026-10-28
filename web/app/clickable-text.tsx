@@ -80,6 +80,8 @@ interface OpenPopup extends WordClick {
   keyboard: boolean;
   top: number;
   left: number;
+  // Рамка открытого слова — его прямоугольник в координатах документа
+  ring: { top: number; left: number; width: number; height: number };
 }
 
 // Готовые элементы слов текста и их классы по номеру токена
@@ -130,7 +132,7 @@ export default function ClickableText({
   // Закрытие из попапа: Escape и «Закрыть» возвращают фокус на слово,
   // клик мимо попапа — нет (фокус уходит туда, куда кликнули)
   const dismiss = useRef((restoreFocus: boolean) => {
-    const word = restoreFocus ? root.current?.querySelector<HTMLElement>(":scope > .is-open") : null;
+    const word = restoreFocus ? root.current?.querySelector<HTMLElement>(':scope > [aria-expanded="true"]') : null;
     setPopup(null);
     word?.focus();
   }).current;
@@ -173,6 +175,7 @@ export default function ClickableText({
       keyboard,
       top: rect.bottom + window.scrollY + 4,
       left: rect.left + window.scrollX,
+      ring: { top: rect.top + window.scrollY, left: rect.left + window.scrollX, width: rect.width, height: rect.height },
     }));
   }
 
@@ -244,7 +247,6 @@ export default function ClickableText({
         if (i !== tabStop && i !== openIndex) return el;
         return cloneElement(el, {
           tabIndex: i === tabStop ? 0 : -1,
-          className: i === openIndex ? `${cls} is-open` : cls,
           "aria-expanded": i === openIndex || undefined,
         });
       })}
@@ -301,8 +303,12 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
   // Фокус — на заголовок попапа (DESIGN §4.2): при открытии и при переходе
   // к другому слову — слово, на котором был фокус, пропадает на время
   // загрузки. Открытый мышью попап страницу не прокручивает, как и раньше.
+  // Фокус ставится в начале следующего кадра: клик не ждёт раскладки
+  // страницы, которую focus() иначе потребовал бы сразу, — кадр
+  // раскладывает её один раз, до отрисовки попапа.
   useEffect(() => {
-    heading.current?.focus({ preventScroll: !start.keyboard });
+    const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: !start.keyboard }));
+    return () => cancelAnimationFrame(frame);
   }, [word, start.keyboard]);
 
   useEffect(() => {
@@ -340,12 +346,18 @@ function TermPopup({ start, onClose }: { start: OpenPopup; onClose: (restoreFocu
   // телефоне .popover их не читает и становится листом снизу
   const left = Math.max(window.scrollX + 8, Math.min(start.left, window.scrollX + window.innerWidth - POPUP_WIDTH - 8));
   const place = { "--pop-top": `${start.top}px`, "--pop-left": `${left}px` } as CSSProperties;
+  const r = start.ring;
+  const ring = { "--ring-top": `${r.top}px`, "--ring-left": `${r.left}px`, "--ring-w": `${r.width}px`, "--ring-h": `${r.height}px` } as CSSProperties;
   const status = data && scope.studentId !== null ? (termStatuses.statusOf(scope.studentId, word.key) ?? null) : null;
 
   return (
     <>
       {/* Подложка листа на телефоне: касание по ней — «мимо попапа» */}
       <div className="backdrop backdrop--phone" aria-hidden="true" />
+      {/* Рамка открытого слова (DESIGN §3.10) — отдельным слоем над ним, а
+          не outline у самого слова: outline у слова без фона заново
+          раскладывал бы весь абзац, в длинном тексте — сотни слов */}
+      <span className={styles.ring} style={ring} aria-hidden="true" />
       {/* Клики попапа по дереву React всплыли бы в обработчики вокруг
           текста (перемотка реплики): попап — не часть строки, в которой открыт */}
       <div

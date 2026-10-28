@@ -32,3 +32,11 @@
 .explain { display: grid; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--c-primary-soft); color: var(--c-text); }
 .explain .sectionTitle { color: var(--c-primary-strong); }
 .explain .sectionTitle:focus { outline: none; }
+
+/* Рамка открытого слова: слой поверх слова по его прямоугольнику
+   (--ring-*), вид — как фокус у слова */
+.ring {
+  position: absolute; top: var(--ring-top); left: var(--ring-left); z-index: var(--z-popover);
+  width: var(--ring-w); height: var(--ring-h);
+  border-radius: 3px; outline: 2px solid var(--c-focus); outline-offset: 1px; pointer-events: none;
+}
