@@ -51,7 +51,9 @@ are in Russian.
   `icon.tsx`, which Next treats as the site icon —, `local-time.tsx` for times in the viewer's zone); page
   styles live in a CSS Module next to the page, with no inline colours and no new npm packages;
   `lib/word-nav.ts` (keyboard moves between words), `lib/practice-keys.ts` (keys the practice pages leave
-  to the focused element) and `lib/initials.ts` (avatar initials) are pure and tested. Every text renders through
+  to the focused element), `lib/initials.ts` (avatar initials), `lib/popover-place.ts` (word-popup
+  placement), `lib/transcript.ts` (transcript counts, local edits over a refetch) and `lib/email-parts.ts`
+  (e-mail line breaks) are pure and tested. Every text renders through
   `app/clickable-text.tsx` (`<ClickableText>`, ADR-026); its tokenizer and status cache are pure
   functions in `lib/` tested by `npm test`. `scripts/` copies the Excalidraw fonts and the Plyr
   sprite into the git-ignored `public/excalidraw/` and `public/plyr/` before dev and build.

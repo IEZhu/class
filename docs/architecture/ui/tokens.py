@@ -114,7 +114,7 @@ def table(theme, name):
 
 
 def css():
-    out = ["/* Цвета Lingua Class (docs/architecture/ui/tokens.py css) */", ":root {", "  color-scheme: light;"]
+    out = ["/* Цвета Lingua Class (docs/architecture/ui/tokens.py css) */", ":root,", ".light-island,", ".excalidraw {", "  color-scheme: light;"]
     out += [f"  --c-{k}: {v};" for k, v in LIGHT.items()]
     out.append("}")
     dark = [f"    --c-{k}: {v};" for k, v in DARK.items()]
