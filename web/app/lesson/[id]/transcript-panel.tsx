@@ -134,13 +134,13 @@ export default function TranscriptPanel({
     (s: SpeakerLink) => {
       local.speakers.set(s.speaker_label, s);
       setTranscript(
-      (t) =>
-        t && {
-          ...t,
-          utterances: t.utterances.map((it) =>
-            it.speaker_label === s.speaker_label ? { ...it, user_id: s.user_id, speaker_name: s.speaker_name } : it,
-          ),
-        },
+        (t) =>
+          t && {
+            ...t,
+            utterances: t.utterances.map((it) =>
+              it.speaker_label === s.speaker_label ? { ...it, user_id: s.user_id, speaker_name: s.speaker_name } : it,
+            ),
+          },
       );
     },
     [local],
