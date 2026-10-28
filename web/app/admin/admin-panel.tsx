@@ -286,7 +286,7 @@ function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => 
       <p className="small muted">Ждут перехода по ссылке.</p>
       <div className={cx("card", styles.tableCard)}>
         <div className="table-wrap">
-          <table className="table table--stack">
+          <table className={cx("table table--stack", styles.rows)}>
             <thead>
               <tr>
                 <th scope="col">Имя</th>
@@ -601,7 +601,7 @@ function ArchiveSection({ users, onDone }: { users: UserWithGroups[]; onDone: ()
       <p className="small muted">Вход закрыт, история сохранена; вернуть можно в любой момент.</p>
       <div className={cx("card", styles.tableCard)}>
         <div className="table-wrap">
-          <table className="table table--stack">
+          <table className={cx("table table--stack", styles.rows)}>
             <thead>
               <tr>
                 <th scope="col">Имя</th>
