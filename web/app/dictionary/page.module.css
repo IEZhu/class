@@ -1,6 +1,6 @@
 /* Мой словарь (DESIGN §6.5): фильтры-чипы, легенда выделения, таблица от
    768px; на телефоне строка таблицы — карточка: слово и перевод, статус,
-   урок и дата (без горизонтальной прокрутки, WCAG 1.4.10). */
+   урок и дата, «Убрать» в углу (без горизонтальной прокрутки, WCAG 1.4.10). */
 
 /* Чипы на телефоне листаются сами, страница не шире экрана */
 .filterNav { min-width: 0; }
@@ -13,6 +13,13 @@
 .word > span { display: block; }
 .lesson { font-size: var(--fs-sm); }
 .added { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+/* «Убрать» — последняя колонка, у правого края строки, вдали от статусов */
+.remove { width: 1%; text-align: right; }
+
+@media (min-width: 768px) {
+  /* Урок с датой не рвётся на три строки: сжимается перевод */
+  .lesson { min-width: 11rem; }
+}
 
 .next { margin-left: auto; }
 
@@ -21,7 +28,7 @@
   .table, .table tbody { display: block; width: 100%; }
   .table tr {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "word tr" "status status" "lesson lesson";
+    grid-template-areas: "word tr" "status status" "lesson remove";
     gap: var(--sp-2) var(--sp-3); padding: var(--sp-3) var(--sp-4);
     border-bottom: 1px solid var(--c-border);
   }
@@ -31,4 +38,5 @@
   .tr { grid-area: tr; text-align: right; }
   .status { grid-area: status; }
   .lesson { grid-area: lesson; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2); }
+  .remove { grid-area: remove; align-self: end; justify-self: end; width: auto; }
 }
