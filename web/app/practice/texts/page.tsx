@@ -5,14 +5,19 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { PracticeText, PracticeTextsPage, User } from "../../../lib/api";
 import ClickableText, { ClickableTextScope, ExampleAuthors } from "../../clickable-text";
+import { Alert } from "../../ui/alert";
+import { buttonClass } from "../../ui/button";
+import { cx } from "../../ui/cx";
+import { EmptyState } from "../../ui/empty";
+import { Icon } from "../../ui/icons";
+import { PageHeader } from "../../ui/page-header";
+import { Pill } from "../../ui/pill";
 import UserBar from "../../user-bar";
 import { GeneratedParagraphs, genreLabel } from "../text/generated-text";
+import t from "../text/text.module.css";
 
 export const metadata: Metadata = { title: "Тексты для практики" };
 
-const pageStyle = { fontFamily: "system-ui, sans-serif", maxWidth: 720, margin: "2rem auto", padding: "0 1rem" } as const;
-const cardStyle = { border: "1px solid #ddd", borderRadius: 8, padding: "0.75rem 1rem" } as const;
-const mutedStyle = { color: "#666" } as const;
 const dateFmt = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
 
 type Search = Promise<Record<string, string | string[] | undefined>>;
@@ -48,11 +53,15 @@ export default async function PracticeTextsPage({ searchParams }: { searchParams
   }
   if (me.role !== "student" && me.role !== "teacher") {
     return (
-      <main style={pageStyle}>
+      <>
         <UserBar name={me.name} role={me.role} />
-        <h1>Тексты для практики</h1>
-        <p>Подборка текстов доступна студентам и преподавателям.</p>
-      </main>
+        <main className="page">
+          <PageHeader title="Тексты для практики" />
+          <Alert tone="info" live={false}>
+            Подборка текстов доступна студентам и преподавателям.
+          </Alert>
+        </main>
+      </>
     );
   }
 
@@ -68,91 +77,154 @@ export default async function PracticeTextsPage({ searchParams }: { searchParams
   const license = page?.items.find((it) => it.source === "tatoeba");
 
   return (
-    <main style={pageStyle}>
+    <>
       <UserBar name={me.name} role={me.role} />
-      <h1>Тексты для практики</h1>
-      <p style={mutedStyle}>
-        Ваши сгенерированные тексты и предложения Tatoeba с переводом, где встречаются слова, которые вы учите;
-        сверху — где их больше.
-      </p>
-      <form method="get" action="/practice/texts" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        <input
-          name="words"
-          defaultValue={words}
-          placeholder="слова через пробел или запятую; пусто — из моего словаря"
-          style={{ flex: 1, minWidth: "16rem", padding: "0.5rem" }}
-        />
-        <button type="submit">Найти</button>
-      </form>
-      <p>
-        <Link href="/practice/text">Сгенерировать новый текст по словам →</Link>
-      </p>
-      {error && <p style={{ color: "#c92a2a" }}>{error}</p>}
-      {page && (
-        <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
-          {page.words.length > 0 && <p style={mutedStyle}>Слова поиска: {page.words.join(", ")}</p>}
-          {page.hint && (
-            <p>
-              {me.role === "student"
-                ? "В словаре нет слов, которые вы учите: добавьте их кликом по тексту урока или впишите слова в поле поиска."
-                : "Впишите слова в поле поиска."}
-            </p>
-          )}
-          {page.words.length > 0 && page.items.length === 0 && (
-            <p>
-              Ничего не нашлось — <Link href="/practice/text">сгенерируйте текст</Link> с этими словами.
-            </p>
-          )}
-          <div style={{ display: "grid", gap: "0.75rem" }}>
-            {page.items.map((item) => (
-              <PracticeItem key={`${item.source}-${item.id}`} item={item} />
-            ))}
+      <main className="page">
+        <PageHeader
+          title="Тексты для практики"
+          actions={
+            <Link href="/practice/text" className={buttonClass({ variant: "primary", blockOnPhone: true })}>
+              <Icon name="spark" />
+              Сгенерировать текст
+            </Link>
+          }
+        >
+          <p className="muted">
+            Ваши сгенерированные тексты и предложения Tatoeba с переводом, где встречаются слова, которые вы учите;
+            сверху — где их больше.
+          </p>
+        </PageHeader>
+        <form method="get" action="/practice/texts" className={t.search}>
+          <label className="label" htmlFor="words">
+            Слова
+          </label>
+          <div className={t.searchRow}>
+            <input
+              id="words"
+              className="input"
+              name="words"
+              defaultValue={words}
+              aria-describedby={error ? "words-hint words-error" : "words-hint"}
+              aria-invalid={error ? true : undefined}
+            />
+            <button type="submit" className={buttonClass({ variant: "secondary" })}>
+              <Icon name="search" />
+              Найти
+            </button>
           </div>
-          {/* CC BY 2.0 FR требует подписи: авторы — у каждого предложения (ADR-028) */}
-          {license?.source === "tatoeba" && (
-            <p style={{ ...mutedStyle, fontSize: "0.85em" }}>
-              Предложения —{" "}
-              <a href="https://tatoeba.org" target="_blank" rel="noreferrer">
-                Tatoeba
-              </a>
-              ,{" "}
-              <a href={license.attribution.license_url} target="_blank" rel="noreferrer">
-                {license.attribution.license}
-              </a>
+          <p id="words-hint" className="hint">
+            Через пробел или запятую; пусто — из моего словаря
+          </p>
+          {error && (
+            <p id="words-error" className="field-error">
+              <Icon name="error" size="sm" />
+              <span>{error}</span>
             </p>
           )}
-          <nav style={{ display: "flex", gap: "1rem", margin: "1rem 0" }}>
-            {cursor && <Link href={`/practice/texts${query(words)}`}>← В начало</Link>}
-            {page.next_cursor && <Link href={`/practice/texts${query(words, page.next_cursor)}`}>Дальше →</Link>}
-          </nav>
-        </ClickableTextScope>
-      )}
-    </main>
+        </form>
+        {page && (
+          <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
+            <div className={t.results}>
+              {page.words.length > 0 && (
+                <div className={t.words}>
+                  <span className="small muted">Слова поиска:</span>
+                  <ul className={t.tags}>
+                    {page.words.map((w) => (
+                      <li key={w}>
+                        <Pill>{w}</Pill>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {page.hint && (
+                <div className="card">
+                  {me.role === "student" ? (
+                    <EmptyState icon="dict" title="В словаре нет слов, которые вы учите">
+                      Добавьте их кликом по тексту урока или впишите слова в поле поиска.
+                    </EmptyState>
+                  ) : (
+                    <EmptyState icon="search" title="Впишите слова в поле поиска" />
+                  )}
+                </div>
+              )}
+              {page.words.length > 0 && page.items.length === 0 && (
+                <div className="card">
+                  <EmptyState icon="search" title="Ничего не нашлось">
+                    <Link href="/practice/text">Сгенерируйте текст</Link> с этими словами.
+                  </EmptyState>
+                </div>
+              )}
+              {page.items.length > 0 && (
+                <div className={t.list}>
+                  {page.items.map((item) => (
+                    <PracticeItem key={`${item.source}-${item.id}`} item={item} />
+                  ))}
+                </div>
+              )}
+              {/* CC BY 2.0 FR требует подписи: авторы — у каждого предложения (ADR-028) */}
+              {license?.source === "tatoeba" && (
+                <p className="attr">
+                  Предложения —{" "}
+                  <a href="https://tatoeba.org" target="_blank" rel="noreferrer">
+                    Tatoeba
+                  </a>
+                  ,{" "}
+                  <a href={license.attribution.license_url} target="_blank" rel="noreferrer">
+                    {license.attribution.license}
+                  </a>
+                </p>
+              )}
+            </div>
+            {(cursor || page.next_cursor) && (
+              <nav className="pager" aria-label="Страницы подборки">
+                {cursor && (
+                  <Link href={`/practice/texts${query(words)}`} className={buttonClass({ variant: "secondary" })}>
+                    ← В начало
+                  </Link>
+                )}
+                {page.next_cursor && (
+                  <Link
+                    href={`/practice/texts${query(words, page.next_cursor)}`}
+                    className={buttonClass({ variant: "secondary", className: t.next })}
+                  >
+                    Дальше →
+                  </Link>
+                )}
+              </nav>
+            )}
+          </ClickableTextScope>
+        )}
+      </main>
+    </>
   );
 }
 
 function PracticeItem({ item }: { item: PracticeText }) {
-  const matched = (
-    <p style={{ ...mutedStyle, fontSize: "0.9rem", margin: 0 }}>Ваши слова: {item.matched.join(", ")}</p>
-  );
+  const matched = <p className="small muted">Ваши слова: {item.matched.join(", ")}</p>;
   if (item.source === "generated") {
     return (
-      <article style={cardStyle}>
-        <p style={{ ...mutedStyle, margin: 0 }}>
-          Мой текст · {item.level} · {genreLabel(item.genre)} · {dateFmt.format(new Date(item.created_at))}
-        </p>
+      <article className={cx("card card-pad", t.item)}>
+        <div className={t.itemHead}>
+          <Pill tone="accent">Мой текст</Pill>
+          <span className="small muted">
+            {item.level} · {genreLabel(item.genre)} · {dateFmt.format(new Date(item.created_at))}
+          </span>
+        </div>
         <GeneratedParagraphs body={item.text} />
         {matched}
       </article>
     );
   }
   return (
-    <article style={cardStyle}>
-      <p style={{ margin: 0, lineHeight: 1.6 }}>
-        <ClickableText text={item.text} />
-      </p>
-      <p style={{ ...mutedStyle, margin: "0.25rem 0" }}>{item.translation}</p>
-      <ExampleAuthors example={item} />
+    <article className={cx("card card-pad", t.item)}>
+      <div>
+        <p className={t.sentence}>
+          <ClickableText text={item.text} />
+        </p>
+        <p className={t.translation}>{item.translation}</p>
+        <ExampleAuthors example={item} />
+      </div>
       {matched}
     </article>
   );
