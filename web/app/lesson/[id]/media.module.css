@@ -104,6 +104,14 @@
   margin-top: var(--sp-3);
 }
 
+/* Конец начала транскрипта с сервера: остальные реплики ещё загружаются */
+.more {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-3) var(--sp-2) 0;
+}
+
 .speaker {
   display: flex;
   align-items: center;

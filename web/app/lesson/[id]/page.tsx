@@ -9,6 +9,7 @@ import { initials } from "../../../lib/initials";
 import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
 import type { LessonPhase } from "../../../lib/lesson-phase";
+import { langOf } from "../../../lib/word-nav";
 import ClickableText from "../../clickable-text";
 import { Alert } from "../../ui/alert";
 import { buttonClass } from "../../ui/button";
@@ -266,12 +267,13 @@ const SSR_UTTERANCES = 40;
 
 // Транскрипт записи приходит с сервером, вместе со страницей: первые реплики
 // уже в HTML, а не появляются после гидратации и запроса из браузера (LCP).
-// 404 — транскрипта у урока нет; другой сбой — его запросит сам клиент
+// Длинный — началом и числом всех реплик (total). 404 — транскрипта у урока
+// нет; другой сбой — его запросит сам клиент
 async function loadTranscript(lessonId: number): Promise<InitialTranscript | null> {
   try {
     const t = await apiFetch<Transcript>(`/lessons/${lessonId}/transcript`);
     if (t.utterances.length <= SSR_UTTERANCES) return { transcript: t };
-    return { transcript: { ...t, utterances: t.utterances.slice(0, SSR_UTTERANCES) }, partial: true };
+    return { transcript: { ...t, utterances: t.utterances.slice(0, SSR_UTTERANCES) }, total: t.utterances.length };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return { missing: true };
     return null;
@@ -327,7 +329,9 @@ function MaterialsSection({
       {items.map((m) => (
         <article key={m.id} className={cx("card", styles.material)} aria-labelledby={`material-${m.id}`}>
           <div className={styles.materialHead}>
-            <h3 id={`material-${m.id}`}>{m.title}</h3>
+            <h3 id={`material-${m.id}`} lang={langOf(m.title)}>
+              {m.title}
+            </h3>
             {isTeacher && <DeleteMaterial materialId={m.id} title={m.title} />}
           </div>
           {/* body_md — текстом с переносами строк: разметка markdown пока
