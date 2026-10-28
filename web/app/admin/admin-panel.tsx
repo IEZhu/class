@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 import type { Group, Invite, User, UserWithGroups } from "../../lib/api";
+import { emailParts } from "../../lib/email-parts";
 import { roleLabels } from "../../lib/roles";
 import { FormStatus, request, requestJson, useSubmit } from "../forms";
 import { Alert } from "../ui/alert";
@@ -22,6 +23,21 @@ const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 
 // Дата приглашения и архива — в поясе зрителя (DESIGN §5.4)
 const shortDate: Intl.DateTimeFormatOptions = { dateStyle: "short" };
+
+// Email — адрес с местами переноса после «@» и точек (lib/email-parts):
+// в таблице длинный адрес ломается по частям, а не посреди слова
+function Email({ value }: { value: string }) {
+  return (
+    <>
+      {emailParts(value).map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && <wbr />}
+          {part}
+        </Fragment>
+      ))}
+    </>
+  );
+}
 
 // Раскладка «Люди и группы» (DESIGN §6.11): шапка с «Пригласить», чипы
 // разделов, люди таблицей (на телефоне — карточками) с раскрываемыми
@@ -304,12 +320,12 @@ function PendingInvites({ invites, onDone }: { invites: Invite[]; onDone: () => 
                 <tr key={inv.id}>
                   <td className={styles.strong}>{inv.name}</td>
                   <td data-label="Email" className={styles.email}>
-                    {inv.email}
+                    <Email value={inv.email} />
                   </td>
                   <td data-label="Роль">
                     <Pill tone="accent">{roleLabels[inv.role]}</Pill>
                   </td>
-                  <td data-label="Группа">{inv.group_name || <span className="muted">без группы</span>}</td>
+                  <td data-label="Группа">{inv.group_name || <span className={cx("muted", styles.nowrap)}>без группы</span>}</td>
                   <td data-label="Действует до" className={styles.nowrap}>
                     <LocalTime value={inv.expires_at} options={shortDate} />
                   </td>
@@ -542,7 +558,9 @@ function PersonRows({
     <>
       <tr className={cx(styles.person, open && styles.isOpen)}>
         <td className={cx(styles.strong, styles.cellName)}>{u.name}</td>
-        <td className={cx(styles.email, styles.cellEmail)}>{u.email}</td>
+        <td className={cx(styles.email, styles.cellEmail)}>
+          <Email value={u.email} />
+        </td>
         <td className={styles.cellRole}>
           <Pill tone="accent">{roleLabels[u.role]}</Pill>
         </td>
@@ -618,7 +636,7 @@ function ArchiveSection({ users, onDone }: { users: UserWithGroups[]; onDone: ()
                 <tr key={u.id} className="is-archived">
                   <td className={styles.strong}>{u.name}</td>
                   <td data-label="Email" className={styles.email}>
-                    {u.email}
+                    <Email value={u.email} />
                   </td>
                   <td data-label="Роль">
                     <Pill>{roleLabels[u.role]}</Pill>

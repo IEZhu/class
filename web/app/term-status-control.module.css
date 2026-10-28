@@ -27,3 +27,11 @@
 .compact .seg { display: flex; gap: var(--sp-2); }
 .compact .seg button { width: var(--h-sm); min-height: var(--h-sm); height: var(--h-sm); padding: 0; border-radius: var(--r-sm); font-size: var(--fs-sm); }
 .current { font-size: var(--fs-xs); font-weight: 500; color: var(--c-text-muted); white-space: nowrap; }
+
+/* Таблица словаря от 1280px (dictionary/page.module.css): слово статуса —
+   всегда рядом с сегментами, в месте под самое длинное («почти знаю»), —
+   у всех строк одна раскладка */
+@media (min-width: 1280px) {
+  .compactRow { flex-wrap: nowrap; }
+  .current { min-width: 5.5rem; }
+}
