@@ -5,15 +5,17 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "../../../lib/api";
 import type { PracticeVideo, PracticeVideoDetail, PracticeVideosPage, User, VideoTargets } from "../../../lib/api";
 import { clock } from "../../../lib/timeline";
+import { langOf } from "../../../lib/word-nav";
 import ClickableText, { ClickableTextScope } from "../../clickable-text";
+import RoleRestricted from "../../role-restricted";
 import { Alert } from "../../ui/alert";
 import { buttonClass } from "../../ui/button";
 import { cx } from "../../ui/cx";
 import { EmptyState } from "../../ui/empty";
-import { Icon } from "../../ui/icons";
 import { PageHeader } from "../../ui/page-header";
 import { Pill } from "../../ui/pill";
 import UserBar from "../../user-bar";
+import WordsSearch from "../words-search";
 import VideoPlayer, { TargetTags } from "./video-player";
 import v from "./video.module.css";
 
@@ -73,7 +75,13 @@ export default async function PracticeVideoPage({ searchParams }: { searchParams
     if (e instanceof ApiError && e.status === 401) redirect("/login");
     throw e;
   }
-  const allowed = me.role === "student" || me.role === "teacher";
+  if (me.role !== "student" && me.role !== "teacher") {
+    return (
+      <RoleRestricted me={me} title="Видео по словам" icon="video">
+        Видео-практика доступна студентам и преподавателям.
+      </RoleRestricted>
+    );
+  }
   const sp = await searchParams;
   const words = param(sp, "words").trim();
   const videoId = positiveInt(param(sp, "v"));
@@ -81,15 +89,11 @@ export default async function PracticeVideoPage({ searchParams }: { searchParams
   const cursor = param(sp, "cursor");
   const wordsQuery = words ? `words=${encodeURIComponent(words)}` : "";
 
-  let detail: PracticeVideoDetail | string | null = null;
-  let page: PracticeVideosPage | string | null = null;
-  if (allowed) {
-    const listQuery = [wordsQuery, cursor && `cursor=${encodeURIComponent(cursor)}`].filter(Boolean).join("&");
-    [detail, page] = await Promise.all([
-      videoId ? load<PracticeVideoDetail>(`/practice/videos/${videoId}${wordsQuery && `?${wordsQuery}`}`) : null,
-      load<PracticeVideosPage>(`/practice/videos${listQuery && `?${listQuery}`}`),
-    ]);
-  }
+  const listQuery = [wordsQuery, cursor && `cursor=${encodeURIComponent(cursor)}`].filter(Boolean).join("&");
+  const [detail, page] = await Promise.all([
+    videoId ? load<PracticeVideoDetail>(`/practice/videos/${videoId}${wordsQuery && `?${wordsQuery}`}`) : null,
+    load<PracticeVideosPage>(`/practice/videos${listQuery && `?${listQuery}`}`),
+  ]);
 
   // 400 списка — неверные слова или курсор: причина — у поля слов
   const listError = typeof page === "string" ? page : null;
@@ -98,58 +102,28 @@ export default async function PracticeVideoPage({ searchParams }: { searchParams
       <UserBar name={me.name} role={me.role} />
       <main className="page">
         <PageHeader title="Видео по словам" />
-        {!allowed ? (
-          <Alert tone="info" live={false}>
-            Видео-практика доступна студентам и преподавателям.
-          </Alert>
-        ) : (
-          // Раскраска по словарю и «в мой словарь» — у студента (ADR-026)
-          <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
-            <form method="get" action="/practice/video" className={v.search}>
-              <label className="label" htmlFor="words">
-                Слова
-              </label>
-              <div className={v.searchRow}>
-                <input
-                  id="words"
-                  className="input"
-                  name="words"
-                  defaultValue={words}
-                  aria-describedby={listError ? "words-hint words-error" : "words-hint"}
-                  aria-invalid={listError ? true : undefined}
-                />
-                <button type="submit" className={buttonClass({ variant: "primary" })}>
-                  Подобрать
-                </button>
-              </div>
-              <p id="words-hint" className="hint">
-                Через запятую; пусто — из словаря
-              </p>
-              {listError && (
-                <p id="words-error" className="field-error">
-                  <Icon name="error" size="sm" />
-                  <span>{listError}</span>
-                </p>
-              )}
-            </form>
-            <div className={v.content}>
-              {typeof detail === "string" && (
-                <Alert tone="danger" className={v.alert}>
-                  {detail}
-                </Alert>
-              )}
-              {detail && typeof detail !== "string" && (
-                <section className={cx("card card-pad", v.playerCard)} aria-labelledby="video-title">
-                  <h2 id="video-title" className={v.playerTitle}>
-                    {detail.video.title}
-                  </h2>
-                  <VideoPlayer key={`${detail.video.id}:${startMs}`} video={detail.video} startMs={startMs} />
-                </section>
-              )}
-              {page && typeof page !== "string" && <Picks page={page} words={words} cursor={cursor} />}
-            </div>
-          </ClickableTextScope>
-        )}
+        {/* Раскраска по словарю и «в мой словарь» — у студента (ADR-026) */}
+        <ClickableTextScope studentId={me.role === "student" ? me.id : null}>
+          <WordsSearch action="/practice/video" words={words} hint="Через запятую; пусто — из словаря" error={listError} variant="primary">
+            Подобрать
+          </WordsSearch>
+          <div className={v.content}>
+            {typeof detail === "string" && (
+              <Alert tone="danger" className={v.alert}>
+                {detail}
+              </Alert>
+            )}
+            {detail && typeof detail !== "string" && (
+              <section className={cx("card card-pad", v.playerCard)} aria-labelledby="video-title">
+                <h2 id="video-title" lang={langOf(detail.video.title)} className={v.playerTitle}>
+                  {detail.video.title}
+                </h2>
+                <VideoPlayer key={`${detail.video.id}:${startMs}`} video={detail.video} startMs={startMs} />
+              </section>
+            )}
+            {typeof page !== "string" && <Picks page={page} words={words} cursor={cursor} />}
+          </div>
+        </ClickableTextScope>
       </main>
     </>
   );
@@ -169,7 +143,7 @@ function Picks({ page, words, cursor }: { page: PracticeVideosPage; words: strin
     <>
       <div className={v.targets}>
         <span className="small muted">Цели ({weightingTexts[page.weighting] ?? page.weighting}):</span>
-        <ul className={v.targetList}>
+        <ul className={v.targetList} lang="en">
           {page.words.map((w) => (
             <li key={w.lemma}>
               <Pill tone="accent">{w.lemma}</Pill>
@@ -204,12 +178,17 @@ function Picks({ page, words, cursor }: { page: PracticeVideosPage; words: strin
 function Pick({ video: p, words, cursor }: { video: PracticeVideo; words: string; cursor: string }) {
   return (
     <article className={cx("card card-pad", v.pick)}>
-      <h2 className={v.pickTitle}>
+      <h2 className={v.pickTitle} lang={langOf(p.title)}>
         <Link href={href({ words, cursor, v: p.id })}>{p.title}</Link>
       </h2>
       <p className="small muted">
-        {p.channel && `${p.channel} · `}
-        {clock(p.duration_ms)} · слова: {p.matched_words.join(", ")} ({percent.format(p.coverage)}) ·{" "}
+        {p.channel && (
+          <>
+            <span lang={langOf(p.channel)}>{p.channel}</span>
+            {" · "}
+          </>
+        )}
+        {clock(p.duration_ms)} · слова: <span lang="en">{p.matched_words.join(", ")}</span> ({percent.format(p.coverage)}) ·{" "}
         {perMinute.format(p.per_minute)} в минуту
       </p>
       <ul className={v.segments}>

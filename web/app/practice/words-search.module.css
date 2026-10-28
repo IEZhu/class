@@ -1,0 +1,12 @@
+/* Поиск по словам тексто- и видео-практики (DESIGN §6.8, §6.9): подпись
+   над полем, кнопка — в строке поля */
+.search { display: grid; gap: 6px; margin-bottom: var(--sp-6); }
+.row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.row > :global(.input) { flex: 1 1 240px; min-width: 0; }
+
+@media (max-width: 767px) {
+  /* Поиск — основное действие страницы на телефоне: поле и кнопка 48px;
+     кнопка, не поместившаяся рядом с полем, — под ним во всю ширину */
+  .row > :global(.input), .row > :global(.btn) { min-height: var(--h-lg); }
+  .row > :global(.btn) { flex: 1 1 auto; }
+}

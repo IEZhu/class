@@ -1,11 +1,6 @@
-/* Тексты для практики и текст по словам (DESIGN §6.8): поиск по словам
-   с видимой подписью, карточки текстов (свой текст — с отметкой «Мой
-   текст»), форма генерации. Цвета — токены globals.css. */
-
-/* Поиск по словам: подпись над полем, кнопка — в строке поля */
-.search { display: grid; gap: 6px; margin-bottom: var(--sp-6); }
-.searchRow { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.searchRow > :global(.input) { flex: 1 1 240px; min-width: 0; }
+/* Тексты для практики и текст по словам (DESIGN §6.8): карточки текстов
+   (свой текст — с отметкой «Мой текст»), форма генерации; поиск по словам —
+   общий с видео (../words-search). Цвета — токены globals.css. */
 
 /* Слова поиска — нейтральные метки */
 .words { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
@@ -30,8 +25,3 @@
 
 .details > summary { min-height: var(--h-sm); font-size: var(--fs-sm); color: var(--c-text-muted); }
 .details > p { margin-top: var(--sp-1); }
-
-@media (max-width: 767px) {
-  /* Поиск — основное действие страницы на телефоне: поле и кнопка 48px */
-  .searchRow > :global(.input), .searchRow > :global(.btn) { min-height: var(--h-lg); }
-}
