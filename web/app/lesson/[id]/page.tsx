@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { apiFetch, ApiError } from "../../../lib/api";
-import type { LessonDetail, LessonTerm, Material, User } from "../../../lib/api";
+import type { LessonDetail, LessonTerm, Material, Transcript } from "../../../lib/api";
 import { initials } from "../../../lib/initials";
 import { lessonTitle } from "../../../lib/lesson-title";
 import { lessonPhase } from "../../../lib/lesson-phase";
@@ -26,12 +26,24 @@ import LessonRoom from "./lesson-room";
 import { DeleteMaterial, FileDownload, MaterialUpload } from "./material-files";
 import LiveTabs from "./live-tabs";
 import styles from "./page.module.css";
+import { getLesson, getMe } from "./requests";
 import TermPicker from "./term-picker";
+import type { InitialTranscript } from "./transcript-panel";
 import Whiteboard from "./whiteboard";
 
-// Название урока во вкладке потребовало бы второго запроса к api
-// (generateMetadata не делит fetch страницы) — заголовок общий
-export const metadata: Metadata = { title: "Урок" };
+// Заголовок вкладки — название урока; урок — тот же ответ api, что получит
+// страница (cache() в requests.ts), второго запроса нет. У ошибок — свои
+// заголовки (WCAG 2.4.2), а не «Урок»
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  try {
+    return { title: lessonTitle(await getLesson(id)) };
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 403) return { title: "Нет доступа" };
+    if (e instanceof ApiError && (e.status === 404 || e.status === 400)) return { title: "Страница не найдена" };
+    return { title: "Урок" };
+  }
+}
 
 // Дата и время урока в шапке: «суббота, 24 октября, 21:00–22:00»
 const headerTime: Intl.DateTimeFormatOptions = {
@@ -50,39 +62,43 @@ type Anchor = { id: string; label: string };
 export default async function LessonPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  let me: User;
-  let lesson: LessonDetail;
-  try {
-    [me, lesson] = await Promise.all([
-      apiFetch<User>("/auth/me"),
-      apiFetch<LessonDetail>(`/lessons/${encodeURIComponent(id)}`),
-    ]);
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) redirect("/login");
+  // Оба запроса сразу; сначала — сессия: без неё любой ответ — вход
+  const [meRes, lessonRes] = await Promise.allSettled([getMe(), getLesson(id)]);
+  for (const r of [meRes, lessonRes]) {
+    if (r.status === "rejected" && r.reason instanceof ApiError && r.reason.status === 401) redirect("/login");
+  }
+  if (meRes.status === "rejected") throw meRes.reason;
+  const me = meRes.value;
+  if (lessonRes.status === "rejected") {
+    const e = lessonRes.reason;
     if (e instanceof ApiError && (e.status === 404 || e.status === 400)) notFound();
     if (e instanceof ApiError && e.status === 403) {
-      // Как 404: карточка без каркаса и путь назад
+      // Человек вошёл — отказ в каркасе приложения, с путём к урокам
       return (
-        <main className="auth-page">
-          <div className="card card-pad">
-            <EmptyState
-              icon="lessons"
-              title="Нет доступа"
-              titleAs="h1"
-              action={
-                <Link href="/lessons" className={buttonClass({ variant: "primary" })}>
-                  К урокам
-                </Link>
-              }
-            >
-              Этот урок ведёт другой преподаватель или вы не в его группе.
-            </EmptyState>
-          </div>
-        </main>
+        <>
+          <UserBar name={me.name} role={me.role} />
+          <main className="page page--narrow">
+            <div className="card">
+              <EmptyState
+                icon="lessons"
+                title="Нет доступа"
+                titleAs="h1"
+                action={
+                  <Link href="/lessons" className={buttonClass({ variant: "primary" })}>
+                    К урокам
+                  </Link>
+                }
+              >
+                Этот урок ведёт другой преподаватель или вы не в его группе.
+              </EmptyState>
+            </div>
+          </main>
+        </>
       );
     }
     throw e;
   }
+  const lesson = lessonRes.value;
 
   const phase = lessonPhase(lesson.status, lesson.starts_at, lesson.ends_at);
   // Материалы и файлы добавляет и удаляет только преподаватель урока
@@ -91,12 +107,16 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
   const homework = lesson.materials.filter((m) => m.kind === "homework");
   // Словарь урока (S3-8): преподаватель собирает его в чеклисте, когда урок
   // начался; остальным участникам — подтверждённые слова. Сбой запроса
-  // (например, миграция 0019 не применена) — страница без словаря
-  const lessonTerms = isTeacher
-    ? []
-    : await apiFetch<{ items: LessonTerm[] }>(`/lessons/${lesson.id}/terms`)
-        .then((r) => r.items)
-        .catch(() => []);
+  // (например, миграция 0019 не применена) — страница без словаря.
+  // Транскрипт записи — параллельно, тоже с сервера (loadTranscript)
+  const [lessonTerms, initialTranscript] = await Promise.all([
+    isTeacher
+      ? []
+      : apiFetch<{ items: LessonTerm[] }>(`/lessons/${lesson.id}/terms`)
+          .then((r) => r.items)
+          .catch(() => []),
+    phase === "done" ? loadTranscript(lesson.id) : null,
+  ]);
   const showPicker = isTeacher && phase !== "scheduled";
   // Гостевой ссылкой распоряжается организатор, и только у открытого
   // события: в урок с группой посторонних не зовут (ADR-010). После
@@ -193,7 +213,8 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
                 { user_id: lesson.teacher_id, name: lesson.teacher_name },
                 ...lesson.participants.map((p) => ({ user_id: p.user_id, name: p.name })),
               ]}
-              below={lessonTerms.length > 0 ? dictionary : undefined}
+              initialTranscript={initialTranscript}
+              below={showPicker ? <PickerNote /> : lessonTerms.length > 0 ? dictionary : undefined}
             />
           </section>
         )}
@@ -201,7 +222,7 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
         {phase === "ended" && (
           <div className={styles.phase}>
             <Alert tone="neutral" live={false}>
-              Урок завершён. Запись и транскрипт будут появляться здесь начиная с этапов 1–2.
+              Урок завершён. Записи у этого урока нет.
             </Alert>
           </div>
         )}
@@ -235,6 +256,37 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
         )}
       </main>
     </>
+  );
+}
+
+// Транскрипт записи приходит с сервером, вместе со страницей: первые реплики
+// уже в HTML, а не появляются после гидратации и запроса из браузера (LCP).
+// 404 — транскрипта у урока нет; другой сбой — его запросит сам клиент
+async function loadTranscript(lessonId: number): Promise<InitialTranscript | null> {
+  try {
+    return { transcript: await apiFetch<Transcript>(`/lessons/${lessonId}/transcript`) };
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return { missing: true };
+    return null;
+  }
+}
+
+// Под плеером прошедшего урока у преподавателя — путь к подбору слов:
+// главное дело после урока — собрать и назначить словарь, а сам подбор —
+// большой карточкой внизу страницы
+function PickerNote() {
+  return (
+    <section className={cx("card", styles.pickerNote)} aria-labelledby="picker-note-title">
+      <h2 id="picker-note-title">Словарь урока</h2>
+      <p className="muted">
+        Отметьте слова урока — клики учеников, слова с доски и свои, — сохраните словарь и назначьте его
+        студентам: слова появятся в их личных словарях.
+      </p>
+      <a className={buttonClass({ variant: "primary" })} href="#picker">
+        <Icon name="dict" size="sm" />
+        Подбор слов
+      </a>
+    </section>
   );
 }
 

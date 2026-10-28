@@ -180,6 +180,8 @@ function CandidateGroup({
   onToggle: (termId: number) => void;
 }) {
   if (items.length === 0) return null;
+  // ×N — сколько раз слово кликали или встретили на доске; у своих слов нет
+  const count = (c: TermCandidate) => (source !== "manual" ? `×${c.count}` : "");
   return (
     <div className={styles.group}>
       <h3 className={styles.groupTitle}>
@@ -187,6 +189,13 @@ function CandidateGroup({
       </h3>
       <div className="table-wrap">
         <table className={cx("table table--dense", styles.table)}>
+          {/* Одна сетка колонок у всех групп: слова и переводы стоят ровно */}
+          <colgroup>
+            <col className={styles.colCheck} />
+            <col className={styles.colLemma} />
+            <col />
+            <col className={styles.colCount} />
+          </colgroup>
           <tbody>
             {items.map((c) => (
               <tr key={c.term_id} className={cx(checked.has(c.term_id) && styles.checked)}>
@@ -212,9 +221,11 @@ function CandidateGroup({
                       (<ClickableText text={c.surface} />)
                     </span>
                   )}
+                  {/* На телефоне ×N — под словом, без своей колонки */}
+                  {count(c) && <span className={cx("muted small", styles.countBelow)}>{count(c)}</span>}
                 </td>
-                <td>{c.translation ?? "—"}</td>
-                <td className={cx("muted", styles.countCell)}>{source !== "manual" && `×${c.count}`}</td>
+                <td className={styles.translation}>{c.translation ?? "—"}</td>
+                <td className={cx("muted", styles.countCell)}>{count(c)}</td>
               </tr>
             ))}
           </tbody>
