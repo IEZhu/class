@@ -25,9 +25,12 @@ export const metadata: Metadata = { title: "Уроки" };
 const TITLE = "Уроки";
 
 // Время урока — в поясе зрителя (ui/local-time); без JS — по UTC с
-// подписью «UTC» в конце интервала. День и месяц в блоке даты — без подписи.
+// подписью «UTC» в конце интервала. Части блока даты — без подписи.
 const timeOpts: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit" };
 const dayOpts: Intl.DateTimeFormatOptions = { day: "numeric" };
+const monthOpts: Intl.DateTimeFormatOptions = { month: "short" };
+const weekdayOpts: Intl.DateTimeFormatOptions = { weekday: "short" };
+const yearOpts: Intl.DateTimeFormatOptions = { year: "numeric" };
 
 type Row = { lesson: Lesson; phase: LessonPhase };
 
@@ -181,11 +184,11 @@ function LiveLesson({ lesson }: { lesson: Lesson }) {
 
 // Строка урока — вся карточка ссылка: блок даты, название, время и статус
 function LessonRow({ row: { lesson, phase }, now }: { row: Row; now: Date }) {
-  // Год — только у уроков не текущего года, иначе «окт. чт» без него
+  // Блок даты — три строки: число, месяц и день недели, а у уроков не
+  // текущего года вместо дня недели — год. По строке на часть: «нояб.»
+  // и «сент.» длиннее «окт.», и в одной строке с днём недели они
+  // переносились бы, сбивая выравнивание строк
   const otherYear = new Date(lesson.starts_at).getUTCFullYear() !== now.getUTCFullYear();
-  const monthOpts: Intl.DateTimeFormatOptions = otherYear
-    ? { month: "short", year: "numeric" }
-    : { month: "short", weekday: "short" };
   return (
     <Link href={`/lesson/${lesson.id}`} className={cx("card", styles.row)}>
       <span className={styles.date}>
@@ -194,6 +197,9 @@ function LessonRow({ row: { lesson, phase }, now }: { row: Row; now: Date }) {
         </span>
         <span className={styles.month}>
           <LocalTime value={lesson.starts_at} options={monthOpts} utcLabel={false} />
+        </span>
+        <span className={styles.month}>
+          <LocalTime value={lesson.starts_at} options={otherYear ? yearOpts : weekdayOpts} utcLabel={false} />
         </span>
       </span>
       <div className={styles.rowBody}>
