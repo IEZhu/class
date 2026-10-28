@@ -1,6 +1,8 @@
 /* Мой словарь (DESIGN §6.5): фильтры-чипы, легенда выделения, таблица от
-   768px; на телефоне строка таблицы — карточка: слово и перевод, статус,
-   урок и дата, «Убрать» в углу (без горизонтальной прокрутки, WCAG 1.4.10). */
+   1280px; уже — строки сеткой без шапки таблицы: на планшете и узком
+   ноутбуке (с боковой панелью) перевод под словом, на телефоне строка —
+   карточка: слово и перевод, статус, урок и дата, «Убрать» в углу. Без
+   горизонтальной прокрутки (WCAG 1.4.10). */
 
 /* Чипы на телефоне листаются сами, страница не шире экрана */
 .filterNav { min-width: 0; }
@@ -16,27 +18,40 @@
 /* «Убрать» — последняя колонка, у правого края строки, вдали от статусов */
 .remove { width: 1%; text-align: right; }
 
-@media (min-width: 768px) {
-  /* Урок с датой не рвётся на три строки: сжимается перевод */
-  .lesson { min-width: 11rem; }
-}
-
 .next { margin-left: auto; }
 
-@media (max-width: 767px) {
+/* Пять колонок с сегментами статуса помещаются в карточку только от
+   1280px; уже — сетка строки, шапка таблицы — только для чтения с экрана */
+@media (max-width: 1279px) {
   .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .table, .table tbody { display: block; width: 100%; }
-  .table tr {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "word tr" "status status" "lesson remove";
-    gap: var(--sp-2) var(--sp-3); padding: var(--sp-3) var(--sp-4);
-    border-bottom: 1px solid var(--c-border);
-  }
+  .table tr { display: grid; border-bottom: 1px solid var(--c-border); }
   .table tr:last-child { border-bottom: 0; }
   .table tr > td { display: block; padding: 0; border: 0; }
   .word { grid-area: word; min-width: 0; }
-  .tr { grid-area: tr; text-align: right; }
+  .tr { grid-area: tr; min-width: 0; }
   .status { grid-area: status; }
-  .lesson { grid-area: lesson; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2); }
-  .remove { grid-area: remove; align-self: end; justify-self: end; width: auto; }
+  .lesson { grid-area: lesson; min-width: 0; }
+  .remove { grid-area: remove; width: auto; }
+}
+/* Планшет и узкий ноутбук: слово над переводом, статус (слово статуса —
+   под сегментами), урок, «Убрать»; очень длинное слово переносится, а не
+   налезает на статус */
+@media (min-width: 768px) and (max-width: 1279px) {
+  .table tr {
+    grid-template-columns: minmax(0, 1fr) min-content minmax(0, 1fr) auto;
+    grid-template-areas: "word status lesson remove" "tr status lesson remove";
+    align-items: center; gap: 2px var(--sp-5); padding: var(--sp-3) var(--sp-5);
+  }
+  .word, .tr { overflow-wrap: anywhere; }
+}
+@media (max-width: 767px) {
+  .table tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "word tr" "status status" "lesson remove";
+    gap: var(--sp-2) var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  }
+  .tr { text-align: right; }
+  .lesson { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2); }
+  .remove { align-self: end; justify-self: end; }
 }
