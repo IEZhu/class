@@ -1,4 +1,4 @@
-/* Список уроков и форма нового события (DESIGN §6.2, макет lessons.html).
+/* Список уроков и форма нового события (docs/architecture/08-ui.md §6.2).
    Токены и общие классы (.card, .pill, .meta, .field…) — в globals.css. */
 
 .groups { display: grid; gap: var(--sp-8); }

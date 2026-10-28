@@ -1,4 +1,4 @@
-/* <ClickableText> и попап слова (DESIGN §4.2, §6.4; mockup popup.html).
+/* <ClickableText> и попап слова (docs/architecture/08-ui.md §4.2, §6.4).
    Слова — общие классы .w/.w1–.w4 из globals.css, каркас попапа — общий
    .popover (от 768px — у слова по --pop-top/--pop-left, уже — лист снизу
    поверх .backdrop--phone); здесь — сам текст и содержимое попапа. */
