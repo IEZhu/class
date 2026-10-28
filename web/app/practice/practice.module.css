@@ -1,0 +1,133 @@
+/* Карточки и «вставь слово» (DESIGN §6.6, §6.7): колонка 720px, основа —
+   телефон: кнопки ответа не ниже 52px (на телефоне оценки карточки
+   прилипают над нижней навигацией), подсказки клавиш — только там, где
+   есть клавиатура. Цвета — токены globals.css, пары текст/фон из §2.2. */
+
+.session { display: grid; gap: var(--sp-4); }
+
+/* Ход сессии: счёт, прогресс, итог последней оценки */
+.bar { display: grid; gap: var(--sp-2); }
+.barRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-1) var(--sp-4); }
+.count { font-weight: 700; font-variant-numeric: tabular-nums; }
+.score { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); }
+.score :global(.pill) { min-height: 28px; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+/* Строка итога есть всегда (живой регион): место под неё не прыгает */
+.last { min-height: 1.45em; font-size: var(--fs-sm); color: var(--c-text-muted); }
+
+/* Сообщения api начинаются со строчной — на экране с заглавной */
+.alert :global(.alert-body) > div::first-letter,
+.note::first-letter { text-transform: uppercase; }
+
+/* ---------- Карточка ---------- */
+.flashcard { display: grid; align-content: start; gap: var(--sp-4); min-height: 240px; padding: var(--sp-8); }
+.front { align-content: center; justify-items: center; text-align: center; }
+.lemma { font-size: var(--fs-4xl); font-weight: 700; line-height: var(--lh-tight); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.surface { font-size: var(--fs-lg); color: var(--c-text-muted); }
+.back { display: grid; gap: var(--sp-4); padding-top: var(--sp-5); border-top: 1px dashed var(--c-border-strong); }
+.translation { font-size: var(--fs-2xl); line-height: var(--lh-tight); }
+.block { display: grid; gap: var(--sp-2); }
+.defs { display: grid; gap: 6px; margin: 0; padding-left: 1.25rem; }
+.pos { font-style: italic; color: var(--c-text-muted); }
+.examples { display: grid; gap: var(--sp-3); }
+.example { display: grid; gap: 2px; }
+
+/* Действия под карточкой: «Показать» или четыре оценки */
+.actions { display: grid; }
+.flip { justify-self: center; min-width: 240px; }
+.rate { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }
+.rateBtn {
+  display: grid; justify-items: center; align-content: center; gap: var(--sp-1);
+  min-height: 64px; padding: var(--sp-2); border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: var(--r-md); font: 600 var(--fs-md)/1.1 var(--font-sans); cursor: pointer;
+  transition: border-color var(--dur) var(--ease);
+}
+.rateBtn:hover:not(:disabled) { border-color: currentColor; }
+.rateBtn:disabled { cursor: progress; opacity: .7; }
+/* Цвет оценки — только в дополнение к подписи */
+.again { background: var(--c-danger-soft); color: var(--c-danger-text); }
+.hard { background: var(--c-warning-soft); color: var(--c-warning-text); }
+.good { background: var(--c-success-soft); color: var(--c-success-text); }
+.easy { background: var(--c-info-soft); color: var(--c-info-text); }
+
+/* Подсказка клавиши на основной кнопке — цветом её подписи */
+.onPrimary :global(.kbd) { background: transparent; color: inherit; border-color: currentColor; }
+
+/* Строка горячих клавиш: на сенсорных экранах без клавиатуры не нужна */
+.shortcuts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2) var(--sp-5); font-size: var(--fs-sm); color: var(--c-text-muted); }
+.shortcuts > span { display: inline-flex; align-items: center; gap: 6px; }
+@media (hover: none) and (pointer: coarse) {
+  .shortcuts { display: none; }
+}
+
+/* ---------- Вставь слово ---------- */
+.practiceCard { display: grid; gap: var(--sp-6); padding: var(--sp-8); }
+.source { display: flex; align-items: flex-start; gap: 6px; font-size: var(--fs-sm); color: var(--c-text-muted); }
+.source :global(svg.i) { margin-top: 1px; }
+.sentence { font-size: var(--fs-2xl); line-height: 1.55; overflow-wrap: break-word; }
+.blank {
+  display: inline-block; min-width: 5.5ch; height: 1.25em; margin: 0 4px; vertical-align: -0.2em;
+  border: 2px dashed var(--c-primary); border-radius: var(--r-sm); background: var(--c-primary-soft);
+}
+.options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
+.option {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  min-height: 56px; padding: var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-5);
+  border: 1px solid var(--c-border-strong); border-radius: var(--r-md); background: var(--c-surface); color: var(--c-text);
+  font: 600 var(--fs-lg)/1.2 var(--font-sans); text-align: left; cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.option:hover:not(:disabled) { border-color: var(--c-primary); background: var(--c-primary-soft); color: var(--c-primary-strong); }
+/* Длинное слово варианта переносится по слогам (lang="en" у кнопки) */
+.optionLabel { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; hyphens: auto; overflow-wrap: anywhere; }
+.option:disabled { cursor: default; }
+/* После ответа выбранный и верный варианты — в полном контрасте,
+   остальные приглушены, но не ниже 4.5:1 (не серым браузера) */
+.option:disabled:not(.chosen, .correct, .wrong) { border-color: var(--c-border); color: var(--c-text-muted); }
+.chosen { border-color: var(--c-primary); background: var(--c-primary-soft); color: var(--c-primary-strong); }
+.correct { border-color: var(--c-success); background: var(--c-success-soft); color: var(--c-success-text); }
+.wrong { border-color: var(--c-danger); background: var(--c-danger-soft); color: var(--c-danger-text); }
+.optionSkeleton { height: 56px; border-radius: var(--r-md); }
+.pending { display: grid; gap: var(--sp-3); }
+
+.typing { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.typing > :global(.input) { flex: 1 1 220px; min-width: 0; }
+
+.feedback { display: grid; gap: var(--sp-2); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md); }
+.ok { background: var(--c-success-soft); }
+.bad { background: var(--c-danger-soft); }
+.verdict { display: flex; align-items: center; gap: var(--sp-2); font-weight: 700; }
+.ok .verdict { color: var(--c-success-text); }
+.bad .verdict { color: var(--c-danger-text); }
+.feedback p:not(.verdict) { color: var(--c-text); }
+.schedule { font-size: var(--fs-sm); }
+.schedule::first-letter { text-transform: uppercase; }
+.credit { font-size: var(--fs-xs); color: var(--c-text-muted); }
+.next { display: flex; }
+
+/* ---------- Телефон ---------- */
+@media (max-width: 767px) {
+  .flashcard, .practiceCard { gap: var(--sp-4); padding: var(--sp-5); }
+  .flashcard { min-height: 200px; }
+  .lemma { font-size: var(--fs-3xl); }
+  .sentence { font-size: var(--fs-xl); }
+  .options { gap: var(--sp-2); }
+  .option { min-height: var(--h-touch); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-md); }
+  /* Режим ответа и «Повторить» — тоже под палец */
+  .modes button, .touch { min-height: 44px; }
+  .optionSkeleton { height: var(--h-touch); }
+  .rate { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rateBtn { min-height: 56px; }
+  .flip { justify-self: stretch; min-width: 0; }
+  /* Оценки — у большого пальца: над нижней навигацией каркаса */
+  .sticky {
+    position: sticky; bottom: var(--shell-bottom); z-index: var(--z-sticky);
+    margin: 0 calc(-1 * var(--sp-4)); padding: var(--sp-3) var(--sp-4);
+    background: var(--c-bg); border-top: 1px solid var(--c-border);
+  }
+  /* Элемент в фокусе не прячется под липкими оценками (WCAG 2.4.11):
+     прокрутка к нему оставляет снизу место на нижнюю навигацию и две
+     строки оценок (--shell-bottom задан на body, у html его нет) */
+  :global(html):has(.sticky) {
+    scroll-padding-bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom) + 2 * 56px + 3 * var(--sp-3) + 1px);
+  }
+}

@@ -95,6 +95,20 @@ export function isAnswerOption(option: string, result: { answer: string; lemma: 
   return option === result.answer.toLowerCase() || option === result.lemma;
 }
 
+// Вид кнопки варианта: chosen — выбран, ответ ещё в пути; после ответа
+// correct — верный вариант, wrong — выбранный неверный; null — обычный.
+export type OptionState = "chosen" | "correct" | "wrong" | null;
+
+export function optionState(
+  option: string,
+  chosen: string | null,
+  result: { answer: string; lemma: string } | null,
+): OptionState {
+  if (!result) return option === chosen ? "chosen" : null;
+  if (isAnswerOption(option, result)) return "correct";
+  return option === chosen ? "wrong" : null;
+}
+
 // Пункт для набора вариантов — что из него нужно этим помощникам
 interface OptionsOf {
   id: number;
