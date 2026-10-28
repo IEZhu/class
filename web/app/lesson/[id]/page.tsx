@@ -259,12 +259,19 @@ export default async function LessonPage({ params }: { params: Promise<{ id: str
   );
 }
 
+// Сколько реплик транскрипта идёт в HTML: первый экран с запасом. Длинный
+// урок (сотни реплик) раздувал бы HTML и RSC-данные страницы втрое — весь
+// транскрипт панель всё равно перечитывает сама после гидратации
+const SSR_UTTERANCES = 40;
+
 // Транскрипт записи приходит с сервером, вместе со страницей: первые реплики
 // уже в HTML, а не появляются после гидратации и запроса из браузера (LCP).
 // 404 — транскрипта у урока нет; другой сбой — его запросит сам клиент
 async function loadTranscript(lessonId: number): Promise<InitialTranscript | null> {
   try {
-    return { transcript: await apiFetch<Transcript>(`/lessons/${lessonId}/transcript`) };
+    const t = await apiFetch<Transcript>(`/lessons/${lessonId}/transcript`);
+    if (t.utterances.length <= SSR_UTTERANCES) return { transcript: t };
+    return { transcript: { ...t, utterances: t.utterances.slice(0, SSR_UTTERANCES) }, partial: true };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return { missing: true };
     return null;

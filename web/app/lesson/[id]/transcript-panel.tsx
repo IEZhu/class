@@ -24,7 +24,9 @@ type Speaker = { speaker_label: string; user_id: number | null; speaker_name: st
 // Транскрипт, который сервер получил вместе со страницей (page.tsx):
 // missing — у урока его нет (404). null вместо него — сервер не получил,
 // панель начинает с заглушки
-export type InitialTranscript = { transcript: Transcript } | { missing: true };
+// partial — сервер прислал только начало транскрипта (page.tsx, SSR_UTTERANCES):
+// остальное панель дочитывает сама, и сбой этого запроса уже не скрыть
+export type InitialTranscript = { transcript: Transcript; partial?: boolean } | { missing: true };
 
 const statusTexts: Record<Exclude<Transcript["status"], "completed">, string> = {
   queued: "Транскрипт ещё готовится.",
@@ -55,6 +57,7 @@ export default function TranscriptPanel({
   people: Person[];
 }) {
   const fromServer = initial !== null && "transcript" in initial;
+  const partial = fromServer && initial.partial === true;
   const [transcript, setTranscript] = useState<Transcript | null>(fromServer ? initial.transcript : null);
   // missing — транскрипта у урока нет (ASR не настроен или записи не было)
   const [missing, setMissing] = useState(initial !== null && "missing" in initial);
@@ -78,13 +81,14 @@ export default function TranscriptPanel({
           setMissing(true);
           return;
         }
-        // Сбой перечитывания не прячет транскрипт, показанный с сервера
-        if (!fromServer) setError(e instanceof Error ? e.message : "не удалось получить транскрипт");
+        // Сбой перечитывания не прячет полный транскрипт, показанный с сервера;
+        // от начала (partial) без остального толку нет — показываем ошибку
+        if (!fromServer || partial) setError(e instanceof Error ? e.message : "не удалось получить транскрипт");
       });
     return () => {
       cancelled = true;
     };
-  }, [lessonId, fromServer]);
+  }, [lessonId, fromServer, partial]);
 
   const utterances = useMemo(() => transcript?.utterances ?? [], [transcript]);
   const timeline = useMemo(() => [...utterances].sort((a, b) => a.start_ms - b.start_ms), [utterances]);
