@@ -15,7 +15,7 @@
     "@livekit/components-react": "^2.9.23",
     "@livekit/components-styles": "^1.2.0",
     "livekit-client": "^2.21.0",
-    "next": "^15.5.28",
+    "next": "^15.5.29",
     "plyr": "^3.8.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
